@@ -167,6 +167,28 @@ function computeAvailabilityState(hasSku, quotaCurrent, quotaLimit) {
   return 'OK';
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function armGetWithRetry(url, token, maxRetries = 3) {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await armGet(url, token);
+    } catch (err) {
+      const status = err.response?.status;
+      // 429 = rate limit, 503 = service unavailable
+      if ((status === 429 || status === 503) && attempt < maxRetries - 1) {
+        const delayMs = (err.response?.headers?.['retry-after'] || Math.pow(2, attempt + 1)) * 1000;
+        console.warn(`ARM API rate limit or unavailable (${status}). Retrying after ${delayMs}ms...`);
+        await sleep(delayMs);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 async function runCapacityIngestion(options = {}) {
   if (ingestStatus.inProgress) {
     throw new Error('Capacity ingestion is already running.');
@@ -186,42 +208,57 @@ async function runCapacityIngestion(options = {}) {
     const capturedAtUtc = new Date();
     const rows = [];
 
-    for (const subscription of subscriptions) {
-      const subscriptionId = subscription.subscriptionId;
-      const subscriptionName = subscription.displayName || 'Subscription';
-      const subscriptionKey = getSubscriptionKey(subscriptionId);
-      for (const region of regions) {
-        const usageUrl = `${ARM_BASE}/subscriptions/${subscriptionId}/providers/Microsoft.Compute/locations/${region}/usages?api-version=2024-03-01`;
-        const skusUrl = `${ARM_BASE}/subscriptions/${subscriptionId}/providers/Microsoft.Compute/skus?$filter=${encodeURIComponent(`location eq '${region}'`)}&api-version=2024-03-01`;
+    // Process subscriptions in batches to avoid ARM API rate limits
+    const batchSize = 100;
+    const subscriptionBatches = [];
+    for (let i = 0; i < subscriptions.length; i += batchSize) {
+      subscriptionBatches.push(subscriptions.slice(i, i + batchSize));
+    }
 
-        const usages = await armGetAll(usageUrl, token);
-        const skus = await armGetAll(skusUrl, token);
+    for (let batchIndex = 0; batchIndex < subscriptionBatches.length; batchIndex++) {
+      const batch = subscriptionBatches[batchIndex];
+      if (batchIndex > 0) {
+        // 2-second delay between batches to avoid ARM throttling
+        await sleep(2000);
+      }
 
-        const familyUsages = usages.filter((item) => familyMatches(item?.name?.value, familyFilters));
+      for (const subscription of batch) {
+        const subscriptionId = subscription.subscriptionId;
+        const subscriptionName = subscription.displayName || 'Subscription';
+        const subscriptionKey = getSubscriptionKey(subscriptionId);
+        for (const region of regions) {
+          const usageUrl = `${ARM_BASE}/subscriptions/${subscriptionId}/providers/Microsoft.Compute/locations/${region}/usages?api-version=2024-03-01`;
+          const skusUrl = `${ARM_BASE}/subscriptions/${subscriptionId}/providers/Microsoft.Compute/skus?$filter=${encodeURIComponent(`location eq '${region}'`)}&api-version=2024-03-01`;
 
-        for (const usage of familyUsages) {
-          const familyName = usage?.name?.value;
-          const representativeSku = pickRepresentativeSku(skus, familyName);
-          const quotaCurrent = Number(usage?.currentValue || 0);
-          const quotaLimit = Number(usage?.limit || 0);
+          const usages = await armGetAll(usageUrl, token);
+          const skus = await armGetAll(skusUrl, token);
 
-          rows.push({
-            capturedAtUtc,
-            sourceType: 'live-azure-ingest',
-            subscriptionKey,
-            subscriptionId,
-            subscriptionName,
-            region,
-            skuName: representativeSku?.name || `${familyName}-aggregate`,
-            skuFamily: familyName,
-            vCpu: Number(getCapabilityValue(representativeSku?.capabilities, 'vCPUs') || 0) || null,
-            memoryGB: Number(getCapabilityValue(representativeSku?.capabilities, 'MemoryGB') || 0) || null,
-            zonesCsv: representativeSku ? getZonesCsv(representativeSku, region) : null,
-            availabilityState: computeAvailabilityState(Boolean(representativeSku), quotaCurrent, quotaLimit),
-            quotaCurrent,
-            quotaLimit,
-            monthlyCostEstimate: null
-          });
+          const familyUsages = usages.filter((item) => familyMatches(item?.name?.value, familyFilters));
+
+          for (const usage of familyUsages) {
+            const familyName = usage?.name?.value;
+            const representativeSku = pickRepresentativeSku(skus, familyName);
+            const quotaCurrent = Number(usage?.currentValue || 0);
+            const quotaLimit = Number(usage?.limit || 0);
+
+            rows.push({
+              capturedAtUtc,
+              sourceType: 'live-azure-ingest',
+              subscriptionKey,
+              subscriptionId,
+              subscriptionName,
+              region,
+              skuName: representativeSku?.name || `${familyName}-aggregate`,
+              skuFamily: familyName,
+              vCpu: Number(getCapabilityValue(representativeSku?.capabilities, 'vCPUs') || 0) || null,
+              memoryGB: Number(getCapabilityValue(representativeSku?.capabilities, 'MemoryGB') || 0) || null,
+              zonesCsv: representativeSku ? getZonesCsv(representativeSku, region) : null,
+              availabilityState: computeAvailabilityState(Boolean(representativeSku), quotaCurrent, quotaLimit),
+              quotaCurrent,
+              quotaLimit,
+              monthlyCostEstimate: null
+            });
+          }
         }
       }
     }

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Capacity Planning Dashboard (MVP)</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>Capacity Planning Dashboard</h1>
+    <p>Native Azure MVP for capacity, quota, and planning workflows</p>
+  </header>
+
+  <main class="layout">
+    <section class="controls">
+      <div class="tabs" role="tablist" aria-label="Dashboard Tabs">
+        <button class="tab active" data-tab="capacity">Capacity Explorer</button>
+        <button class="tab" data-tab="quota">Quota Insights</button>
+        <button class="tab" data-tab="movement">Quota Movements</button>
+      </div>
+
+      <div class="panel active" id="capacity-panel">
+        <div class="filters">
+          <label>Region
+            <select id="regionFilter"></select>
+          </label>
+          <label>SKU Family
+            <select id="familyFilter"></select>
+          </label>
+          <label>Availability
+            <select id="availabilityFilter">
+              <option value="all">All</option>
+              <option value="OK">OK</option>
+              <option value="LIMITED">LIMITED</option>
+              <option value="CONSTRAINED">CONSTRAINED</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="actions">
+          <button id="refreshBtn">Refresh Capacity</button>
+          <button id="exportBtn">Export CSV</button>
+          <button id="discoverBtn">Discover Quota Groups</button>
+          <button id="planBtn">Build Move Plan</button>
+        </div>
+      </div>
+
+      <div class="panel" id="quota-panel">
+        <div class="actions">
+          <button id="candidateBtn">Generate Quota Candidates</button>
+          <button id="historyBtn">Capture Quota History</button>
+        </div>
+      </div>
+
+      <div class="panel" id="movement-panel">
+        <div class="actions">
+          <button id="applyBtn" class="warn">Apply Quota Movements</button>
+          <button id="simulateBtn">Simulate Impact</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="summary" id="summaryCards"></section>
+
+    <section class="grid-wrap">
+      <table id="capacityGrid">
+        <thead>
+          <tr>
+            <th>Region</th>
+            <th>SKU</th>
+            <th>Family</th>
+            <th>Availability</th>
+            <th>Quota Current</th>
+            <th>Quota Limit</th>
+            <th>Quota Available</th>
+            <th>Utilization %</th>
+            <th>Monthly Cost (est.)</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

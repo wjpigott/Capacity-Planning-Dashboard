@@ -1,0 +1,38 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Secrets / local config
+.env
+.env.*
+*.local
+*.secret
+secrets.*
+
+# Build outputs
+dist/
+build/
+out/
+coverage/
+
+# Node modules
+node_modules/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.idea/
+
+# Terraform/Bicep local artifacts
+*.tfstate
+*.tfstate.*
+.bicep/

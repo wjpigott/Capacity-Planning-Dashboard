@@ -1,4 +1,4 @@
-const rows = [
+const fallbackRows = [
   { region: 'eastus', sku: 'Standard_D4s_v5', family: 'standardDSv5Family', availability: 'OK', quotaCurrent: 22, quotaLimit: 100, monthlyCost: 280 },
   { region: 'eastus2', sku: 'Standard_E8s_v5', family: 'standardESv5Family', availability: 'LIMITED', quotaCurrent: 40, quotaLimit: 80, monthlyCost: 620 },
   { region: 'centralus', sku: 'Standard_D16s_v5', family: 'standardDSv5Family', availability: 'CONSTRAINED', quotaCurrent: 75, quotaLimit: 80, monthlyCost: 1240 },
@@ -6,13 +6,36 @@ const rows = [
   { region: 'centralus', sku: 'Standard_D4s_v4', family: 'standardDSv4Family', availability: 'OK', quotaCurrent: 12, quotaLimit: 120, monthlyCost: 260 }
 ];
 
+let rows = [...fallbackRows];
+
+const regionPresets = {
+  USMajor: ['eastus', 'eastus2', 'centralus', 'westus', 'westus2']
+};
+
 const gridBody = document.querySelector('#capacityGrid tbody');
+const regionPresetFilter = document.querySelector('#regionPresetFilter');
 const regionFilter = document.querySelector('#regionFilter');
 const familyFilter = document.querySelector('#familyFilter');
 const availabilityFilter = document.querySelector('#availabilityFilter');
 const summaryCards = document.querySelector('#summaryCards');
 
-const unique = (key) => [...new Set(rows.map(r => r[key]))].sort();
+function activePresetRegions() {
+  const preset = regionPresetFilter.value;
+  if (!preset || preset === 'all' || preset === 'custom') {
+    return null;
+  }
+  return regionPresets[preset] || null;
+}
+
+function presetScopedRows(data) {
+  const presetRegions = activePresetRegions();
+  if (!presetRegions) {
+    return data;
+  }
+  return data.filter((row) => presetRegions.includes(row.region));
+}
+
+const unique = (key) => [...new Set(presetScopedRows(rows).map(r => r[key]))].sort();
 
 function fillSelect(select, values, allLabel = 'All') {
   select.innerHTML = '';
@@ -34,12 +57,20 @@ function utilization(row) {
 }
 
 function filteredRows() {
-  return rows.filter(r => {
+  return presetScopedRows(rows).filter(r => {
     const byRegion = regionFilter.value === 'all' || r.region === regionFilter.value;
     const byFamily = familyFilter.value === 'all' || r.family === familyFilter.value;
     const byAvailability = availabilityFilter.value === 'all' || r.availability === availabilityFilter.value;
     return byRegion && byFamily && byAvailability;
   });
+}
+
+function syncRegionOptions() {
+  const availableRegions = unique('region');
+  const nextValue = availableRegions.includes(regionFilter.value) ? regionFilter.value : 'all';
+  fillSelect(regionFilter, availableRegions);
+  regionFilter.value = nextValue;
+  regionFilter.disabled = regionPresetFilter.value !== 'custom';
 }
 
 function renderSummary(data) {
@@ -78,6 +109,30 @@ function renderGrid() {
   renderSummary(data);
 }
 
+async function loadCapacityRows() {
+  const regionPreset = regionPresetFilter.value || 'USMajor';
+  const region = regionPreset === 'custom' ? (regionFilter.value || 'all') : 'all';
+  const family = familyFilter.value || 'all';
+  const availability = availabilityFilter.value || 'all';
+
+  const query = new URLSearchParams({ regionPreset, region, family, availability });
+
+  try {
+    const response = await fetch(`/api/capacity?${query.toString()}`);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const payload = await response.json();
+    rows = Array.isArray(payload.rows) ? payload.rows : [];
+  } catch (_) {
+    rows = [...fallbackRows];
+  }
+
+  syncRegionOptions();
+  fillSelect(familyFilter, unique('family'));
+  renderGrid();
+}
+
 function wireTabs() {
   document.querySelectorAll('.tab').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -91,7 +146,7 @@ function wireTabs() {
 
 function wireButtons() {
   const notYet = (label) => () => alert(`${label} hooked to UI. Next step: connect backend endpoint.`);
-  document.getElementById('refreshBtn').addEventListener('click', notYet('Refresh capacity'));
+  document.getElementById('refreshBtn').addEventListener('click', loadCapacityRows);
   document.getElementById('exportBtn').addEventListener('click', notYet('Export CSV'));
   document.getElementById('discoverBtn').addEventListener('click', notYet('Discover quota groups'));
   document.getElementById('planBtn').addEventListener('click', notYet('Build move plan'));
@@ -104,11 +159,20 @@ function wireButtons() {
   });
 }
 
-fillSelect(regionFilter, unique('region'));
-fillSelect(familyFilter, unique('family'));
-regionFilter.addEventListener('change', renderGrid);
+regionPresetFilter.addEventListener('change', () => {
+  syncRegionOptions();
+  loadCapacityRows();
+});
+regionFilter.addEventListener('change', () => {
+  if (regionPresetFilter.value === 'custom') {
+    loadCapacityRows();
+    return;
+  }
+  renderGrid();
+});
 familyFilter.addEventListener('change', renderGrid);
 availabilityFilter.addEventListener('change', renderGrid);
 wireTabs();
 wireButtons();
-renderGrid();
+syncRegionOptions();
+loadCapacityRows();

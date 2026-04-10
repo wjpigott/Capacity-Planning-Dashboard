@@ -20,6 +20,7 @@ dist/
 build/
 out/
 coverage/
+*.zip
 
 # Node modules
 node_modules/

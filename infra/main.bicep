@@ -23,6 +23,12 @@ param sqlAdminLogin string
 @description('SQL administrator password')
 param sqlAdminPassword string
 
+@description('Microsoft Entra administrator UPN for Azure SQL')
+param sqlEntraAdminLogin string
+
+@description('Microsoft Entra administrator object ID for Azure SQL')
+param sqlEntraAdminObjectId string
+
 var appServicePlanName = 'asp-capdash-${environment}-${workloadSuffix}'
 var webAppName = 'app-capdash-${environment}-${workloadSuffix}'
 var appInsightsName = 'appi-capdash-${environment}-${workloadSuffix}'
@@ -89,12 +95,16 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
           value: 'MVP'
         }
         {
-          name: 'Sql__Server'
-          value: '${sqlServerName}.database.windows.net'
+          name: 'SQL_SERVER'
+          value: '${sqlServerName}${az.environment().suffixes.sqlServerHostname}'
         }
         {
-          name: 'Sql__Database'
+          name: 'SQL_DATABASE'
           value: sqlDatabaseName
+        }
+        {
+          name: 'SQL_AUTH_MODE'
+          value: 'managed-identity'
         }
       ]
     }
@@ -123,6 +133,13 @@ resource sqlServer 'Microsoft.Sql/servers@2023-08-01-preview' = {
   properties: {
     administratorLogin: sqlAdminLogin
     administratorLoginPassword: sqlAdminPassword
+    administrators: {
+      administratorType: 'ActiveDirectory'
+      login: sqlEntraAdminLogin
+      sid: sqlEntraAdminObjectId
+      tenantId: tenant().tenantId
+      azureADOnlyAuthentication: true
+    }
     version: '12.0'
     publicNetworkAccess: 'Enabled'
     minimalTlsVersion: '1.2'
@@ -155,5 +172,7 @@ resource webToKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 output webAppName string = webApp.name
 output webAppUrl string = 'https://${webApp.properties.defaultHostName}'
 output managedIdentityPrincipalId string = webApp.identity.principalId
-output sqlServerFqdn string = '${sqlServer.name}.database.windows.net'
+output sqlServerFqdn string = '${sqlServer.name}${az.environment().suffixes.sqlServerHostname}'
+output sqlServerName string = sqlServer.name
+output sqlDatabaseName string = sqlDatabase.name
 output keyVaultName string = kv.name

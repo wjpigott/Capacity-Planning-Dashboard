@@ -69,6 +69,7 @@ async function insertCapacitySnapshots(rows) {
       const request = new sql.Request(transaction);
       request.input('capturedAtUtc', sql.DateTime2, row.capturedAtUtc || new Date());
       request.input('sourceType', sql.NVarChar(50), row.sourceType || 'live-azure-ingest');
+      request.input('subscriptionKey', sql.NVarChar(64), row.subscriptionKey || 'legacy-data');
       request.input('region', sql.NVarChar(64), row.region);
       request.input('skuName', sql.NVarChar(128), row.skuName);
       request.input('skuFamily', sql.NVarChar(128), row.skuFamily);
@@ -79,9 +80,9 @@ async function insertCapacitySnapshots(rows) {
 
       await request.query(`
         INSERT INTO dbo.CapacitySnapshot
-        (capturedAtUtc, sourceType, region, skuName, skuFamily, availabilityState, quotaCurrent, quotaLimit, monthlyCostEstimate)
+        (capturedAtUtc, sourceType, subscriptionKey, region, skuName, skuFamily, availabilityState, quotaCurrent, quotaLimit, monthlyCostEstimate)
         VALUES
-        (@capturedAtUtc, @sourceType, @region, @skuName, @skuFamily, @availabilityState, @quotaCurrent, @quotaLimit, @monthlyCostEstimate)
+        (@capturedAtUtc, @sourceType, @subscriptionKey, @region, @skuName, @skuFamily, @availabilityState, @quotaCurrent, @quotaLimit, @monthlyCostEstimate)
       `);
     }
 

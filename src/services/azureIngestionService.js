@@ -1,4 +1,5 @@
 const { DefaultAzureCredential } = require('@azure/identity');
+const crypto = require('crypto');
 const { getRegionsForPreset } = require('../config/regionPresets');
 const { insertCapacitySnapshots } = require('../store/sql');
 
@@ -48,6 +49,17 @@ function getRegions(regionPreset, explicitRegions) {
 function getCredential() {
   const managedIdentityClientId = process.env.INGEST_MSI_CLIENT_ID || process.env.AZURE_CLIENT_ID || process.env.SQL_MSI_CLIENT_ID;
   return new DefaultAzureCredential({ managedIdentityClientId });
+}
+
+function getSubscriptionKey(subscriptionId) {
+  const salt = process.env.INGEST_SUBSCRIPTION_HASH_SALT || '';
+  const digest = crypto
+    .createHash('sha256')
+    .update(`${subscriptionId}|${salt}`)
+    .digest('hex')
+    .slice(0, 16);
+
+  return `sub-${digest}`;
 }
 
 async function armGetAll(url, token) {
@@ -152,6 +164,7 @@ async function runCapacityIngestion(options = {}) {
     const rows = [];
 
     for (const subscriptionId of subscriptionIds) {
+      const subscriptionKey = getSubscriptionKey(subscriptionId);
       for (const region of regions) {
         const usageUrl = `${ARM_BASE}/subscriptions/${subscriptionId}/providers/Microsoft.Compute/locations/${region}/usages?api-version=2024-03-01`;
         const skusUrl = `${ARM_BASE}/subscriptions/${subscriptionId}/providers/Microsoft.Compute/skus?$filter=${encodeURIComponent(`location eq '${region}'`)}&api-version=2024-03-01`;
@@ -170,6 +183,7 @@ async function runCapacityIngestion(options = {}) {
           rows.push({
             capturedAtUtc,
             sourceType: 'live-azure-ingest',
+            subscriptionKey,
             region,
             skuName: representativeSku?.name || `${familyName}-aggregate`,
             skuFamily: familyName,
@@ -190,6 +204,7 @@ async function runCapacityIngestion(options = {}) {
     ingestStatus.lastInsertedRows = insertedRows;
     ingestStatus.lastSummary = {
       subscriptionCount: subscriptionIds.length,
+      subscriptionKeys: [...new Set(rows.map((r) => r.subscriptionKey))],
       regions,
       familyFilters,
       insertedRows

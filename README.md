@@ -111,6 +111,7 @@ Required app settings:
 - `INGEST_API_KEY` (required to call internal ingestion routes)
 - `INGEST_REGION_PRESET` (default `USMajor`)
 - `INGEST_QUOTA_FAMILY_FILTERS` (default `standard_BS,standard_DS`)
+- `INGEST_SUBSCRIPTION_HASH_SALT` (optional salt for masked subscription key hashing)
 - `INGEST_SUBSCRIPTION_IDS` (optional comma-separated list; if omitted, enabled subscriptions are auto-discovered)
 - `INGEST_ON_STARTUP` (`true`/`false`)
 - `INGEST_INTERVAL_MINUTES` (`0` disables scheduling)
@@ -125,8 +126,26 @@ Internal endpoints:
 - `POST /internal/ingest/capacity` (requires `x-ingest-key` header)
 - `GET /internal/ingest/status` (requires `x-ingest-key` header)
 
+Read APIs for analytics:
+
+- `GET /api/capacity/subscriptions` (masked subscription summary)
+- `GET /api/capacity/trends?days=7` (daily trend rollup)
+
 Example trigger:
 
 ```powershell
 Invoke-RestMethod -Method Post -Uri "https://<your-app>.azurewebsites.net/internal/ingest/capacity" -Headers @{ "x-ingest-key" = "<ingest-key>" } -Body (@{ regionPreset = "USMajor"; familyFilters = @("standard_BS","standard_DS") } | ConvertTo-Json) -ContentType "application/json"
+```
+
+## SQL migration
+
+To add masked subscription-key support to existing databases, run:
+
+```powershell
+./scripts/apply-migration.ps1 \
+	-SqlServer "<server>.database.windows.net" \
+	-SqlDatabase "<database>" \
+	-MigrationFile "./sql/migrations/20260410-add-subscriptionkey.sql" \
+	-UseEntra \
+	-EntraUser "<entra-upn>"
 ```

@@ -3,7 +3,11 @@ const cors = require('cors');
 const path = require('path');
 require('dotenv').config();
 
-const { getCapacityRows } = require('./services/capacityService');
+const {
+  getCapacityRows,
+  getSubscriptionSummary,
+  getCapacityTrends
+} = require('./services/capacityService');
 const {
   runCapacityIngestion,
   getIngestionStatus,
@@ -57,6 +61,35 @@ app.get('/api/quota/groups', (_, res) => {
       { managementGroupName: 'placeholder-mg', groupQuotaName: 'placeholder-group', provisioningState: 'Succeeded' }
     ]
   });
+});
+
+app.get('/api/capacity/subscriptions', async (req, res) => {
+  try {
+    const rows = await getSubscriptionSummary({
+      regionPreset: req.query.regionPreset,
+      region: req.query.region,
+      family: req.query.family,
+      availability: req.query.availability
+    });
+    res.json({ rows });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve subscription summary', detail: err.message });
+  }
+});
+
+app.get('/api/capacity/trends', async (req, res) => {
+  try {
+    const rows = await getCapacityTrends({
+      days: req.query.days,
+      regionPreset: req.query.regionPreset,
+      region: req.query.region,
+      family: req.query.family,
+      availability: req.query.availability
+    });
+    res.json({ rows });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve capacity trends', detail: err.message });
+  }
 });
 
 app.post('/internal/ingest/capacity', requireIngestKey, async (req, res) => {

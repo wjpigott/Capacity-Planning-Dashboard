@@ -18,6 +18,8 @@ const regionFilter = document.querySelector('#regionFilter');
 const familyFilter = document.querySelector('#familyFilter');
 const availabilityFilter = document.querySelector('#availabilityFilter');
 const summaryCards = document.querySelector('#summaryCards');
+const subscriptionGridBody = document.querySelector('#subscriptionGrid tbody');
+const trendGridBody = document.querySelector('#trendGrid tbody');
 
 function activePresetRegions() {
   const preset = regionPresetFilter.value;
@@ -109,6 +111,68 @@ function renderGrid() {
   renderSummary(data);
 }
 
+function renderSubscriptionSummary(rows) {
+  if (!subscriptionGridBody) {
+    return;
+  }
+
+  subscriptionGridBody.innerHTML = '';
+  rows.forEach((row) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${row.subscriptionKey}</td>
+      <td>${row.rowCount}</td>
+      <td>${row.constrainedRows}</td>
+      <td>${row.totalQuotaAvailable}</td>
+    `;
+    subscriptionGridBody.appendChild(tr);
+  });
+}
+
+function renderTrends(rows) {
+  if (!trendGridBody) {
+    return;
+  }
+
+  trendGridBody.innerHTML = '';
+  rows.forEach((row) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${row.day}</td>
+      <td>${row.totalRows}</td>
+      <td>${row.constrainedRows}</td>
+      <td>${row.totalQuotaAvailable}</td>
+    `;
+    trendGridBody.appendChild(tr);
+  });
+}
+
+async function loadAnalytics() {
+  const regionPreset = regionPresetFilter.value || 'USMajor';
+  const region = regionPreset === 'custom' ? (regionFilter.value || 'all') : 'all';
+  const family = familyFilter.value || 'all';
+  const availability = availabilityFilter.value || 'all';
+
+  const base = new URLSearchParams({ regionPreset, region, family, availability });
+  const trendQuery = new URLSearchParams({ regionPreset, region, family, availability, days: '7' });
+
+  try {
+    const [subscriptionResponse, trendResponse] = await Promise.all([
+      fetch(`/api/capacity/subscriptions?${base.toString()}`),
+      fetch(`/api/capacity/trends?${trendQuery.toString()}`)
+    ]);
+
+    const subscriptionPayload = subscriptionResponse.ok ? await subscriptionResponse.json() : { rows: [] };
+    const trendPayload = trendResponse.ok ? await trendResponse.json() : { rows: [] };
+
+    renderSubscriptionSummary(Array.isArray(subscriptionPayload.rows) ? subscriptionPayload.rows : []);
+    renderTrends(Array.isArray(trendPayload.rows) ? trendPayload.rows : []);
+  } catch (_) {
+    renderSubscriptionSummary([]);
+    renderTrends([]);
+  }
+}
+
 async function loadCapacityRows() {
   const regionPreset = regionPresetFilter.value || 'USMajor';
   const region = regionPreset === 'custom' ? (regionFilter.value || 'all') : 'all';
@@ -131,6 +195,7 @@ async function loadCapacityRows() {
   syncRegionOptions();
   fillSelect(familyFilter, unique('family'));
   renderGrid();
+  loadAnalytics();
 }
 
 function wireTabs() {
@@ -152,6 +217,7 @@ function wireButtons() {
   document.getElementById('planBtn').addEventListener('click', notYet('Build move plan'));
   document.getElementById('candidateBtn').addEventListener('click', notYet('Generate quota candidates'));
   document.getElementById('historyBtn').addEventListener('click', notYet('Capture quota history'));
+  document.getElementById('refreshAnalyticsBtn').addEventListener('click', loadAnalytics);
   document.getElementById('simulateBtn').addEventListener('click', notYet('Simulate impact'));
   document.getElementById('applyBtn').addEventListener('click', () => {
     const ok = confirm('Apply quota movements is a write operation. Continue?');
@@ -170,8 +236,14 @@ regionFilter.addEventListener('change', () => {
   }
   renderGrid();
 });
-familyFilter.addEventListener('change', renderGrid);
-availabilityFilter.addEventListener('change', renderGrid);
+familyFilter.addEventListener('change', () => {
+  renderGrid();
+  loadAnalytics();
+});
+availabilityFilter.addEventListener('change', () => {
+  renderGrid();
+  loadAnalytics();
+});
 wireTabs();
 wireButtons();
 syncRegionOptions();

@@ -57,6 +57,37 @@
         <div class="actions">
           <button id="candidateBtn">Generate Quota Candidates</button>
           <button id="historyBtn">Capture Quota History</button>
+          <button id="refreshAnalyticsBtn">Refresh Analytics</button>
+        </div>
+
+        <div class="grid-wrap" style="margin-top: 1rem;">
+          <h3>Subscription Summary (masked keys)</h3>
+          <table id="subscriptionGrid">
+            <thead>
+              <tr>
+                <th>Subscription Key</th>
+                <th>Rows</th>
+                <th>Constrained Rows</th>
+                <th>Total Quota Available</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <div class="grid-wrap" style="margin-top: 1rem;">
+          <h3>Capacity Trend (last 7 days)</h3>
+          <table id="trendGrid">
+            <thead>
+              <tr>
+                <th>Day</th>
+                <th>Total Rows</th>
+                <th>Constrained Rows</th>
+                <th>Total Quota Available</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
         </div>
       </div>
 

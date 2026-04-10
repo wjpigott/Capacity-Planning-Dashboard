@@ -2,6 +2,7 @@ CREATE TABLE dbo.CapacitySnapshot (
     snapshotId BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
     capturedAtUtc DATETIME2 NOT NULL,
     sourceType NVARCHAR(50) NOT NULL,
+    subscriptionKey NVARCHAR(64) NULL,
     region NVARCHAR(64) NOT NULL,
     skuName NVARCHAR(128) NOT NULL,
     skuFamily NVARCHAR(128) NOT NULL,
@@ -39,6 +40,7 @@ CREATE OR ALTER VIEW dbo.CapacityLatest AS
 WITH Ranked AS (
     SELECT
         capturedAtUtc,
+        subscriptionKey,
         region,
         skuName,
         skuFamily,
@@ -47,13 +49,14 @@ WITH Ranked AS (
         quotaLimit,
         monthlyCostEstimate,
         ROW_NUMBER() OVER (
-            PARTITION BY region, skuName
+            PARTITION BY ISNULL(subscriptionKey, 'legacy-data'), region, skuName
             ORDER BY capturedAtUtc DESC
         ) AS rn
     FROM dbo.CapacitySnapshot
 )
 SELECT
     capturedAtUtc,
+    subscriptionKey,
     region,
     skuName,
     skuFamily,

@@ -92,7 +92,10 @@ async function armGetAll(url, token) {
 
 async function listSubscriptions(token, explicitSubscriptions) {
   if (explicitSubscriptions && explicitSubscriptions.length > 0) {
-    return explicitSubscriptions;
+    return explicitSubscriptions.map((subId) => ({
+      subscriptionId: subId,
+      displayName: 'Configured subscription'
+    }));
   }
 
   const configured = (process.env.INGEST_SUBSCRIPTION_IDS || '')
@@ -101,15 +104,35 @@ async function listSubscriptions(token, explicitSubscriptions) {
     .filter(Boolean);
 
   if (configured.length > 0) {
-    return configured;
+    return configured.map((subId) => ({
+      subscriptionId: subId,
+      displayName: 'Configured subscription'
+    }));
   }
 
   const url = `${ARM_BASE}/subscriptions?api-version=2020-01-01`;
   const subscriptions = await armGetAll(url, token);
   return subscriptions
     .filter((s) => (s.state || '').toLowerCase() === 'enabled')
-    .map((s) => s.subscriptionId)
-    .filter(Boolean);
+    .map((s) => ({
+      subscriptionId: s.subscriptionId,
+      displayName: s.displayName || 'Subscription'
+    }))
+    .filter((s) => Boolean(s.subscriptionId));
+}
+
+function getCapabilityValue(capabilities, name) {
+  const match = (capabilities || []).find((c) => (c.name || '').toLowerCase() === name.toLowerCase());
+  return match?.value;
+}
+
+function getZonesCsv(sku, region) {
+  const locationInfo = (sku.locationInfo || []).find((entry) => (entry.location || '').toLowerCase() === region.toLowerCase());
+  const zones = (locationInfo?.zones || []).map((z) => String(z).trim()).filter(Boolean);
+  if (zones.length === 0) {
+    return null;
+  }
+  return zones.sort().join(',');
 }
 
 function pickRepresentativeSku(skus, familyName) {
@@ -157,13 +180,15 @@ async function runCapacityIngestion(options = {}) {
   try {
     const credential = getCredential();
     const token = (await credential.getToken(ARM_SCOPE)).token;
-    const subscriptionIds = await listSubscriptions(token, options.subscriptionIds);
+    const subscriptions = await listSubscriptions(token, options.subscriptionIds);
     const regions = getRegions(options.regionPreset, options.regions);
     const familyFilters = getFamilyFilters(options.familyFilters);
     const capturedAtUtc = new Date();
     const rows = [];
 
-    for (const subscriptionId of subscriptionIds) {
+    for (const subscription of subscriptions) {
+      const subscriptionId = subscription.subscriptionId;
+      const subscriptionName = subscription.displayName || 'Subscription';
       const subscriptionKey = getSubscriptionKey(subscriptionId);
       for (const region of regions) {
         const usageUrl = `${ARM_BASE}/subscriptions/${subscriptionId}/providers/Microsoft.Compute/locations/${region}/usages?api-version=2024-03-01`;
@@ -184,9 +209,14 @@ async function runCapacityIngestion(options = {}) {
             capturedAtUtc,
             sourceType: 'live-azure-ingest',
             subscriptionKey,
+            subscriptionId,
+            subscriptionName,
             region,
             skuName: representativeSku?.name || `${familyName}-aggregate`,
             skuFamily: familyName,
+            vCpu: Number(getCapabilityValue(representativeSku?.capabilities, 'vCPUs') || 0) || null,
+            memoryGB: Number(getCapabilityValue(representativeSku?.capabilities, 'MemoryGB') || 0) || null,
+            zonesCsv: representativeSku ? getZonesCsv(representativeSku, region) : null,
             availabilityState: computeAvailabilityState(Boolean(representativeSku), quotaCurrent, quotaLimit),
             quotaCurrent,
             quotaLimit,
@@ -203,7 +233,7 @@ async function runCapacityIngestion(options = {}) {
     ingestStatus.lastDurationMs = durationMs;
     ingestStatus.lastInsertedRows = insertedRows;
     ingestStatus.lastSummary = {
-      subscriptionCount: subscriptionIds.length,
+      subscriptionCount: subscriptions.length,
       subscriptionKeys: [...new Set(rows.map((r) => r.subscriptionKey))],
       regions,
       familyFilters,

@@ -32,6 +32,10 @@
           <label>Region
             <select id="regionFilter"></select>
           </label>
+          <label style="min-width: 320px; flex: 1;">
+            Subscription Search
+            <input id="subscriptionSearch" type="text" placeholder="Search by subscription name or id" />
+          </label>
           <label>SKU Family
             <select id="familyFilter"></select>
           </label>
@@ -43,6 +47,16 @@
               <option value="CONSTRAINED">CONSTRAINED</option>
             </select>
           </label>
+        </div>
+
+        <div class="subscription-picker" style="margin-top: 10px;">
+          <div class="actions">
+            <button id="subscriptionRefreshBtn">Refresh Subscriptions</button>
+            <button id="subscriptionApplyBtn">Apply Subscription Filter</button>
+            <button id="subscriptionClearBtn">Clear Selection</button>
+            <span id="subscriptionSelectionInfo" class="inline-note"></span>
+          </div>
+          <div id="subscriptionOptions" class="subscription-options"></div>
         </div>
 
         <div class="actions">
@@ -105,10 +119,13 @@
       <table id="capacityGrid">
         <thead>
           <tr>
+            <th>Subscription Name</th>
+            <th>Subscription ID</th>
             <th>Region</th>
             <th>SKU</th>
             <th>Family</th>
             <th>Availability</th>
+            <th>Zones</th>
             <th>Quota Current</th>
             <th>Quota Limit</th>
             <th>Quota Available</th>
@@ -118,6 +135,35 @@
         </thead>
         <tbody></tbody>
       </table>
+    </section>
+
+    <section class="grid-wrap">
+      <h3>Capacity Availability by Region</h3>
+      <div id="regionChart" class="chart-bars"></div>
+    </section>
+
+    <section class="grid-wrap">
+      <h3>Top SKUs by Available Quota</h3>
+      <div id="skuChart" class="chart-bars"></div>
+    </section>
+
+    <section class="grid-wrap">
+      <h3>SKU Families Summary</h3>
+      <table id="familySummaryGrid">
+        <thead>
+          <tr>
+            <th>Family</th>
+            <th>SKUs</th>
+            <th>OK</th>
+            <th>Largest</th>
+            <th>Zones</th>
+            <th>Status</th>
+            <th>Quota</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p id="familySummaryEmpty" class="inline-note" style="display:none; margin-top:8px;">No quota data available</p>
     </section>
   </main>
 

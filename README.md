@@ -21,6 +21,88 @@ The current-state diagram reflects what is deployed now: App Service hosting the
 
 Use Draw.io for edits when readability/layout precision matters; keep the Mermaid file for quick text-based diffs and automation-friendly rendering.
 
+## Implementation Status
+
+Status legend:
+
+- `[x]` Complete
+- `[~]` In progress / partial
+- `[ ]` Planned
+
+### Track summary
+
+| Track | Current Status | Notes |
+| --- | --- | --- |
+| Platform and infrastructure | `[x]` | App Service, SQL, Key Vault, App Insights, Log Analytics deployed via Bicep |
+| Security and identity | `[x]` | Entra admin + AAD-only SQL auth, managed identity runtime access, no raw subscription IDs stored in snapshots |
+| Live ingestion pipeline | `[x]` | Internal ingestion endpoint + scheduler + BS/DS family filtering + SQL snapshot writes |
+| API and analytics | `[~]` | Capacity API, subscription catalog, family summary, masked subscription summary, and trend APIs complete; quota-group APIs still placeholder |
+| UX and dashboard | `[~]` | Capacity grid, filters, tabs, analytics tables, and chart views complete; export/workflow pages still pending |
+| Quota movement orchestration | `[ ]` | Discover/plan/apply backend flow and approvals not implemented yet |
+| Operations and release | `[~]` | Deployment scripts and migration scripts complete; CI/CD pipeline and runbooks still pending |
+
+### Detailed checklist
+
+#### Platform and infrastructure
+
+- [x] Azure resource group and core resources provisioned
+- [x] Bicep-based environment deployment script
+- [x] SQL schema for snapshots and latest view
+- [x] Draw.io + Mermaid architecture artifacts in `docs/`
+
+#### Security and identity
+
+- [x] SQL configured with Entra admin and AAD-only auth
+- [x] App Service system-assigned managed identity enabled
+- [x] App identity granted SQL read/write roles for ingestion and read APIs
+- [x] Internal ingestion endpoints protected by `INGEST_API_KEY`
+- [x] Subscription identities masked (`subscriptionKey`) in stored analytics rows
+
+#### Live ingestion pipeline
+
+- [x] Managed identity token flow for ARM ingestion
+- [x] Region preset ingestion (`USMajor`)
+- [x] Family filter ingestion (`standard_BS`, `standard_DS`)
+- [x] Ingestion scheduler (`INGEST_ON_STARTUP`, `INGEST_INTERVAL_MINUTES`)
+- [ ] Retry/backoff and dead-letter behavior for ingestion failures
+
+#### API and analytics
+
+- [x] `GET /api/capacity`
+- [x] `GET /api/subscriptions` (subscription search/paging source for multi-select UX)
+- [x] `GET /api/capacity/families` (quota-style family summary)
+- [x] `GET /api/capacity/subscriptions` (masked subscription summary)
+- [x] `GET /api/capacity/trends` (daily trend rollups)
+- [x] `POST /internal/ingest/capacity`
+- [x] `GET /internal/ingest/status`
+- [ ] `GET /api/quota/groups` live implementation (currently placeholder)
+- [ ] Quota movement plan/apply endpoints
+
+#### UX and dashboard
+
+- [x] Capacity Explorer tab with filters and grid
+- [x] Region group defaulting (`USMajor`)
+- [x] Subscription search + multi-select filter UX (scales with search/limit)
+- [x] Quota Insights tab tables for subscription summary + trends
+- [x] Chart views for region availability and top SKU available quota
+- [ ] Export (CSV/XLSX) actions wired to backend
+- [ ] Ingestion status widget in UI
+
+#### Quota movement orchestration
+
+- [ ] Discover quota groups from live APIs
+- [ ] Generate candidate/move plans from analytics data
+- [ ] Approval workflow for quota apply actions
+- [ ] Safe apply with change caps, retries, and audit log views
+
+#### Operations and release
+
+- [x] Migration runner script (`scripts/apply-migration.ps1`)
+- [x] Schema + seed scripts for dev initialization
+- [ ] CI/CD pipeline for build/deploy/migrations
+- [ ] Scheduled ingestion monitoring/alerts
+- [ ] Release verification checklist + rollback playbook
+
 ## Local run
 
 1. Copy `.env.example` to `.env` and provide SQL values (or leave blank for mock mode).
@@ -128,8 +210,10 @@ Internal endpoints:
 
 Read APIs for analytics:
 
+- `GET /api/subscriptions?search=<text>&limit=<n>` (subscription catalog for scalable filtering)
 - `GET /api/capacity/subscriptions` (masked subscription summary)
 - `GET /api/capacity/trends?days=7` (daily trend rollup)
+- `GET /api/capacity/families` (quota-style family summary)
 
 Example trigger:
 
@@ -146,6 +230,17 @@ To add masked subscription-key support to existing databases, run:
 	-SqlServer "<server>.database.windows.net" \
 	-SqlDatabase "<database>" \
 	-MigrationFile "./sql/migrations/20260410-add-subscriptionkey.sql" \
+	-UseEntra \
+	-EntraUser "<entra-upn>"
+```
+
+To add subscription id/name + SKU metadata columns used by charts and family summary, run:
+
+```powershell
+./scripts/apply-migration.ps1 \
+	-SqlServer "<server>.database.windows.net" \
+	-SqlDatabase "<database>" \
+	-MigrationFile "./sql/migrations/20260410-add-subscription-columns-and-sku-metadata.sql" \
 	-UseEntra \
 	-EntraUser "<entra-upn>"
 ```

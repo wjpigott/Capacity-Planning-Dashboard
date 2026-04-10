@@ -5,14 +5,17 @@ require('dotenv').config();
 
 const {
   getCapacityRows,
+  getSubscriptions,
   getSubscriptionSummary,
-  getCapacityTrends
+  getCapacityTrends,
+  getFamilySummary
 } = require('./services/capacityService');
 const {
   runCapacityIngestion,
   getIngestionStatus,
   startIngestionScheduler
 } = require('./services/azureIngestionService');
+const { ensurePhase3Schema } = require('./store/sql');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -45,6 +48,7 @@ app.get('/api/capacity', async (req, res) => {
   try {
     const rows = await getCapacityRows({
       regionPreset: req.query.regionPreset,
+      subscriptionIds: req.query.subscriptionIds,
       region: req.query.region,
       family: req.query.family,
       availability: req.query.availability
@@ -63,10 +67,23 @@ app.get('/api/quota/groups', (_, res) => {
   });
 });
 
+app.get('/api/subscriptions', async (req, res) => {
+  try {
+    const rows = await getSubscriptions({
+      search: req.query.search,
+      limit: req.query.limit
+    });
+    res.json({ rows });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve subscriptions', detail: err.message });
+  }
+});
+
 app.get('/api/capacity/subscriptions', async (req, res) => {
   try {
     const rows = await getSubscriptionSummary({
       regionPreset: req.query.regionPreset,
+      subscriptionIds: req.query.subscriptionIds,
       region: req.query.region,
       family: req.query.family,
       availability: req.query.availability
@@ -82,6 +99,7 @@ app.get('/api/capacity/trends', async (req, res) => {
     const rows = await getCapacityTrends({
       days: req.query.days,
       regionPreset: req.query.regionPreset,
+      subscriptionIds: req.query.subscriptionIds,
       region: req.query.region,
       family: req.query.family,
       availability: req.query.availability
@@ -89,6 +107,21 @@ app.get('/api/capacity/trends', async (req, res) => {
     res.json({ rows });
   } catch (err) {
     res.status(500).json({ error: 'Failed to retrieve capacity trends', detail: err.message });
+  }
+});
+
+app.get('/api/capacity/families', async (req, res) => {
+  try {
+    const rows = await getFamilySummary({
+      regionPreset: req.query.regionPreset,
+      subscriptionIds: req.query.subscriptionIds,
+      region: req.query.region,
+      family: req.query.family,
+      availability: req.query.availability
+    });
+    res.json({ rows });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve family summary', detail: err.message });
   }
 });
 
@@ -108,6 +141,15 @@ app.post('/internal/ingest/capacity', requireIngestKey, async (req, res) => {
 
 app.get('/internal/ingest/status', requireIngestKey, (req, res) => {
   res.json({ ok: true, status: getIngestionStatus() });
+});
+
+app.post('/internal/db/ensure-phase3-schema', requireIngestKey, async (_, res) => {
+  try {
+    const result = await ensurePhase3Schema();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 app.get('*', (_, res) => {

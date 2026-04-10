@@ -1,12 +1,4 @@
-const fallbackRows = [
-  { subscriptionId: 'legacy-data', subscriptionName: 'Legacy data', region: 'eastus', sku: 'Standard_D4s_v5', family: 'standardDSv5Family', availability: 'OK', zonesCsv: '1,2,3', quotaCurrent: 22, quotaLimit: 100, monthlyCost: 280, vCpu: 4, memoryGB: 16 },
-  { subscriptionId: 'legacy-data', subscriptionName: 'Legacy data', region: 'eastus2', sku: 'Standard_E8s_v5', family: 'standardESv5Family', availability: 'LIMITED', zonesCsv: '1,2,3', quotaCurrent: 40, quotaLimit: 80, monthlyCost: 620, vCpu: 8, memoryGB: 64 },
-  { subscriptionId: 'legacy-data', subscriptionName: 'Legacy data', region: 'centralus', sku: 'Standard_D16s_v5', family: 'standardDSv5Family', availability: 'CONSTRAINED', zonesCsv: '1,2,3', quotaCurrent: 75, quotaLimit: 80, monthlyCost: 1240, vCpu: 16, memoryGB: 64 },
-  { subscriptionId: 'legacy-data', subscriptionName: 'Legacy data', region: 'westus2', sku: 'Standard_F8s_v2', family: 'standardFSv2Family', availability: 'OK', zonesCsv: '1,2,3', quotaCurrent: 18, quotaLimit: 120, monthlyCost: 510, vCpu: 8, memoryGB: 16 },
-  { subscriptionId: 'legacy-data', subscriptionName: 'Legacy data', region: 'westus', sku: 'Standard_B12ms', family: 'standardBSFamily', availability: 'OK', zonesCsv: '1,2,3', quotaCurrent: 12, quotaLimit: 100, monthlyCost: 260, vCpu: 12, memoryGB: 48 }
-];
-
-let rows = [...fallbackRows];
+let rows = [];
 let subscriptionOptions = [];
 const selectedSubscriptionIds = new Set();
 
@@ -105,12 +97,18 @@ function renderSummary(data) {
 function renderGrid() {
   const data = filteredRows();
   gridBody.innerHTML = '';
+  if (data.length === 0) {
+    gridBody.innerHTML = '<tr><td colspan="12" style="text-align: center; padding: 20px; color: #5d7085;">No data available. Ensure ingestion is running and subscriptions are in scope.</td></tr>';
+    renderSummary([]);
+    renderCharts([]);
+    return;
+  }
   data.forEach((r) => {
     const available = r.quotaLimit - r.quotaCurrent;
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>${r.subscriptionName || 'Legacy data'}</td>
-      <td>${r.subscriptionId || 'legacy-data'}</td>
+      <td>${r.subscriptionName}</td>
+      <td>${r.subscriptionId}</td>
       <td>${r.region}</td>
       <td>${r.sku}</td>
       <td>${r.family}</td>
@@ -327,7 +325,7 @@ async function loadSubscriptions() {
     subscriptionOptions = Array.isArray(payload.rows) ? payload.rows : [];
     renderSubscriptionOptions(subscriptionOptions);
   } catch (_) {
-    subscriptionOptions = [{ subscriptionId: 'legacy-data', subscriptionName: 'Legacy data' }];
+    subscriptionOptions = [];
     renderSubscriptionOptions(subscriptionOptions);
   }
 }
@@ -344,7 +342,7 @@ async function loadCapacityRows() {
     const payload = await response.json();
     rows = Array.isArray(payload.rows) ? payload.rows : [];
   } catch (_) {
-    rows = [...fallbackRows];
+    rows = [];
   }
 
   syncRegionOptions();

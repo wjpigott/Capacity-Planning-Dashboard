@@ -34,7 +34,7 @@ Status legend:
 | Track | Current Status | Notes |
 | --- | --- | --- |
 | Platform and infrastructure | `[x]` | App Service, SQL, Key Vault, App Insights, Log Analytics deployed via Bicep |
-| Security and identity | `[x]` | Entra admin + AAD-only SQL auth, managed identity runtime access, no raw subscription IDs stored in snapshots |
+| Security and identity | `[~]` | Entra admin + AAD-only SQL auth, managed identity runtime access, no raw subscription IDs stored in snapshots; Entra RBAC for Admin sections pending |
 | Live ingestion pipeline | `[x]` | Internal ingestion endpoint + scheduler + BS/DS family filtering + SQL snapshot writes |
 | API and analytics | `[~]` | Capacity API, subscription catalog, family summary, masked subscription summary, and trend APIs complete; quota-group APIs still placeholder |
 | UX and dashboard | `[~]` | Capacity grid, filters, tabs, analytics tables, and chart views complete; export/workflow pages still pending |
@@ -57,6 +57,7 @@ Status legend:
 - [x] App identity granted SQL read/write roles for ingestion and read APIs
 - [x] Internal ingestion endpoints protected by `INGEST_API_KEY`
 - [x] Subscription identities masked (`subscriptionKey`) in stored analytics rows
+- [ ] Entra ID RBAC — gate Admin sidebar sections (Data Ingestion, Quota Discovery, Quota Movements) behind an app role (e.g. `CapacityAdmin`) assigned in the App Registration; read-only Reporting available to all authenticated users
 
 #### Live ingestion pipeline
 
@@ -177,6 +178,23 @@ Approvals are required before:
 - Do not commit subscription IDs, tenant IDs, resource group names, or credentials.
 - Use managed identity for Azure resource access in hosted environments.
 - Keep write identity separate from read identity.
+
+## Subscription data ingestion strategy
+
+**Cross-subscription, database-backed reporting (recommended):**
+
+1. **Discovery**: On ingestion start, the managed identity enumerates all enabled Azure subscriptions it can access (or uses explicit `INGEST_SUBSCRIPTION_IDS` list).
+2. **Ingestion**: For each subscription, the ingestion service pulls Compute usage and SKU data from ARM, then writes snapshots to `dbo.CapacitySnapshot`.
+3. **Dashboard**: Reports read from the SQL database, never from real-time ARM APIs. Subscription multi-select filtering works by querying the locally-stored snapshots.
+4. **Result**: Lightweight, scalable dashboard with multi-subscription visibility; no per-query ARM calls; scheduled ingestion keeps data fresh.
+
+**Configuration options:**
+
+- **Auto-discover**: If `INGEST_SUBSCRIPTION_IDS` is not set, the service calls `/subscriptions` to enumerate all accessible subscriptions.
+- **Explicit list**: Set `INGEST_SUBSCRIPTION_IDS=sub-1,sub-2,sub-3` to ingest only those subscriptions.
+- **Frequency**: Control `INGEST_INTERVAL_MINUTES` to tune refresh cadence (e.g., 30 = every 30 minutes).
+
+This design avoids the performance and cost penalties of real-time API calls during dashboard queries — all filtering happens on indexed SQL tables.
 
 ## Live ingestion (Phase 1)
 

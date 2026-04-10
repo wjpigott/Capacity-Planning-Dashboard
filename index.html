@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Capacity Planning Dashboard (MVP)</title>
+  <title>Capacity Planning Dashboard</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -12,69 +12,268 @@
     <p>Native Azure MVP for capacity, quota, and planning workflows</p>
   </header>
 
-  <main class="layout">
-    <section class="controls">
-      <div class="tabs" role="tablist" aria-label="Dashboard Tabs">
-        <button class="tab active" data-tab="capacity">Capacity Explorer</button>
-        <button class="tab" data-tab="quota">Quota Insights</button>
-        <button class="tab" data-tab="movement">Quota Movements</button>
-      </div>
+  <div class="app-shell">
+    <!-- ─── Sidebar navigation ──────────────────────────────────── -->
+    <nav class="sidebar">
 
-      <div class="panel active" id="capacity-panel">
-        <div class="filters">
-          <label>Region Group
-            <select id="regionPresetFilter">
-              <option value="USMajor">US Major</option>
-              <option value="all">All Regions</option>
-              <option value="custom">Custom</option>
-            </select>
-          </label>
-          <label>Region
-            <select id="regionFilter"></select>
-          </label>
-          <label style="min-width: 320px; flex: 1;">
-            Subscription Search
-            <input id="subscriptionSearch" type="text" placeholder="Search by subscription name or id" />
-          </label>
-          <label>SKU Family
-            <select id="familyFilter"></select>
-          </label>
-          <label>Availability
-            <select id="availabilityFilter">
-              <option value="all">All</option>
-              <option value="OK">OK</option>
-              <option value="LIMITED">LIMITED</option>
-              <option value="CONSTRAINED">CONSTRAINED</option>
-            </select>
-          </label>
-        </div>
+      <div class="nav-group-label">Reporting</div>
+      <button class="nav-item active" data-nav="reporting">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="1" y="9" width="3" height="6"/><rect x="6" y="5" width="3" height="10"/><rect x="11" y="1" width="3" height="14"/></svg>
+        Capacity Reports
+      </button>
 
-        <div class="subscription-picker" style="margin-top: 10px;">
-          <div class="actions">
-            <button id="subscriptionRefreshBtn">Refresh Subscriptions</button>
-            <button id="subscriptionApplyBtn">Apply Subscription Filter</button>
-            <button id="subscriptionClearBtn">Clear Selection</button>
+      <div class="nav-group-label" style="margin-top: 16px;">Admin</div>
+      <button class="nav-item" data-nav="admin">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 1a6 6 0 110 12A6 6 0 018 2zm-.5 3v3.22l-2.14 2.14.71.71L8.5 8.78V5h-1z"/></svg>
+        Data Ingestion
+      </button>
+      <button class="nav-item" data-nav="quota-discovery">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="6.5" cy="6.5" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="9.5" y1="9.5" x2="14" y2="14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        Quota Discovery
+      </button>
+      <button class="nav-item" data-nav="quota-movement">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1 8l4-4v2.5h6V4l4 4-4 4v-2.5H5V12z"/></svg>
+        Quota Movements
+      </button>
+
+    </nav>
+
+    <!-- ─── Main content area ───────────────────────────────────── -->
+    <main class="main-content">
+
+      <!-- ════════════════════════════════════════════════════════
+           REPORTING — filters + view tabs
+           ════════════════════════════════════════════════════════ -->
+      <section class="page active" id="reporting-page">
+
+        <!-- Filter bar -->
+        <div class="surface">
+          <div class="filter-section-label">Filters</div>
+          <div class="filters">
+            <label>Region Group
+              <select id="regionPresetFilter">
+                <option value="USMajor">US Major</option>
+                <option value="all">All Regions</option>
+                <option value="custom">Custom</option>
+              </select>
+            </label>
+            <label>Region
+              <select id="regionFilter"></select>
+            </label>
+            <label>SKU Family
+              <select id="familyFilter"></select>
+            </label>
+            <label>Availability
+              <select id="availabilityFilter">
+                <option value="all">All</option>
+                <option value="OK">OK</option>
+                <option value="LIMITED">LIMITED</option>
+                <option value="CONSTRAINED">CONSTRAINED</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="filter-section-label" style="margin-top: 12px;">Subscriptions
             <span id="subscriptionSelectionInfo" class="inline-note"></span>
           </div>
+          <input id="subscriptionSearch" type="text" placeholder="Search by subscription name or id" style="width: 340px; margin-bottom: 8px;" />
           <div id="subscriptionOptions" class="subscription-options"></div>
+
+          <div class="actions" style="margin-top: 10px;">
+            <button id="refreshBtn">Refresh Data</button>
+            <button id="subscriptionApplyBtn">Apply Subscription Filter</button>
+            <button id="subscriptionClearBtn">Clear Selection</button>
+            <button id="exportBtn">Export CSV</button>
+          </div>
         </div>
 
-        <div class="actions">
-          <button id="refreshBtn">Refresh Capacity</button>
-          <button id="exportBtn">Export CSV</button>
-          <button id="discoverBtn">Discover Quota Groups</button>
-          <button id="planBtn">Build Move Plan</button>
-        </div>
-      </div>
+        <!-- Summary cards -->
+        <section class="summary" id="summaryCards"></section>
 
-      <div class="panel" id="quota-panel">
-        <div class="actions">
-          <button id="candidateBtn">Generate Quota Candidates</button>
-          <button id="historyBtn">Capture Quota History</button>
-          <button id="refreshAnalyticsBtn">Refresh Analytics</button>
+        <!-- View sub-tabs -->
+        <div class="view-tabs-bar">
+          <div class="view-tabs" role="tablist" aria-label="Report Views">
+            <button class="view-tab active" data-view="capacity-grid">Capacity Grid</button>
+            <button class="view-tab" data-view="region-chart">By Region</button>
+            <button class="view-tab" data-view="sku-chart">Top SKUs</button>
+            <button class="view-tab" data-view="family-summary">Family Summary</button>
+            <button class="view-tab" data-view="trend">Trend History</button>
+          </div>
         </div>
 
-        <div class="grid-wrap" style="margin-top: 1rem;">
+        <!-- Capacity Grid -->
+        <div class="view-panel active" id="view-capacity-grid">
+          <div class="surface overflow-auto">
+            <table id="capacityGrid">
+              <thead>
+                <tr>
+                  <th>Subscription Name</th>
+                  <th>Subscription ID</th>
+                  <th>Region</th>
+                  <th>SKU</th>
+                  <th>Family</th>
+                  <th>Availability</th>
+                  <th>Zones</th>
+                  <th>Quota Current</th>
+                  <th>Quota Limit</th>
+                  <th>Quota Available</th>
+                  <th>Utilization %</th>
+                  <th>Monthly Cost (est.)</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- By Region chart -->
+        <div class="view-panel" id="view-region-chart">
+          <div class="surface">
+            <h3>Capacity Availability by Region</h3>
+            <div id="regionChart" class="chart-bars"></div>
+          </div>
+        </div>
+
+        <!-- Top SKUs chart -->
+        <div class="view-panel" id="view-sku-chart">
+          <div class="surface">
+            <h3>Top SKUs by Available Quota</h3>
+            <div id="skuChart" class="chart-bars"></div>
+          </div>
+        </div>
+
+        <!-- Family Summary -->
+        <div class="view-panel" id="view-family-summary">
+          <div class="surface overflow-auto">
+            <h3>SKU Families Summary</h3>
+            <table id="familySummaryGrid">
+              <thead>
+                <tr>
+                  <th>Family</th>
+                  <th>SKUs</th>
+                  <th>OK</th>
+                  <th>Largest</th>
+                  <th>Zones</th>
+                  <th>Status</th>
+                  <th>Quota</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+            <p id="familySummaryEmpty" class="inline-note" style="display:none; margin-top:8px;">No quota data available</p>
+          </div>
+        </div>
+
+        <!-- Trend History -->
+        <div class="view-panel" id="view-trend">
+          <div class="surface overflow-auto">
+            <h3>Capacity Trend (last 7 days)</h3>
+            <table id="trendGrid">
+              <thead>
+                <tr>
+                  <th>Day</th>
+                  <th>Total Rows</th>
+                  <th>Constrained Rows</th>
+                  <th>Total Quota Available</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ════════════════════════════════════════════════════════
+           ADMIN — Data Ingestion
+           ════════════════════════════════════════════════════════ -->
+      <section class="page" id="admin-page">
+        <div class="admin-page-label">Data Ingestion</div>
+        <p class="page-description">Trigger live ingestion from Azure ARM APIs and manage the subscription catalog stored in SQL. These operations write to the database.</p>
+
+        <div class="admin-cards">
+
+          <div class="admin-card">
+            <div class="admin-card-icon">
+              <svg viewBox="0 0 20 20" fill="currentColor"><path d="M10 3a7 7 0 100 14A7 7 0 0010 3zm0 1.5a5.5 5.5 0 110 11 5.5 5.5 0 010-11zM9.25 6v4.44l3.03 3.03 1.06-1.06-2.59-2.59V6h-1.5z"/></svg>
+            </div>
+            <div class="admin-card-body">
+              <h4>Refresh Subscription List</h4>
+              <p>Re-enumerate Azure subscriptions accessible by the managed identity and update the local subscription catalog.</p>
+              <button id="subscriptionRefreshBtn">Refresh Subscriptions</button>
+            </div>
+          </div>
+
+          <div class="admin-card">
+            <div class="admin-card-icon">
+              <svg viewBox="0 0 20 20" fill="currentColor"><path d="M10 2a8 8 0 100 16A8 8 0 0010 2zm1 11H9V9h2v4zm0-6H9V5h2v2z"/></svg>
+            </div>
+            <div class="admin-card-body">
+              <h4>Trigger Capacity Ingest</h4>
+              <p>Pull fresh Compute usage and SKU data from Azure ARM for all tracked subscriptions and write snapshots to SQL.</p>
+              <button id="triggerIngestBtn">Run Ingest Now</button>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ════════════════════════════════════════════════════════
+           ADMIN — Quota Discovery
+           ════════════════════════════════════════════════════════ -->
+      <section class="page" id="quota-discovery-page">
+        <div class="admin-page-label">Quota Discovery</div>
+        <p class="page-description">Discover and analyze quota group membership, headroom, and candidates for reallocation. Results are read from Azure APIs and optionally persisted to SQL.</p>
+
+        <div class="admin-cards">
+
+          <div class="admin-card">
+            <div class="admin-card-icon">
+              <svg viewBox="0 0 20 20" fill="currentColor"><circle cx="8.5" cy="8.5" r="5" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="12.5" y1="12.5" x2="17" y2="17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </div>
+            <div class="admin-card-body">
+              <h4>Discover Quota Groups</h4>
+              <p>List existing Azure GroupQuota resources across all enrolled subscriptions via the Microsoft.Quota API.</p>
+              <button id="discoverBtn">Discover Quota Groups</button>
+            </div>
+          </div>
+
+          <div class="admin-card">
+            <div class="admin-card-icon">
+              <svg viewBox="0 0 20 20" fill="currentColor"><path d="M4 4h12v2H4zm0 4h8v2H4zm0 4h10v2H4z"/></svg>
+            </div>
+            <div class="admin-card-body">
+              <h4>Generate Quota Candidates</h4>
+              <p>Analyze current allocation and identify subscriptions with shareable headroom that could be reallocated to constrained peers.</p>
+              <button id="candidateBtn">Generate Candidates</button>
+            </div>
+          </div>
+
+          <div class="admin-card">
+            <div class="admin-card-icon">
+              <svg viewBox="0 0 20 20" fill="currentColor"><path d="M3 4h14v2H3zm2 4h10v2H5zm2 4h6v2H7z"/></svg>
+            </div>
+            <div class="admin-card-body">
+              <h4>Capture Quota History</h4>
+              <p>Snapshot current quota allocation state into the QuotaCandidateSnapshot table for trend and audit purposes.</p>
+              <button id="historyBtn">Capture History</button>
+            </div>
+          </div>
+
+          <div class="admin-card">
+            <div class="admin-card-icon">
+              <svg viewBox="0 0 20 20" fill="currentColor"><path d="M10 2l2.4 4.8 5.6.8-4 3.9.9 5.5L10 14.5l-4.9 2.5.9-5.5-4-3.9 5.6-.8z"/></svg>
+            </div>
+            <div class="admin-card-body">
+              <h4>Refresh Analytics</h4>
+              <p>Reload subscription summary, trend data, and family rollups from the database to reflect the latest snapshot.</p>
+              <button id="refreshAnalyticsBtn">Refresh Analytics</button>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="surface overflow-auto" style="margin-top: 16px;">
           <h3>Subscription Summary (masked keys)</h3>
           <table id="subscriptionGrid">
             <thead>
@@ -89,7 +288,240 @@
           </table>
         </div>
 
-        <div class="grid-wrap" style="margin-top: 1rem;">
+      </section>
+
+      <!-- ════════════════════════════════════════════════════════
+           ADMIN — Quota Movements
+           ════════════════════════════════════════════════════════ -->
+      <section class="page" id="quota-movement-page">
+        <div class="admin-page-label">Quota Movements</div>
+        <p class="page-description">Plan and apply quota reallocation across subscriptions. All apply operations require explicit confirmation and are logged to the audit table.</p>
+
+        <div class="admin-cards">
+
+          <div class="admin-card">
+            <div class="admin-card-icon">
+              <svg viewBox="0 0 20 20" fill="currentColor"><path d="M3 10h14M10 3l7 7-7 7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </div>
+            <div class="admin-card-body">
+              <h4>Build Move Plan</h4>
+              <p>Generate a proposed quota movement plan based on discovered candidates and current allocation headroom.</p>
+              <button id="planBtn">Build Move Plan</button>
+            </div>
+          </div>
+
+          <div class="admin-card">
+            <div class="admin-card-icon">
+              <svg viewBox="0 0 20 20" fill="currentColor"><path d="M10 2a8 8 0 100 16A8 8 0 0010 2zm0 3l4 4H6l4-4zm0 6l-4-4h8l-4 4z"/></svg>
+            </div>
+            <div class="admin-card-body">
+              <h4>Simulate Impact</h4>
+              <p>Preview the effect of a proposed quota movement without writing any changes to Azure. Safe to run at any time.</p>
+              <button id="simulateBtn">Simulate Impact</button>
+            </div>
+          </div>
+
+          <div class="admin-card admin-card--warn">
+            <div class="admin-card-icon">
+              <svg viewBox="0 0 20 20" fill="currentColor"><path d="M10 2l8 15H2L10 2zm0 4v5h-1V6h1zm-.5 8.5a.5.5 0 111 0 .5.5 0 01-1 0z"/></svg>
+            </div>
+            <div class="admin-card-body">
+              <h4>Apply Quota Movements</h4>
+              <p>Submit the approved movement plan to Azure via PATCH on GroupQuotaSubscriptionAllocationRequest. Requires confirmation. Writes are logged to the audit table.</p>
+              <button id="applyBtn" class="warn">Apply Movements</button>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
+
+  <div class="app-shell">
+    <!-- ─── Sidebar navigation ──────────────────────────────────── -->
+    <nav class="sidebar">
+      <button class="nav-item active" data-nav="capacity">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="1" y="9" width="3" height="6"/><rect x="6" y="5" width="3" height="10"/><rect x="11" y="1" width="3" height="14"/></svg>
+        Capacity Explorer
+      </button>
+      <button class="nav-item" data-nav="quota">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2 2h12a1 1 0 011 1v10a1 1 0 01-1 1H2a1 1 0 01-1-1V3a1 1 0 011-1zm1 2v8h10V4zm1 1h4v1H4zm0 2h8v1H4zm0 2h6v1H4z"/></svg>
+        Quota Insights
+      </button>
+      <button class="nav-item" data-nav="movement">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1 8l4-4v2.5h6V4l4 4-4 4v-2.5H5V12z"/></svg>
+        Quota Movements
+      </button>
+    </nav>
+
+    <!-- ─── Main content area ───────────────────────────────────── -->
+    <main class="main-content">
+
+      <!-- ═══════════════════════════════════════════════════════════
+           Capacity Explorer
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="page active" id="capacity-page">
+
+        <!-- Filters + subscription picker -->
+        <div class="surface">
+          <div class="filters">
+            <label>Region Group
+              <select id="regionPresetFilter">
+                <option value="USMajor">US Major</option>
+                <option value="all">All Regions</option>
+                <option value="custom">Custom</option>
+              </select>
+            </label>
+            <label>Region
+              <select id="regionFilter"></select>
+            </label>
+            <label style="min-width: 320px; flex: 1;">
+              Subscription Search
+              <input id="subscriptionSearch" type="text" placeholder="Search by subscription name or id" />
+            </label>
+            <label>SKU Family
+              <select id="familyFilter"></select>
+            </label>
+            <label>Availability
+              <select id="availabilityFilter">
+                <option value="all">All</option>
+                <option value="OK">OK</option>
+                <option value="LIMITED">LIMITED</option>
+                <option value="CONSTRAINED">CONSTRAINED</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="subscription-picker" style="margin-top: 10px;">
+            <div class="actions">
+              <button id="subscriptionRefreshBtn">Refresh Subscriptions</button>
+              <button id="subscriptionApplyBtn">Apply Subscription Filter</button>
+              <button id="subscriptionClearBtn">Clear Selection</button>
+              <span id="subscriptionSelectionInfo" class="inline-note"></span>
+            </div>
+            <div id="subscriptionOptions" class="subscription-options"></div>
+          </div>
+
+          <div class="actions" style="margin-top: 10px;">
+            <button id="refreshBtn">Refresh Capacity</button>
+            <button id="exportBtn">Export CSV</button>
+            <button id="discoverBtn">Discover Quota Groups</button>
+            <button id="planBtn">Build Move Plan</button>
+          </div>
+        </div>
+
+        <!-- Summary cards -->
+        <section class="summary" id="summaryCards"></section>
+
+        <!-- View sub-tabs -->
+        <div class="view-tabs-bar">
+          <div class="view-tabs" role="tablist" aria-label="Capacity View">
+            <button class="view-tab active" data-view="capacity-grid">Capacity Grid</button>
+            <button class="view-tab" data-view="region-chart">By Region</button>
+            <button class="view-tab" data-view="sku-chart">Top SKUs</button>
+            <button class="view-tab" data-view="family-summary">Family Summary</button>
+          </div>
+        </div>
+
+        <!-- Capacity Grid -->
+        <div class="view-panel active" id="view-capacity-grid">
+          <div class="surface overflow-auto">
+            <table id="capacityGrid">
+              <thead>
+                <tr>
+                  <th>Subscription Name</th>
+                  <th>Subscription ID</th>
+                  <th>Region</th>
+                  <th>SKU</th>
+                  <th>Family</th>
+                  <th>Availability</th>
+                  <th>Zones</th>
+                  <th>Quota Current</th>
+                  <th>Quota Limit</th>
+                  <th>Quota Available</th>
+                  <th>Utilization %</th>
+                  <th>Monthly Cost (est.)</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- By Region chart -->
+        <div class="view-panel" id="view-region-chart">
+          <div class="surface">
+            <h3>Capacity Availability by Region</h3>
+            <div id="regionChart" class="chart-bars"></div>
+          </div>
+        </div>
+
+        <!-- Top SKUs chart -->
+        <div class="view-panel" id="view-sku-chart">
+          <div class="surface">
+            <h3>Top SKUs by Available Quota</h3>
+            <div id="skuChart" class="chart-bars"></div>
+          </div>
+        </div>
+
+        <!-- Family Summary -->
+        <div class="view-panel" id="view-family-summary">
+          <div class="surface overflow-auto">
+            <h3>SKU Families Summary</h3>
+            <table id="familySummaryGrid">
+              <thead>
+                <tr>
+                  <th>Family</th>
+                  <th>SKUs</th>
+                  <th>OK</th>
+                  <th>Largest</th>
+                  <th>Zones</th>
+                  <th>Status</th>
+                  <th>Quota</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+            <p id="familySummaryEmpty" class="inline-note" style="display:none; margin-top:8px;">No quota data available</p>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           Quota Insights
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="page" id="quota-page">
+
+        <div class="surface" style="margin-bottom: 16px;">
+          <div class="actions">
+            <button id="candidateBtn">Generate Quota Candidates</button>
+            <button id="historyBtn">Capture Quota History</button>
+            <button id="refreshAnalyticsBtn">Refresh Analytics</button>
+          </div>
+        </div>
+
+        <div class="surface overflow-auto" style="margin-bottom: 16px;">
+          <h3>Subscription Summary (masked keys)</h3>
+          <table id="subscriptionGrid">
+            <thead>
+              <tr>
+                <th>Subscription Key</th>
+                <th>Rows</th>
+                <th>Constrained Rows</th>
+                <th>Total Quota Available</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <div class="surface overflow-auto">
           <h3>Capacity Trend (last 7 days)</h3>
           <table id="trendGrid">
             <thead>
@@ -103,69 +535,25 @@
             <tbody></tbody>
           </table>
         </div>
-      </div>
 
-      <div class="panel" id="movement-panel">
-        <div class="actions">
-          <button id="applyBtn" class="warn">Apply Quota Movements</button>
-          <button id="simulateBtn">Simulate Impact</button>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           Quota Movements
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="page" id="movement-page">
+
+        <div class="surface">
+          <div class="actions">
+            <button id="applyBtn" class="warn">Apply Quota Movements</button>
+            <button id="simulateBtn">Simulate Impact</button>
+          </div>
         </div>
-      </div>
-    </section>
 
-    <section class="summary" id="summaryCards"></section>
+      </section>
 
-    <section class="grid-wrap">
-      <table id="capacityGrid">
-        <thead>
-          <tr>
-            <th>Subscription Name</th>
-            <th>Subscription ID</th>
-            <th>Region</th>
-            <th>SKU</th>
-            <th>Family</th>
-            <th>Availability</th>
-            <th>Zones</th>
-            <th>Quota Current</th>
-            <th>Quota Limit</th>
-            <th>Quota Available</th>
-            <th>Utilization %</th>
-            <th>Monthly Cost (est.)</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </section>
-
-    <section class="grid-wrap">
-      <h3>Capacity Availability by Region</h3>
-      <div id="regionChart" class="chart-bars"></div>
-    </section>
-
-    <section class="grid-wrap">
-      <h3>Top SKUs by Available Quota</h3>
-      <div id="skuChart" class="chart-bars"></div>
-    </section>
-
-    <section class="grid-wrap">
-      <h3>SKU Families Summary</h3>
-      <table id="familySummaryGrid">
-        <thead>
-          <tr>
-            <th>Family</th>
-            <th>SKUs</th>
-            <th>OK</th>
-            <th>Largest</th>
-            <th>Zones</th>
-            <th>Status</th>
-            <th>Quota</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-      <p id="familySummaryEmpty" class="inline-note" style="display:none; margin-top:8px;">No quota data available</p>
-    </section>
-  </main>
+    </main>
+  </div>
 
   <script src="app.js"></script>
 </body>

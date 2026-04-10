@@ -354,12 +354,26 @@ async function loadCapacityRows() {
 }
 
 function wireTabs() {
-  document.querySelectorAll('.tab').forEach((btn) => {
+  document.querySelectorAll('.nav-item').forEach((btn) => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
-      document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
+      document.querySelectorAll('.nav-item').forEach((t) => t.classList.remove('active'));
+      // pages use display:contents so we must toggle each individually
+      document.querySelectorAll('.page').forEach((p) => p.classList.remove('active'));
       btn.classList.add('active');
-      document.getElementById(`${btn.dataset.tab}-panel`).classList.add('active');
+      const pageId = btn.dataset.nav + '-page';
+      const page = document.getElementById(pageId);
+      if (page) page.classList.add('active');
+    });
+  });
+}
+
+function wireViewTabs() {
+  document.querySelectorAll('.view-tab').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.view-tab').forEach((t) => t.classList.remove('active'));
+      document.querySelectorAll('.view-panel').forEach((p) => p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById(`view-${btn.dataset.view}`).classList.add('active');
     });
   });
 }
@@ -374,6 +388,7 @@ function wireButtons() {
   document.getElementById('historyBtn').addEventListener('click', notYet('Capture quota history'));
   document.getElementById('refreshAnalyticsBtn').addEventListener('click', loadAnalytics);
   document.getElementById('simulateBtn').addEventListener('click', notYet('Simulate impact'));
+  document.getElementById('triggerIngestBtn').addEventListener('click', notYet('Trigger capacity ingest'));
   document.getElementById('applyBtn').addEventListener('click', () => {
     const ok = confirm('Apply quota movements is a write operation. Continue?');
     if (ok) alert('Apply request queued. Next step: backend orchestration + approval flow.');
@@ -418,6 +433,7 @@ availabilityFilter.addEventListener('change', () => {
 });
 
 wireTabs();
+wireViewTabs();
 wireButtons();
 syncRegionOptions();
 loadSubscriptions();

@@ -36,42 +36,244 @@ body {
   opacity: 0.9;
 }
 
-.layout {
-  padding: 20px;
-  display: grid;
-  gap: 16px;
+/* ─── App shell ─────────────────────────────────────────────── */
+.app-shell {
+  display: flex;
+  min-height: calc(100vh - 86px);
 }
 
-.controls, .summary, .grid-wrap {
+/* ─── Sidebar ────────────────────────────────────────────────── */
+.sidebar {
+  width: 224px;
+  flex-shrink: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  padding: 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px;
+  background: none;
+  border: none;
+  border-left: 3px solid transparent;
+  border-radius: 0;
+  text-align: left;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s;
+  margin-top: 0;
+}
+
+.nav-item:hover {
+  background: #f2f7fb;
+}
+
+.nav-item.active {
+  background: #eef5fc;
+  border-left-color: var(--brand);
+  color: var(--brand);
+  font-weight: 600;
+}
+
+.nav-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+/* ─── Main content ───────────────────────────────────────────── */
+.main-content {
+  flex: 1;
+  padding: 20px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* ─── Pages (top-level nav sections) ────────────────────────── */
+.page { display: none; }
+.page.active { display: contents; }
+
+/* ─── Sidebar nav group labels ──────────────────────────────── */
+.nav-group-label {
+  padding: 6px 20px 2px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  user-select: none;
+}
+
+/* ─── Admin page header ──────────────────────────────────────── */
+.admin-page-label {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+
+.page-description {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 0 0 16px;
+  max-width: 720px;
+}
+
+/* ─── Admin action cards ─────────────────────────────────────── */
+.admin-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+}
+
+.admin-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.admin-card--warn {
+  border-color: #f5c6a1;
+  background: #fffaf6;
+}
+
+.admin-card-icon {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  background: #eef5fc;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.admin-card--warn .admin-card-icon {
+  background: #fff0e6;
+}
+
+.admin-card-icon svg {
+  width: 18px;
+  height: 18px;
+  color: var(--brand);
+}
+
+.admin-card--warn .admin-card-icon svg {
+  color: var(--warn);
+}
+
+.admin-card-body {
+  flex: 1;
+}
+
+.admin-card-body h4 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.admin-card-body p {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.admin-card-body button {
+  margin-top: 0;
+}
+
+/* ─── Filter section label ───────────────────────────────────── */
+.filter-section-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+/* ─── Surfaces (card-like containers) ───────────────────────── */
+.surface {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 14px;
 }
 
-.tabs {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 12px;
-}
+.surface.overflow-auto { overflow: auto; }
 
-.tab {
+/* ─── View sub-tabs (within Capacity Explorer) ───────────────── */
+.view-tabs-bar {
+  background: var(--surface);
   border: 1px solid var(--line);
-  background: #f2f7fb;
-  color: var(--ink);
-  padding: 8px 12px;
-  border-radius: 8px;
+  border-radius: 12px 12px 0 0;
+  border-bottom: none;
+  padding: 0 14px;
+}
+
+.view-tabs {
+  display: flex;
+  gap: 0;
+}
+
+.view-tab {
+  padding: 10px 16px;
+  background: none;
+  border: none;
+  border-bottom: 3px solid transparent;
+  border-radius: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
+  margin-bottom: -1px;
+  transition: color 0.12s;
+  margin-top: 0;
 }
 
-.tab.active {
-  background: var(--brand);
-  color: #fff;
-  border-color: var(--brand);
+.view-tab:hover {
+  color: var(--ink);
 }
 
-.panel { display: none; }
-.panel.active { display: block; }
+.view-tab.active {
+  color: var(--brand);
+  border-bottom-color: var(--brand);
+  font-weight: 600;
+}
+
+.view-panel { display: none; }
+.view-panel.active { display: block; }
+
+.view-panel > .surface {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+/* Keep .grid-wrap for backwards-compat references (none remain but safety) */
+.grid-wrap {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+  overflow: auto;
+}
 
 .filters, .actions {
   display: flex;
@@ -117,6 +319,7 @@ button.warn {
   display: grid;
   gap: 10px;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  /* no border/bg — cards handle it */
 }
 
 .card {

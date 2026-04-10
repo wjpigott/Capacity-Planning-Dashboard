@@ -1,0 +1,111 @@
+<mxfile host="app.diagrams.net" modified="2026-04-10T20:15:00.000Z" agent="GitHub Copilot" version="24.7.17" type="device">
+  <diagram id="current-architecture" name="Current Architecture">
+    <mxGraphModel dx="1800" dy="1100" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2200" pageHeight="1400" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="grpExperience" value="Experience Layer" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#C9A227;fillColor=#FFF7CC;fontStyle=1;align=left;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="560" y="460" width="960" height="360" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="grpData" value="Data Platform" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#C9A227;fillColor=#FFF7CC;fontStyle=1;align=left;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="1200" y="840" width="840" height="240" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="grpSec" value="Security and Observability" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#C9A227;fillColor=#FFF7CC;fontStyle=1;align=left;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="1200" y="40" width="840" height="390" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="grpDeploy" value="Deployment Flow" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#C9A227;fillColor=#FFF7CC;fontStyle=1;align=left;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="20" y="620" width="520" height="460" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="team" value="Platform and Capacity Team" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#6B46C1;fillColor=#F3ECFF;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="500" width="280" height="90" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="browser" value="Browser UI&#xa;Capacity Explorer&#xa;USMajor preset default" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#6B46C1;fillColor=#F3ECFF;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="370" y="470" width="240" height="130" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="web" value="Azure App Service&#xa;Static UI + Express API&#xa;System-assigned managed identity" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#1F7A4D;fillColor=#E8FFF4;fontSize=19;" vertex="1" parent="1">
+          <mxGeometry x="590" y="560" width="320" height="160" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="api" value="Node / Express endpoints&#xa;healthz&#xa;api/capacity&#xa;api/quota/groups (placeholder)" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#1F7A4D;fillColor=#E8FFF4;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="1120" y="620" width="360" height="160" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="sql" value="Azure SQL Database&#xa;CapacitySnapshot&#xa;CapacityLatest view" style="shape=cylinder;whiteSpace=wrap;html=1;boundedLbl=1;strokeColor=#6B46C1;fillColor=#F3ECFF;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1800" y="900" width="190" height="160" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="seed" value="Seed / schema scripts&#xa;Entra-auth sqlcmd" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#6B46C1;fillColor=#F3ECFF;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="1290" y="930" width="300" height="120" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="entra" value="Microsoft Entra admin&#xa;AAD-only SQL authentication" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#2B6CB0;fillColor=#EAF4FF;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="1260" y="250" width="300" height="140" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="kv" value="Azure Key Vault&#xa;RBAC enabled" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#2B6CB0;fillColor=#EAF4FF;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="1270" y="140" width="180" height="90" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="appi" value="Application Insights" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#2B6CB0;fillColor=#EAF4FF;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="1260" y="70" width="220" height="70" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="log" value="Log Analytics Workspace" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#2B6CB0;fillColor=#EAF4FF;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="1690" y="70" width="280" height="70" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="local" value="Local repo + scripts&#xa;Bicep + PowerShell + zip deploy" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#C53030;fillColor=#FFF0F0;fontSize=19;" vertex="1" parent="1">
+          <mxGeometry x="70" y="830" width="320" height="130" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="infra" value="Bicep deployment&#xa;App Service Plan&#xa;Web App&#xa;SQL Server / DB&#xa;Key Vault&#xa;Insights" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#C53030;fillColor=#FFF0F0;fontSize=19;" vertex="1" parent="1">
+          <mxGeometry x="330" y="660" width="240" height="240" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="team" target="browser">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="browser" target="web">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="web" target="api">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e4" value="Managed identity auth" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="api" target="sql">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="seed" target="sql">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="entra" target="sql">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e7" value="Key Vault Secrets User role" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="web" target="kv">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e8" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="web" target="appi">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e9" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="appi" target="log">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e10" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="local" target="infra">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e11" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="infra" target="web">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e12" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="local" target="seed">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

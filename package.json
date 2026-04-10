@@ -1,0 +1,18 @@
+{
+  "name": "capacity-planning-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Capacity and quota planning dashboard",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node src/server.js"
+  },
+  "dependencies": {
+    "@azure/identity": "^4.5.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "mssql": "^11.0.1"
+  }
+}

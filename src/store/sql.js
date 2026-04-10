@@ -51,4 +51,46 @@ async function getSqlPool() {
   return cachedPool;
 }
 
-module.exports = { getSqlPool };
+async function insertCapacitySnapshots(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return 0;
+  }
+
+  const pool = await getSqlPool();
+  if (!pool) {
+    throw new Error('SQL connection is not configured for ingestion.');
+  }
+
+  const transaction = new sql.Transaction(pool);
+  await transaction.begin();
+
+  try {
+    for (const row of rows) {
+      const request = new sql.Request(transaction);
+      request.input('capturedAtUtc', sql.DateTime2, row.capturedAtUtc || new Date());
+      request.input('sourceType', sql.NVarChar(50), row.sourceType || 'live-azure-ingest');
+      request.input('region', sql.NVarChar(64), row.region);
+      request.input('skuName', sql.NVarChar(128), row.skuName);
+      request.input('skuFamily', sql.NVarChar(128), row.skuFamily);
+      request.input('availabilityState', sql.NVarChar(32), row.availabilityState);
+      request.input('quotaCurrent', sql.Int, row.quotaCurrent);
+      request.input('quotaLimit', sql.Int, row.quotaLimit);
+      request.input('monthlyCostEstimate', sql.Decimal(18, 2), row.monthlyCostEstimate ?? null);
+
+      await request.query(`
+        INSERT INTO dbo.CapacitySnapshot
+        (capturedAtUtc, sourceType, region, skuName, skuFamily, availabilityState, quotaCurrent, quotaLimit, monthlyCostEstimate)
+        VALUES
+        (@capturedAtUtc, @sourceType, @region, @skuName, @skuFamily, @availabilityState, @quotaCurrent, @quotaLimit, @monthlyCostEstimate)
+      `);
+    }
+
+    await transaction.commit();
+    return rows.length;
+  } catch (err) {
+    await transaction.rollback();
+    throw err;
+  }
+}
+
+module.exports = { getSqlPool, insertCapacitySnapshots };

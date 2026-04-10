@@ -95,3 +95,38 @@ Approvals are required before:
 - Do not commit subscription IDs, tenant IDs, resource group names, or credentials.
 - Use managed identity for Azure resource access in hosted environments.
 - Keep write identity separate from read identity.
+
+## Live ingestion (Phase 1)
+
+The dashboard now supports a secure internal ingestion path that reads Azure Compute quota usage and writes snapshots to `dbo.CapacitySnapshot`.
+
+Defaults:
+
+- Region preset: `USMajor`
+- Family filters: `standard_BS`, `standard_DS`
+- Source type written to SQL: `live-azure-ingest`
+
+Required app settings:
+
+- `INGEST_API_KEY` (required to call internal ingestion routes)
+- `INGEST_REGION_PRESET` (default `USMajor`)
+- `INGEST_QUOTA_FAMILY_FILTERS` (default `standard_BS,standard_DS`)
+- `INGEST_SUBSCRIPTION_IDS` (optional comma-separated list; if omitted, enabled subscriptions are auto-discovered)
+- `INGEST_ON_STARTUP` (`true`/`false`)
+- `INGEST_INTERVAL_MINUTES` (`0` disables scheduling)
+
+Required database permissions for the app identity:
+
+- `db_datareader` (read dashboard rows)
+- `db_datawriter` (insert ingestion snapshots)
+
+Internal endpoints:
+
+- `POST /internal/ingest/capacity` (requires `x-ingest-key` header)
+- `GET /internal/ingest/status` (requires `x-ingest-key` header)
+
+Example trigger:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "https://<your-app>.azurewebsites.net/internal/ingest/capacity" -Headers @{ "x-ingest-key" = "<ingest-key>" } -Body (@{ regionPreset = "USMajor"; familyFilters = @("standard_BS","standard_DS") } | ConvertTo-Json) -ContentType "application/json"
+```

@@ -1,16 +1,13 @@
 const { getSqlPool } = require('../store/sql');
 const { mockRows } = require('../store/mockCapacity');
-
-const regionPresets = {
-  USMajor: ['eastus', 'eastus2', 'centralus', 'westus', 'westus2']
-};
+const { getRegionsForPreset } = require('../config/regionPresets');
 
 function applyRegionPreset(rows, regionPreset) {
   if (!regionPreset || regionPreset === 'all' || regionPreset === 'custom') {
     return rows;
   }
 
-  const presetRegions = regionPresets[regionPreset];
+  const presetRegions = getRegionsForPreset(regionPreset);
   if (!presetRegions) {
     return rows;
   }

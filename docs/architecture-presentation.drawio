@@ -1,0 +1,76 @@
+<mxfile host="app.diagrams.net" modified="2026-04-10T20:33:00.000Z" agent="GitHub Copilot" version="24.7.17" type="device">
+  <diagram id="architecture-presentation" name="Architecture Presentation">
+    <mxGraphModel dx="2200" dy="1400" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2400" pageHeight="1500" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="laneUsers" value="Users" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#8B5CF6;fillColor=#F5F3FF;fontStyle=1;align=left;verticalAlign=top;spacingTop=10;fontSize=24;" vertex="1" parent="1">
+          <mxGeometry x="40" y="500" width="360" height="260" as="geometry"/>
+        </mxCell>
+        <mxCell id="laneApp" value="Application Tier" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#0E7490;fillColor=#ECFEFF;fontStyle=1;align=left;verticalAlign=top;spacingTop=10;fontSize=24;" vertex="1" parent="1">
+          <mxGeometry x="460" y="420" width="940" height="520" as="geometry"/>
+        </mxCell>
+        <mxCell id="laneData" value="Data and Security" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#7C3AED;fillColor=#F5F3FF;fontStyle=1;align=left;verticalAlign=top;spacingTop=10;fontSize=24;" vertex="1" parent="1">
+          <mxGeometry x="1460" y="300" width="880" height="760" as="geometry"/>
+        </mxCell>
+        <mxCell id="laneOps" value="Deployment and Operations" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#B45309;fillColor=#FFFBEB;fontStyle=1;align=left;verticalAlign=top;spacingTop=10;fontSize=24;" vertex="1" parent="1">
+          <mxGeometry x="40" y="840" width="1360" height="450" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="userTeam" value="Platform and Capacity Team" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#7C3AED;fillColor=#DDD6FE;fontSize=24;" vertex="1" parent="1">
+          <mxGeometry x="80" y="600" width="280" height="100" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="browser" value="Web Browser\nCapacity Explorer\nDefault Region Group: USMajor" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#0E7490;fillColor=#CCFBF1;fontSize=22;" vertex="1" parent="1">
+          <mxGeometry x="540" y="500" width="330" height="170" as="geometry"/>
+        </mxCell>
+        <mxCell id="appsvc" value="Azure App Service\nStatic UI + Node API\nSystem Managed Identity" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#0F766E;fillColor=#A7F3D0;fontSize=22;" vertex="1" parent="1">
+          <mxGeometry x="940" y="500" width="390" height="170" as="geometry"/>
+        </mxCell>
+        <mxCell id="api" value="API Endpoints\nhealthz\napi/capacity\napi/quota/groups" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#0E7490;fillColor=#CCFBF1;fontSize=22;" vertex="1" parent="1">
+          <mxGeometry x="860" y="730" width="390" height="170" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="sql" value="Azure SQL Database\nCapacitySnapshot\nCapacityLatest" style="shape=cylinder;whiteSpace=wrap;html=1;boundedLbl=1;strokeColor=#6D28D9;fillColor=#DDD6FE;fontSize=24;" vertex="1" parent="1">
+          <mxGeometry x="1990" y="670" width="250" height="180" as="geometry"/>
+        </mxCell>
+        <mxCell id="entra" value="Microsoft Entra Admin\nAAD Only SQL Authentication" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#7C3AED;fillColor=#EDE9FE;fontSize=22;" vertex="1" parent="1">
+          <mxGeometry x="1560" y="420" width="350" height="150" as="geometry"/>
+        </mxCell>
+        <mxCell id="kv" value="Azure Key Vault\nRBAC Enabled" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#1D4ED8;fillColor=#DBEAFE;fontSize=22;" vertex="1" parent="1">
+          <mxGeometry x="1560" y="620" width="300" height="130" as="geometry"/>
+        </mxCell>
+        <mxCell id="appi" value="Application Insights" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#1D4ED8;fillColor=#DBEAFE;fontSize=22;" vertex="1" parent="1">
+          <mxGeometry x="1560" y="810" width="300" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="law" value="Log Analytics Workspace" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#1D4ED8;fillColor=#DBEAFE;fontSize=22;" vertex="1" parent="1">
+          <mxGeometry x="1920" y="810" width="360" height="100" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="localrepo" value="Local Dashboard Repo\nBicep + PowerShell + Zip Deploy" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#B45309;fillColor=#FEF3C7;fontSize=22;" vertex="1" parent="1">
+          <mxGeometry x="100" y="980" width="380" height="190" as="geometry"/>
+        </mxCell>
+        <mxCell id="infra" value="Infrastructure Deployment\nApp Service Plan\nWeb App\nSQL Server and DB\nKey Vault\nInsights" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#B45309;fillColor=#FEF3C7;fontSize=22;" vertex="1" parent="1">
+          <mxGeometry x="560" y="980" width="390" height="220" as="geometry"/>
+        </mxCell>
+        <mxCell id="seed" value="Schema and Seed Scripts\nEntra Auth Sqlcmd" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#B45309;fillColor=#FEF3C7;fontSize=22;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="980" width="320" height="190" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=3;" edge="1" parent="1" source="userTeam" target="browser"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=3;" edge="1" parent="1" source="browser" target="appsvc"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=3;" edge="1" parent="1" source="appsvc" target="api"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e4" value="Managed Identity" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=3;fontSize=18;" edge="1" parent="1" source="api" target="sql"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e5" value="Entra auth" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=3;fontSize=18;" edge="1" parent="1" source="seed" target="sql"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e6" value="AAD policy" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=3;fontSize=18;" edge="1" parent="1" source="entra" target="sql"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e7" value="RBAC role" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=3;fontSize=18;" edge="1" parent="1" source="appsvc" target="kv"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e8" value="Telemetry" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=3;fontSize=18;" edge="1" parent="1" source="appsvc" target="appi"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e9" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=3;" edge="1" parent="1" source="appi" target="law"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e10" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=3;" edge="1" parent="1" source="localrepo" target="infra"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e11" value="Deploy" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=3;fontSize=18;" edge="1" parent="1" source="infra" target="appsvc"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e12" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=3;" edge="1" parent="1" source="localrepo" target="seed"><mxGeometry relative="1" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -13,10 +13,13 @@ This repository contains the initial platform scaffold for a native Azure capaci
 
 ## Architecture
 
+- Primary editable source (Draw.io): `docs/current-architecture.drawio`
 - Current-state Mermaid source: `docs/current-architecture.mmd`
 - Rendered PNG: `docs/current-architecture.png`
 
 The current-state diagram reflects what is deployed now: App Service hosting the static UI + Express API, Azure SQL with Entra-only auth, managed identity database access, Key Vault RBAC integration, and App Insights/Log Analytics.
+
+Use Draw.io for edits when readability/layout precision matters; keep the Mermaid file for quick text-based diffs and automation-friendly rendering.
 
 ## Local run
 

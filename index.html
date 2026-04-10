@@ -13,9 +13,7 @@
   </header>
 
   <div class="app-shell">
-    <!-- ─── Sidebar navigation ──────────────────────────────────── -->
     <nav class="sidebar">
-
       <div class="nav-group-label">Reporting</div>
       <button class="nav-item active" data-nav="reporting">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="1" y="9" width="3" height="6"/><rect x="6" y="5" width="3" height="10"/><rect x="11" y="1" width="3" height="14"/></svg>
@@ -35,21 +33,142 @@
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1 8l4-4v2.5h6V4l4 4-4 4v-2.5H5V12z"/></svg>
         Quota Movements
       </button>
-
     </nav>
 
-    <!-- ─── Main content area ───────────────────────────────────── -->
     <main class="main-content">
+      <section class="page active" id="reporting-page">
+        <div class="surface">
+          <div class="filter-section-label">Filters</div>
+          <div class="filters">
+            <label>Region Group
+              <select id="regionPresetFilter">
+                <option value="USMajor">US Major</option>
+                <option value="all">All Regions</option>
+                <option value="custom">Custom</option>
+              </select>
+            </label>
+            <label>Region
+              <select id="regionFilter"></select>
+            </label>
+            <label>SKU Family
+              <select id="familyFilter"></select>
+            </label>
+            <label>Availability
+              <select id="availabilityFilter">
+                <option value="all">All</option>
+                <option value="OK">OK</option>
+                <option value="LIMITED">LIMITED</option>
+                <option value="CONSTRAINED">CONSTRAINED</option>
+              </select>
+            </label>
+            <label style="flex: 1; min-width: 320px;">Subscriptions
+              <select id="subscriptionFilter" multiple style="height: 100px; margin-top: 4px; width: 100%;"></select>
+              <span id="subscriptionSelectionInfo" class="inline-note" style="display: block; margin-top: 4px; font-size: 11px;"></span>
+            </label>
+          </div>
 
-      <!-- ════════════════════════════════════════════════════════
-           ADMIN — Data Ingestion
-           ════════════════════════════════════════════════════════ -->
+          <div class="actions" style="margin-top: 10px;">
+            <button id="refreshBtn">Refresh Data</button>
+            <button id="subscriptionApplyBtn">Apply Filter</button>
+            <button id="subscriptionClearBtn">Clear Subscriptions</button>
+            <button id="exportBtn">Export CSV</button>
+          </div>
+        </div>
+
+        <section class="summary" id="summaryCards"></section>
+
+        <div class="view-tabs-bar">
+          <div class="view-tabs" role="tablist" aria-label="Report Views">
+            <button class="view-tab active" data-view="capacity-grid">Capacity Grid</button>
+            <button class="view-tab" data-view="region-chart">By Region</button>
+            <button class="view-tab" data-view="sku-chart">Top SKUs</button>
+            <button class="view-tab" data-view="family-summary">Family Summary</button>
+            <button class="view-tab" data-view="trend">Trend History</button>
+          </div>
+        </div>
+
+        <div class="view-panel active" id="view-capacity-grid">
+          <div class="surface overflow-auto">
+            <table id="capacityGrid">
+              <thead>
+                <tr>
+                  <th>Subscription Name</th>
+                  <th>Subscription ID</th>
+                  <th>Region</th>
+                  <th>SKU</th>
+                  <th>Family</th>
+                  <th>Availability</th>
+                  <th>Zones</th>
+                  <th>Quota Current</th>
+                  <th>Quota Limit</th>
+                  <th>Quota Available</th>
+                  <th>Utilization %</th>
+                  <th>Monthly Cost (est.)</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="view-panel" id="view-region-chart">
+          <div class="surface">
+            <h3>Capacity Availability by Region</h3>
+            <div id="regionChart" class="chart-bars"></div>
+          </div>
+        </div>
+
+        <div class="view-panel" id="view-sku-chart">
+          <div class="surface">
+            <h3>Top SKUs by Available Quota</h3>
+            <div id="skuChart" class="chart-bars"></div>
+          </div>
+        </div>
+
+        <div class="view-panel" id="view-family-summary">
+          <div class="surface overflow-auto">
+            <h3>SKU Families Summary</h3>
+            <table id="familySummaryGrid">
+              <thead>
+                <tr>
+                  <th>Family</th>
+                  <th>SKUs</th>
+                  <th>OK</th>
+                  <th>Largest</th>
+                  <th>Zones</th>
+                  <th>Status</th>
+                  <th>Quota</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+            <p id="familySummaryEmpty" class="inline-note" style="display:none; margin-top:8px;">No quota data available</p>
+          </div>
+        </div>
+
+        <div class="view-panel" id="view-trend">
+          <div class="surface overflow-auto">
+            <h3>Capacity Trend (last 7 days)</h3>
+            <table id="trendGrid">
+              <thead>
+                <tr>
+                  <th>Day</th>
+                  <th>Total Rows</th>
+                  <th>Constrained Rows</th>
+                  <th>Total Quota Available</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
       <section class="page" id="admin-page">
         <div class="admin-page-label">Data Ingestion</div>
         <p class="page-description">Trigger live ingestion from Azure ARM APIs and manage the subscription catalog stored in SQL. These operations write to the database.</p>
 
         <div class="admin-cards">
-
           <div class="admin-card">
             <div class="admin-card-icon">
               <svg viewBox="0 0 20 20" fill="currentColor"><path d="M10 3a7 7 0 100 14A7 7 0 0010 3zm0 1.5a5.5 5.5 0 110 11 5.5 5.5 0 010-11zM9.25 6v4.44l3.03 3.03 1.06-1.06-2.59-2.59V6h-1.5z"/></svg>
@@ -71,19 +190,14 @@
               <button id="triggerIngestBtn">Run Ingest Now</button>
             </div>
           </div>
-
         </div>
       </section>
 
-      <!-- ════════════════════════════════════════════════════════
-           ADMIN — Quota Discovery
-           ════════════════════════════════════════════════════════ -->
       <section class="page" id="quota-discovery-page">
         <div class="admin-page-label">Quota Discovery</div>
         <p class="page-description">Discover and analyze quota group membership, headroom, and candidates for reallocation. Results are read from Azure APIs and optionally persisted to SQL.</p>
 
         <div class="admin-cards">
-
           <div class="admin-card">
             <div class="admin-card-icon">
               <svg viewBox="0 0 20 20" fill="currentColor"><circle cx="8.5" cy="8.5" r="5" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="12.5" y1="12.5" x2="17" y2="17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
@@ -127,7 +241,6 @@
               <button id="refreshAnalyticsBtn">Refresh Analytics</button>
             </div>
           </div>
-
         </div>
 
         <div class="surface overflow-auto" style="margin-top: 16px;">
@@ -144,18 +257,13 @@
             <tbody></tbody>
           </table>
         </div>
-
       </section>
 
-      <!-- ════════════════════════════════════════════════════════
-           ADMIN — Quota Movements
-           ════════════════════════════════════════════════════════ -->
       <section class="page" id="quota-movement-page">
         <div class="admin-page-label">Quota Movements</div>
         <p class="page-description">Plan and apply quota reallocation across subscriptions. All apply operations require explicit confirmation and are logged to the audit table.</p>
 
         <div class="admin-cards">
-
           <div class="admin-card">
             <div class="admin-card-icon">
               <svg viewBox="0 0 20 20" fill="currentColor"><path d="M3 10h14M10 3l7 7-7 7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -188,227 +296,8 @@
               <button id="applyBtn" class="warn">Apply Movements</button>
             </div>
           </div>
-
         </div>
       </section>
-
-    </main>
-  </div>
-
-  <script src="app.js"></script>
-</body>
-</html>
-
-  <div class="app-shell">
-    <!-- ─── Sidebar navigation ──────────────────────────────────── -->
-    <nav class="sidebar">
-      <button class="nav-item active" data-nav="capacity">
-        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="1" y="9" width="3" height="6"/><rect x="6" y="5" width="3" height="10"/><rect x="11" y="1" width="3" height="14"/></svg>
-        Capacity Explorer
-      </button>
-      <button class="nav-item" data-nav="quota">
-        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2 2h12a1 1 0 011 1v10a1 1 0 01-1 1H2a1 1 0 01-1-1V3a1 1 0 011-1zm1 2v8h10V4zm1 1h4v1H4zm0 2h8v1H4zm0 2h6v1H4z"/></svg>
-        Quota Insights
-      </button>
-      <button class="nav-item" data-nav="movement">
-        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1 8l4-4v2.5h6V4l4 4-4 4v-2.5H5V12z"/></svg>
-        Quota Movements
-      </button>
-    </nav>
-
-    <!-- ─── Main content area ───────────────────────────────────── -->
-    <main class="main-content">
-
-      <!-- ═══════════════════════════════════════════════════════════
-           Capacity Explorer
-           ═══════════════════════════════════════════════════════════ -->
-      <section class="page active" id="capacity-page">
-
-        <!-- Filters + subscription picker -->
-        <div class="surface">
-          <div class="filters">
-            <label>Region Group
-              <select id="regionPresetFilter">
-                <option value="USMajor">US Major</option>
-                <option value="all">All Regions</option>
-                <option value="custom">Custom</option>
-              </select>
-            </label>
-            <label>Region
-              <select id="regionFilter"></select>
-            </label>
-            <label style="min-width: 320px; flex: 1;">
-              Subscription Search
-              <input id="subscriptionSearch" type="text" placeholder="Search by subscription name or id" />
-            </label>
-            <label>SKU Family
-              <select id="familyFilter"></select>
-            </label>
-            <label>Availability
-              <select id="availabilityFilter">
-                <option value="all">All</option>
-                <option value="OK">OK</option>
-                <option value="LIMITED">LIMITED</option>
-                <option value="CONSTRAINED">CONSTRAINED</option>
-              </select>
-            </label>
-          </div>
-
-          <div class="subscription-picker" style="margin-top: 10px;">
-            <div class="actions">
-              <button id="subscriptionRefreshBtn">Refresh Subscriptions</button>
-              <button id="subscriptionApplyBtn">Apply Subscription Filter</button>
-              <button id="subscriptionClearBtn">Clear Selection</button>
-              <span id="subscriptionSelectionInfo" class="inline-note"></span>
-            </div>
-            <div id="subscriptionOptions" class="subscription-options"></div>
-          </div>
-
-          <div class="actions" style="margin-top: 10px;">
-            <button id="refreshBtn">Refresh Capacity</button>
-            <button id="exportBtn">Export CSV</button>
-            <button id="discoverBtn">Discover Quota Groups</button>
-            <button id="planBtn">Build Move Plan</button>
-          </div>
-        </div>
-
-        <!-- Summary cards -->
-        <section class="summary" id="summaryCards"></section>
-
-        <!-- View sub-tabs -->
-        <div class="view-tabs-bar">
-          <div class="view-tabs" role="tablist" aria-label="Capacity View">
-            <button class="view-tab active" data-view="capacity-grid">Capacity Grid</button>
-            <button class="view-tab" data-view="region-chart">By Region</button>
-            <button class="view-tab" data-view="sku-chart">Top SKUs</button>
-            <button class="view-tab" data-view="family-summary">Family Summary</button>
-          </div>
-        </div>
-
-        <!-- Capacity Grid -->
-        <div class="view-panel active" id="view-capacity-grid">
-          <div class="surface overflow-auto">
-            <table id="capacityGrid">
-              <thead>
-                <tr>
-                  <th>Subscription Name</th>
-                  <th>Subscription ID</th>
-                  <th>Region</th>
-                  <th>SKU</th>
-                  <th>Family</th>
-                  <th>Availability</th>
-                  <th>Zones</th>
-                  <th>Quota Current</th>
-                  <th>Quota Limit</th>
-                  <th>Quota Available</th>
-                  <th>Utilization %</th>
-                  <th>Monthly Cost (est.)</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </div>
-
-        <!-- By Region chart -->
-        <div class="view-panel" id="view-region-chart">
-          <div class="surface">
-            <h3>Capacity Availability by Region</h3>
-            <div id="regionChart" class="chart-bars"></div>
-          </div>
-        </div>
-
-        <!-- Top SKUs chart -->
-        <div class="view-panel" id="view-sku-chart">
-          <div class="surface">
-            <h3>Top SKUs by Available Quota</h3>
-            <div id="skuChart" class="chart-bars"></div>
-          </div>
-        </div>
-
-        <!-- Family Summary -->
-        <div class="view-panel" id="view-family-summary">
-          <div class="surface overflow-auto">
-            <h3>SKU Families Summary</h3>
-            <table id="familySummaryGrid">
-              <thead>
-                <tr>
-                  <th>Family</th>
-                  <th>SKUs</th>
-                  <th>OK</th>
-                  <th>Largest</th>
-                  <th>Zones</th>
-                  <th>Status</th>
-                  <th>Quota</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-            <p id="familySummaryEmpty" class="inline-note" style="display:none; margin-top:8px;">No quota data available</p>
-          </div>
-        </div>
-
-      </section>
-
-      <!-- ═══════════════════════════════════════════════════════════
-           Quota Insights
-           ═══════════════════════════════════════════════════════════ -->
-      <section class="page" id="quota-page">
-
-        <div class="surface" style="margin-bottom: 16px;">
-          <div class="actions">
-            <button id="candidateBtn">Generate Quota Candidates</button>
-            <button id="historyBtn">Capture Quota History</button>
-            <button id="refreshAnalyticsBtn">Refresh Analytics</button>
-          </div>
-        </div>
-
-        <div class="surface overflow-auto" style="margin-bottom: 16px;">
-          <h3>Subscription Summary (masked keys)</h3>
-          <table id="subscriptionGrid">
-            <thead>
-              <tr>
-                <th>Subscription Key</th>
-                <th>Rows</th>
-                <th>Constrained Rows</th>
-                <th>Total Quota Available</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-
-        <div class="surface overflow-auto">
-          <h3>Capacity Trend (last 7 days)</h3>
-          <table id="trendGrid">
-            <thead>
-              <tr>
-                <th>Day</th>
-                <th>Total Rows</th>
-                <th>Constrained Rows</th>
-                <th>Total Quota Available</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-
-      </section>
-
-      <!-- ═══════════════════════════════════════════════════════════
-           Quota Movements
-           ═══════════════════════════════════════════════════════════ -->
-      <section class="page" id="movement-page">
-
-        <div class="surface">
-          <div class="actions">
-            <button id="applyBtn" class="warn">Apply Quota Movements</button>
-            <button id="simulateBtn">Simulate Impact</button>
-          </div>
-        </div>
-
-      </section>
-
     </main>
   </div>
 

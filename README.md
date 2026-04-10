@@ -242,6 +242,138 @@ Example trigger:
 Invoke-RestMethod -Method Post -Uri "https://<your-app>.azurewebsites.net/internal/ingest/capacity" -Headers @{ "x-ingest-key" = "<ingest-key>" } -Body (@{ regionPreset = "USMajor"; familyFilters = @("standard_BS","standard_DS") } | ConvertTo-Json) -ContentType "application/json"
 ```
 
+## Database and API Mapping by Area
+
+This section documents which tables/views are used by each product area and which APIs are called.
+
+### SQL objects and structure
+
+#### `dbo.CapacitySnapshot` (base ingestion table)
+
+- `snapshotId` `BIGINT IDENTITY` (PK)
+- `capturedAtUtc` `DATETIME2`
+- `sourceType` `NVARCHAR(50)`
+- `subscriptionKey` `NVARCHAR(64)`
+- `subscriptionId` `NVARCHAR(64)`
+- `subscriptionName` `NVARCHAR(256)`
+- `region` `NVARCHAR(64)`
+- `skuName` `NVARCHAR(128)`
+- `skuFamily` `NVARCHAR(128)`
+- `vCpu` `INT`
+- `memoryGB` `DECIMAL(10,2)`
+- `zonesCsv` `NVARCHAR(256)`
+- `availabilityState` `NVARCHAR(32)`
+- `quotaCurrent` `INT`
+- `quotaLimit` `INT`
+- `monthlyCostEstimate` `DECIMAL(18,2)`
+
+Purpose:
+- Append-only snapshot history written by live ingestion.
+- Trend APIs query this table directly.
+
+#### `dbo.CapacityLatest` (reporting view)
+
+Definition:
+- `CREATE OR ALTER VIEW` over `dbo.CapacitySnapshot`.
+- Uses `ROW_NUMBER()` partitioned by `ISNULL(subscriptionKey,'legacy-data'), region, skuName` and keeps `rn = 1`.
+
+Columns exposed:
+- `capturedAtUtc`, `subscriptionKey`, `subscriptionId`, `subscriptionName`, `region`, `skuName`, `skuFamily`, `vCpu`, `memoryGB`, `zonesCsv`, `availabilityState`, `quotaCurrent`, `quotaLimit`, `monthlyCostEstimate`.
+
+Purpose:
+- Current-state reporting for grid/filter/subscription/family summary endpoints.
+
+#### `dbo.QuotaCandidateSnapshot` (planned quota movement analytics)
+
+- `candidateId` `BIGINT IDENTITY` (PK)
+- `capturedAtUtc` `DATETIME2`
+- `region` `NVARCHAR(64)`
+- `quotaName` `NVARCHAR(128)`
+- `suggestedMovable` `INT`
+- `safetyBuffer` `INT`
+- `subscriptionHash` `NVARCHAR(128)`
+- `candidateStatus` `NVARCHAR(32)`
+
+Status:
+- Table exists in schema, but active API writers/readers are not yet implemented in this phase.
+
+#### `dbo.QuotaApplyRequestLog` (planned apply audit)
+
+- `requestLogId` `BIGINT IDENTITY` (PK)
+- `createdAtUtc` `DATETIME2`
+- `requestedBy` `NVARCHAR(256)`
+- `operationId` `NVARCHAR(128)`
+- `state` `NVARCHAR(64)`
+- `payloadJson` `NVARCHAR(MAX)`
+- `resultJson` `NVARCHAR(MAX)`
+
+Status:
+- Table exists in schema, but quota apply orchestration endpoints are not yet implemented.
+
+### Area-to-API-to-data mapping
+
+#### Capacity Reports (Reporting page)
+
+Primary app APIs:
+- `GET /api/capacity`
+- `GET /api/subscriptions`
+- `GET /api/capacity/families`
+- `GET /api/capacity/subscriptions`
+- `GET /api/capacity/trends`
+
+Data sources:
+- `dbo.CapacityLatest` for current grid/subscription/family reporting.
+- `dbo.CapacitySnapshot` for trend rollups.
+
+Key query behavior:
+- Shared filters: region preset, region, family, availability, subscription IDs.
+- Subscription filter is applied against `ISNULL(subscriptionId, 'legacy-data')`.
+
+#### Data Ingestion (Admin page)
+
+Internal app APIs:
+- `POST /internal/ingest/capacity`
+- `GET /internal/ingest/status`
+- `POST /internal/db/ensure-phase3-schema`
+
+External Azure APIs called by ingestion:
+- `GET https://management.azure.com/subscriptions?api-version=2020-01-01`
+	- Enumerates accessible subscriptions and resolves display names.
+- `GET https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.Compute/locations/{region}/usages?api-version=2024-03-01`
+	- Reads Compute quota usage values (`currentValue`, `limit`).
+- `GET https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.Compute/skus?$filter=location eq '{region}'&api-version=2024-03-01`
+	- Reads SKU capabilities and zone metadata for representative rows.
+
+Write target:
+- `INSERT` into `dbo.CapacitySnapshot` (one row per family/region/subscription observation).
+
+#### Quota Discovery (Admin page)
+
+Current API state:
+- `GET /api/quota/groups` is placeholder response.
+
+Planned data/API direction:
+- Discover group quotas from Microsoft.Quota APIs.
+- Persist candidate analytics into `dbo.QuotaCandidateSnapshot`.
+
+#### Quota Movements (Admin page)
+
+Current API state:
+- UI actions are currently frontend placeholders (no backend apply/simulate routes yet).
+
+Planned data/API direction:
+- Execute quota apply/simulate workflows.
+- Persist audit trail into `dbo.QuotaApplyRequestLog`.
+
+### Security and identity behavior for API/database calls
+
+- Dashboard app uses App Service managed identity for:
+	- Azure ARM ingestion reads.
+	- Azure SQL access (AAD MSI auth mode).
+- Required RBAC for each ingested subscription:
+	- At minimum, permission to read `Microsoft.Compute/locations/usages` and SKU metadata (Reader role at subscription scope is sufficient for current read APIs).
+- Internal ingestion APIs are gated by `INGEST_API_KEY`.
+
 ## SQL migration
 
 To add masked subscription-key support to existing databases, run:

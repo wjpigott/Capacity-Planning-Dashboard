@@ -306,13 +306,22 @@ input {
 
 button {
   cursor: pointer;
-  background: #eef5fc;
+  background: linear-gradient(135deg, #003a68, #0063b1);
+  border-color: #003a68;
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 6px 14px rgba(0, 58, 104, 0.16);
+}
+
+button:hover {
+  background: linear-gradient(135deg, #002f56, #005392);
 }
 
 button.warn {
   border-color: #f5c6a1;
   background: #fff6ef;
   color: var(--warn);
+  box-shadow: none;
 }
 
 .summary {

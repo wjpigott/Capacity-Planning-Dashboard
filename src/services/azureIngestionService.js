@@ -91,34 +91,41 @@ async function armGetAll(url, token) {
 }
 
 async function listSubscriptions(token, explicitSubscriptions) {
-  if (explicitSubscriptions && explicitSubscriptions.length > 0) {
-    return explicitSubscriptions.map((subId) => ({
-      subscriptionId: subId,
-      displayName: 'Configured subscription'
-    }));
-  }
-
   const configured = (process.env.INGEST_SUBSCRIPTION_IDS || '')
     .split(',')
     .map((v) => v.trim())
     .filter(Boolean);
 
-  if (configured.length > 0) {
-    return configured.map((subId) => ({
-      subscriptionId: subId,
-      displayName: 'Configured subscription'
-    }));
-  }
+  const requested = (explicitSubscriptions && explicitSubscriptions.length > 0)
+    ? explicitSubscriptions
+    : configured;
+
+  const requestedSet = new Set(requested.map((subId) => subId.toLowerCase()));
 
   const url = `${ARM_BASE}/subscriptions?api-version=2020-01-01`;
   const subscriptions = await armGetAll(url, token);
-  return subscriptions
+  const enabledSubscriptions = subscriptions
     .filter((s) => (s.state || '').toLowerCase() === 'enabled')
     .map((s) => ({
       subscriptionId: s.subscriptionId,
       displayName: s.displayName || 'Subscription'
     }))
     .filter((s) => Boolean(s.subscriptionId));
+
+  if (requestedSet.size === 0) {
+    return enabledSubscriptions;
+  }
+
+  const matchedSubscriptions = enabledSubscriptions.filter((s) => requestedSet.has(s.subscriptionId.toLowerCase()));
+
+  const missingSubscriptions = requested
+    .filter((subId) => !matchedSubscriptions.some((entry) => entry.subscriptionId.toLowerCase() === subId.toLowerCase()))
+    .map((subId) => ({
+      subscriptionId: subId,
+      displayName: 'Configured subscription'
+    }));
+
+  return [...matchedSubscriptions, ...missingSubscriptions];
 }
 
 function getCapabilityValue(capabilities, name) {

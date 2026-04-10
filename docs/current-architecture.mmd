@@ -1,0 +1,50 @@
+flowchart LR
+    classDef group fill:#FFF7CC,stroke:#C9A227,stroke-width:1.5px,color:#332B00;
+    classDef azure fill:#EAF4FF,stroke:#2B6CB0,stroke-width:1.5px,color:#0F2A43;
+    classDef app fill:#E8FFF4,stroke:#1F7A4D,stroke-width:1.5px,color:#103222;
+    classDef data fill:#F3ECFF,stroke:#6B46C1,stroke-width:1.5px,color:#2D1B69;
+    classDef ops fill:#FFF0F0,stroke:#C53030,stroke-width:1.5px,color:#4A1111;
+
+    User[Platform and Capacity Team]
+    Browser[Browser UI\nCapacity Explorer\nUSMajor preset default]
+
+    subgraph Experience[Experience Layer]
+        direction TB
+        WebApp[Azure App Service\nStatic UI + Express API\nSystem-assigned managed identity]
+        Api[Node / Express endpoints\nhealthz\napi/capacity\napi/quota/groups placeholder]
+    end
+
+    subgraph Data[Data Platform]
+        direction TB
+        Sql[(Azure SQL Database\nCapacitySnapshot\nCapacityLatest view)]
+        Seed[Seed / schema scripts\nEntra-auth sqlcmd]
+    end
+
+    subgraph Security[Security and Observability]
+        direction TB
+        Entra[Microsoft Entra admin\nAAD-only SQL authentication]
+        Kv[Azure Key Vault\nRBAC enabled]
+        Appi[Application Insights]
+        Log[Log Analytics Workspace]
+    end
+
+    subgraph Delivery[Deployment Flow]
+        direction TB
+        Local[Local repo + scripts\nBicep + PowerShell + zip deploy]
+        Infra[Bicep deployment\nApp Service Plan\nWeb App\nSQL Server / DB\nKey Vault\nInsights]
+    end
+
+    User --> Browser --> WebApp --> Api
+    Api -->|Managed identity auth| Sql
+    Seed --> Sql
+    Entra --> Sql
+    WebApp -->|Key Vault Secrets User role| Kv
+    WebApp --> Appi --> Log
+    Local --> Infra --> WebApp
+    Local --> Seed
+
+    class Experience,Data,Security,Delivery group;
+    class WebApp,Api app;
+    class Sql,Seed data;
+    class Entra,Kv,Appi,Log azure;
+    class Local,Infra ops;

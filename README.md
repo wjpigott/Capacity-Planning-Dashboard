@@ -9,6 +9,14 @@ This repository contains the initial platform scaffold for a native Azure capaci
 - SQL schema for snapshots and latest-capacity view
 - Azure infrastructure Bicep templates
 - Deployment and sample data scripts
+- Current-state architecture diagram source and rendered image in `docs/`
+
+## Architecture
+
+- Current-state Mermaid source: `docs/current-architecture.mmd`
+- Rendered PNG: `docs/current-architecture.png`
+
+The current-state diagram reflects what is deployed now: App Service hosting the static UI + Express API, Azure SQL with Entra-only auth, managed identity database access, Key Vault RBAC integration, and App Insights/Log Analytics.
 
 ## Local run
 

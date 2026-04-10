@@ -19,6 +19,7 @@ app.get('/healthz', (_, res) => {
 app.get('/api/capacity', async (req, res) => {
   try {
     const rows = await getCapacityRows({
+      regionPreset: req.query.regionPreset,
       region: req.query.region,
       family: req.query.family,
       availability: req.query.availability

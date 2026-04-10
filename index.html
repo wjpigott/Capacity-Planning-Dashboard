@@ -71,19 +71,16 @@
                 <option value="CONSTRAINED">CONSTRAINED</option>
               </select>
             </label>
+            <label style="flex: 1; min-width: 320px;">Subscriptions
+              <select id="subscriptionFilter" multiple style="height: 100px; margin-top: 4px; width: 100%;"></select>
+              <span id="subscriptionSelectionInfo" class="inline-note" style="display: block; margin-top: 4px; font-size: 11px;"></span>
+            </label>
           </div>
-
-          <div class="filter-section-label" style="margin-top: 12px;">Subscriptions to report
-            <span id="subscriptionSelectionInfo" class="inline-note"></span>
-          </div>
-          <p style="font-size: 12px; color: #5d7085; margin: 0 0 8px;">Select one or more subscriptions to filter capacity reports. All available subscriptions are discovered and data is ingested into the database — reporting is database-backed, not real-time API calls.</p>
-          <input id="subscriptionSearch" type="text" placeholder="Search by subscription name or id" style="width: 340px; margin-bottom: 8px;" />
-          <div id="subscriptionOptions" class="subscription-options"></div>
 
           <div class="actions" style="margin-top: 10px;">
             <button id="refreshBtn">Refresh Data</button>
-            <button id="subscriptionApplyBtn">Apply Subscription Filter</button>
-            <button id="subscriptionClearBtn">Clear Selection</button>
+            <button id="subscriptionApplyBtn">Apply Filter</button>
+            <button id="subscriptionClearBtn">Clear Subscriptions</button>
             <button id="exportBtn">Export CSV</button>
           </div>
         </div>

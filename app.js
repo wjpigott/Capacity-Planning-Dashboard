@@ -18,8 +18,6 @@ const familySummaryGridBody = document.querySelector('#familySummaryGrid tbody')
 const familySummaryEmpty = document.querySelector('#familySummaryEmpty');
 const regionChart = document.querySelector('#regionChart');
 const skuChart = document.querySelector('#skuChart');
-const subscriptionSearch = document.querySelector('#subscriptionSearch');
-const subscriptionOptionsHost = document.querySelector('#subscriptionOptions');
 const subscriptionSelectionInfo = document.querySelector('#subscriptionSelectionInfo');
 
 function activePresetRegions() {
@@ -278,43 +276,30 @@ async function loadAnalytics() {
 }
 
 function renderSubscriptionOptions(options) {
-  if (!subscriptionOptionsHost) {
-    return;
-  }
+  const subscriptionFilter = document.getElementById('subscriptionFilter');
+  if (!subscriptionFilter) return;
 
-  subscriptionOptionsHost.innerHTML = '';
+  subscriptionFilter.innerHTML = '';
   options.forEach((row) => {
-    const wrapper = document.createElement('label');
-    wrapper.className = 'subscription-option';
-    wrapper.innerHTML = `
-      <input type="checkbox" data-subscription-id="${row.subscriptionId}" ${selectedSubscriptionIds.has(row.subscriptionId) ? 'checked' : ''} />
-      <span>
-        <strong>${row.subscriptionName}</strong><br />
-        <span class="inline-note">${row.subscriptionId}${row.rowCount ? ` • ${row.rowCount} rows` : ''}</span>
-      </span>
-    `;
-    subscriptionOptionsHost.appendChild(wrapper);
+    const opt = document.createElement('option');
+    opt.value = row.subscriptionId;
+    opt.textContent = row.subscriptionName ? `${row.subscriptionName} (${row.subscriptionId})` : row.subscriptionId;
+    opt.selected = selectedSubscriptionIds.has(row.subscriptionId);
+    subscriptionFilter.appendChild(opt);
   });
 
-  subscriptionOptionsHost.querySelectorAll('input[type="checkbox"]').forEach((checkbox) => {
-    checkbox.addEventListener('change', (event) => {
-      const subId = event.target.getAttribute('data-subscription-id');
-      if (!subId) return;
-      if (event.target.checked) {
-        selectedSubscriptionIds.add(subId);
-      } else {
-        selectedSubscriptionIds.delete(subId);
-      }
-      subscriptionSelectionInfo.textContent = `${selectedSubscriptionIds.size} selected`;
-    });
+  subscriptionFilter.addEventListener('change', () => {
+    const selected = Array.from(subscriptionFilter.selectedOptions).map((o) => o.value);
+    selectedSubscriptionIds.clear();
+    selected.forEach((id) => selectedSubscriptionIds.add(id));
+    subscriptionSelectionInfo.textContent = `${selectedSubscriptionIds.size} selected`;
   });
 
   subscriptionSelectionInfo.textContent = `${selectedSubscriptionIds.size} selected`;
 }
 
 async function loadSubscriptions() {
-  const search = subscriptionSearch?.value?.trim() || '';
-  const query = new URLSearchParams({ search, limit: '200' });
+  const query = new URLSearchParams({ limit: '500' });
 
   try {
     const response = await fetch(`/api/subscriptions?${query.toString()}`);
@@ -398,11 +383,6 @@ function wireButtons() {
     selectedSubscriptionIds.clear();
     renderSubscriptionOptions(subscriptionOptions);
     loadCapacityRows();
-  });
-
-  subscriptionSearch.addEventListener('input', () => {
-    clearTimeout(window.__subscriptionSearchDebounce);
-    window.__subscriptionSearchDebounce = setTimeout(loadSubscriptions, 250);
   });
 }
 

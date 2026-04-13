@@ -26,6 +26,35 @@ body {
   color: #fff;
 }
 
+.topbar-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.topbar-user-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-top: 6px;
+  flex-shrink: 0;
+}
+
+.topbar-username {
+  font-size: 13px;
+  color: rgba(255,255,255,0.85);
+}
+
+.topbar-logout {
+  font-size: 13px;
+  color: rgba(255,255,255,0.85);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.topbar-logout:hover { color: #fff; }
+
 .topbar h1 {
   margin: 0;
   font-size: 28px;

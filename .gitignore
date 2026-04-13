@@ -11,6 +11,7 @@ yarn-error.log*
 # Secrets / local config
 .env
 .env.*
+!.env.sample
 *.local
 *.secret
 secrets.*

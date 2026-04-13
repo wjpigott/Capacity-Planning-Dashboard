@@ -148,18 +148,28 @@ function renderIngestionStatusCard(status) {
 }
 
 function applyAdminAccess(auth) {
-  const enforce = auth?.mode === 'enforce';
   const canAccessAdmin = auth?.canAccessAdmin !== false;
 
   adminNavItems.forEach((item) => {
-    item.classList.toggle('hidden', enforce && !canAccessAdmin);
+    item.classList.toggle('hidden', !canAccessAdmin);
   });
 
-  if (enforce && !canAccessAdmin) {
+  if (!canAccessAdmin) {
     document.querySelectorAll('.nav-item').forEach((item) => item.classList.remove('active'));
     document.querySelectorAll('.page').forEach((page) => page.classList.remove('active'));
     document.querySelector('[data-nav="reporting"]')?.classList.add('active');
     document.getElementById('reporting-page')?.classList.add('active');
+  }
+}
+
+function updateTopbarUser(auth) {
+  const el = document.getElementById('topbarUserInfo');
+  if (!el) return;
+  if (auth?.authEnabled && auth?.isAuthenticated && auth?.name) {
+    el.innerHTML = `
+      <span class="topbar-username">${auth.name}</span>
+      <a href="/auth/logout" class="topbar-logout">Sign out</a>
+    `;
   }
 }
 
@@ -170,11 +180,16 @@ async function loadViewerAuth() {
     if (!response.ok || !payload.ok) {
       throw new Error(payload.error || 'Failed to load auth context.');
     }
-
-    applyAdminAccess(payload.auth);
-    return payload.auth;
+    const auth = payload.auth;
+    if (auth.authEnabled && !auth.isAuthenticated) {
+      window.location.href = '/auth/login';
+      return null;
+    }
+    updateTopbarUser(auth);
+    applyAdminAccess(auth);
+    return auth;
   } catch {
-    applyAdminAccess({ mode: 'off', canAccessAdmin: true });
+    applyAdminAccess({ canAccessAdmin: true });
     return null;
   }
 }

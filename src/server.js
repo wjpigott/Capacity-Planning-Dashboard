@@ -2,6 +2,11 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 require('dotenv').config();
+// Load local overrides — gitignored, safe to customise for local dev
+require('dotenv').config({ path: path.resolve(__dirname, '..', '.env.local'), override: true });
+
+const session = require('express-session');
+const { AUTH_ENABLED, buildAuthRouter, requireAuth, requireAdmin, getAccountFromSession, isAdmin } = require('./middleware/auth');
 
 const {
   getCapacityRows,
@@ -24,76 +29,33 @@ const { ensurePhase3Schema, getCapacityScoreSnapshotHistory } = require('./store
 
 const app = express();
 const port = process.env.PORT || 3000;
-const adminRoleName = process.env.ADMIN_ROLE_NAME || 'CapacityAdmin';
-const adminRbacMode = (process.env.ADMIN_RBAC_MODE || 'off').toLowerCase();
 
 app.use(cors());
 app.use(express.json());
+
+// Session — required for MSAL auth code flow state and account storage
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'dev-session-secret-change-in-production',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: 8 * 60 * 60 * 1000 // 8 hours
+  }
+}));
+
+// Auth routes (/auth/login, /auth/callback, /auth/logout) — always accessible
+app.use('/auth', buildAuthRouter());
+
+// Protect all API routes; /api/auth/me is always open (used to check auth state)
+app.use('/api', (req, res, next) => {
+  if (req.path === '/auth/me') return next();
+  requireAuth(req, res, next);
+});
+
 app.use(express.static(path.resolve(__dirname, '..')));
-
-function parseClientPrincipal(req) {
-  const encoded = req.header('x-ms-client-principal');
-  if (!encoded) {
-    return {
-      isAuthenticated: false,
-      name: null,
-      userId: null,
-      roles: []
-    };
-  }
-
-  try {
-    const decoded = Buffer.from(encoded, 'base64').toString('utf8');
-    const principal = JSON.parse(decoded);
-    const claims = Array.isArray(principal.claims) ? principal.claims : [];
-    const roleType = (principal.role_typ || '').toLowerCase();
-    const roleValues = claims
-      .filter((claim) => {
-        const claimType = (claim.typ || '').toLowerCase();
-        return claimType === roleType || claimType.endsWith('/claims/role') || claimType === 'roles';
-      })
-      .map((claim) => claim.val)
-      .filter(Boolean);
-
-    return {
-      isAuthenticated: true,
-      name: principal.name || claims.find((claim) => claim.typ === principal.name_typ)?.val || null,
-      userId: principal.userId || claims.find((claim) => claim.typ === 'http://schemas.microsoft.com/identity/claims/objectidentifier')?.val || null,
-      roles: [...new Set([...(principal.userRoles || []), ...roleValues])]
-    };
-  } catch {
-    return {
-      isAuthenticated: false,
-      name: null,
-      userId: null,
-      roles: []
-    };
-  }
-}
-
-function isAdminPrincipal(principal) {
-  return principal.roles.some((role) => String(role).toLowerCase() === adminRoleName.toLowerCase());
-}
-
-function requireAdminRole(req, res, next) {
-  if (adminRbacMode !== 'enforce') {
-    next();
-    return;
-  }
-
-  const principal = parseClientPrincipal(req);
-  if (!principal.isAuthenticated) {
-    res.status(401).json({ ok: false, error: 'Authentication is required for Admin access.' });
-    return;
-  }
-
-  if (!isAdminPrincipal(principal)) {
-    res.status(403).json({ ok: false, error: `Admin role '${adminRoleName}' is required.` });
-    return;
-  }
-
-  next();
-}
 
 function requireIngestKey(req, res, next) {
   const expected = process.env.INGEST_API_KEY;
@@ -116,20 +78,22 @@ app.get('/healthz', (_, res) => {
 });
 
 app.get('/api/auth/me', (req, res) => {
-  const principal = parseClientPrincipal(req);
-  const isAdmin = isAdminPrincipal(principal);
+  const account = getAccountFromSession(req);
+  const authEnabled = AUTH_ENABLED;
+  const adminEnabled = !!process.env.ADMIN_GROUP_ID;
+  const isAuthenticated = !authEnabled || account !== null;
+  const adminAccess = !authEnabled || !adminEnabled || isAdmin(account);
 
   res.json({
     ok: true,
     auth: {
-      mode: adminRbacMode,
-      adminRoleName,
-      isAuthenticated: principal.isAuthenticated,
-      principalName: principal.name,
-      userId: principal.userId,
-      roles: principal.roles,
-      isAdmin,
-      canAccessAdmin: adminRbacMode === 'enforce' ? isAdmin : true
+      authEnabled,
+      isAuthenticated,
+      name: account?.name || null,
+      username: account?.username || null,
+      userId: account?.userId || null,
+      isAdmin: adminAccess,
+      canAccessAdmin: adminAccess
     }
   });
 });
@@ -149,7 +113,7 @@ app.get('/api/capacity', async (req, res) => {
   }
 });
 
-app.get('/api/quota/groups', requireAdminRole, async (_, res) => {
+app.get('/api/quota/groups', requireAdmin, async (_, res) => {
   try {
     const result = await listQuotaGroups(_.query.managementGroupId);
     res.json({ ok: true, ...result });
@@ -159,7 +123,7 @@ app.get('/api/quota/groups', requireAdminRole, async (_, res) => {
   }
 });
 
-app.get('/api/quota/management-groups', requireAdminRole, async (_, res) => {
+app.get('/api/quota/management-groups', requireAdmin, async (_, res) => {
   try {
     const groups = await listManagementGroups();
     res.json({ ok: true, groups, defaultManagementGroupId: process.env.QUOTA_MANAGEMENT_GROUP_ID || null });
@@ -168,7 +132,7 @@ app.get('/api/quota/management-groups', requireAdminRole, async (_, res) => {
   }
 });
 
-app.get('/api/quota/candidates', requireAdminRole, async (req, res) => {
+app.get('/api/quota/candidates', requireAdmin, async (req, res) => {
   try {
     const result = await getQuotaCandidates({
       managementGroupId: req.query.managementGroupId,
@@ -184,7 +148,7 @@ app.get('/api/quota/candidates', requireAdminRole, async (req, res) => {
   }
 });
 
-app.post('/api/quota/candidates/capture', requireAdminRole, async (req, res) => {
+app.post('/api/quota/candidates/capture', requireAdmin, async (req, res) => {
   try {
     const result = await captureQuotaCandidateSnapshots({
       managementGroupId: req.body?.managementGroupId,
@@ -200,7 +164,7 @@ app.post('/api/quota/candidates/capture', requireAdminRole, async (req, res) => 
   }
 });
 
-app.get('/api/quota/candidate-runs', requireAdminRole, async (req, res) => {
+app.get('/api/quota/candidate-runs', requireAdmin, async (req, res) => {
   try {
     const result = await getQuotaCandidateRunHistory({
       managementGroupId: req.query.managementGroupId,
@@ -215,7 +179,7 @@ app.get('/api/quota/candidate-runs', requireAdminRole, async (req, res) => {
   }
 });
 
-app.get('/api/quota/plan', requireAdminRole, async (req, res) => {
+app.get('/api/quota/plan', requireAdmin, async (req, res) => {
   try {
     const result = await buildQuotaMovePlan({
       managementGroupId: req.query.managementGroupId,
@@ -231,7 +195,7 @@ app.get('/api/quota/plan', requireAdminRole, async (req, res) => {
   }
 });
 
-app.post('/api/quota/simulate', requireAdminRole, async (req, res) => {
+app.post('/api/quota/simulate', requireAdmin, async (req, res) => {
   try {
     const result = await simulateQuotaMovePlan({
       managementGroupId: req.body?.managementGroupId,
@@ -353,7 +317,7 @@ app.post('/api/capacity/scores/live', async (req, res) => {
   }
 });
 
-app.post('/api/admin/ingest/capacity', requireAdminRole, async (req, res) => {
+app.post('/api/admin/ingest/capacity', requireAdmin, async (req, res) => {
   try {
     const result = await runCapacityIngestion({
       regionPreset: req.body?.regionPreset,
@@ -368,7 +332,7 @@ app.post('/api/admin/ingest/capacity', requireAdminRole, async (req, res) => {
   }
 });
 
-app.get('/api/admin/ingest/status', requireAdminRole, (_, res) => {
+app.get('/api/admin/ingest/status', requireAdmin, (_, res) => {
   res.json({ ok: true, status: getIngestionStatus() });
 });
 

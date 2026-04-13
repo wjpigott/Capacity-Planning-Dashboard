@@ -86,6 +86,7 @@ Status legend:
 - [x] Subscription search + multi-select filter UX (scales with search/limit)
 - [x] Quota Insights tab tables for subscription summary + trends
 - [x] Chart views for region availability and top SKU available quota
+- [ ] Pagination for report grids (prefer server-side paging for large result sets)
 - [ ] Export (CSV/XLSX) actions wired to backend
 - [ ] Ingestion status widget in UI
 

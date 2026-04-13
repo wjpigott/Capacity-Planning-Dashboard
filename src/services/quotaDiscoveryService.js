@@ -3,6 +3,7 @@ const { DefaultAzureCredential } = require('@azure/identity');
 const ARM_SCOPE = 'https://management.azure.com/.default';
 const ARM_BASE = 'https://management.azure.com';
 const QUOTA_API_VERSION = '2025-09-01';
+const MANAGEMENT_API_VERSION = '2023-04-01';
 
 function getCredential() {
   const managedIdentityClientId = process.env.INGEST_MSI_CLIENT_ID || process.env.AZURE_CLIENT_ID || process.env.SQL_MSI_CLIENT_ID;
@@ -11,6 +12,11 @@ function getCredential() {
 
 function getManagementGroupId() {
   return process.env.QUOTA_MANAGEMENT_GROUP_ID || '';
+}
+
+async function getToken() {
+  const credential = getCredential();
+  return (await credential.getToken(ARM_SCOPE)).token;
 }
 
 async function armGetAll(url, token) {
@@ -41,14 +47,38 @@ async function armGetAll(url, token) {
   return items;
 }
 
-async function listQuotaGroups() {
-  const managementGroupId = getManagementGroupId();
+async function listManagementGroups() {
+  const token = await getToken();
+  const groupsUrl = `${ARM_BASE}/providers/Microsoft.Management/managementGroups?api-version=${MANAGEMENT_API_VERSION}`;
+
+  try {
+    const groups = await armGetAll(groupsUrl, token);
+    return groups.map((group) => ({
+      id: group.name,
+      displayName: group?.properties?.displayName || group.name,
+      tenantId: group?.properties?.tenantId || null
+    }));
+  } catch (error) {
+    const fallbackManagementGroupId = getManagementGroupId();
+    if (!fallbackManagementGroupId || !error.message.includes('AuthorizationFailed')) {
+      throw error;
+    }
+
+    return [{
+      id: fallbackManagementGroupId,
+      displayName: fallbackManagementGroupId,
+      tenantId: null
+    }];
+  }
+}
+
+async function listQuotaGroups(managementGroupIdOverride) {
+  const managementGroupId = managementGroupIdOverride || getManagementGroupId();
   if (!managementGroupId) {
     throw new Error('QUOTA_MANAGEMENT_GROUP_ID is not configured.');
   }
 
-  const credential = getCredential();
-  const token = (await credential.getToken(ARM_SCOPE)).token;
+  const token = await getToken();
   const groupsUrl = `${ARM_BASE}/providers/Microsoft.Management/managementGroups/${encodeURIComponent(managementGroupId)}/providers/Microsoft.Quota/groupQuotas?api-version=${QUOTA_API_VERSION}`;
   const groups = await armGetAll(groupsUrl, token);
 
@@ -78,5 +108,6 @@ async function listQuotaGroups() {
 }
 
 module.exports = {
+  listManagementGroups,
   listQuotaGroups
 };

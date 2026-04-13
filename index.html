@@ -238,6 +238,18 @@
         <p class="page-description">Discover and analyze quota group membership, headroom, and candidates for reallocation. Results are read from Azure APIs and optionally persisted to SQL.</p>
         <div id="quotaDiscoveryStatus" class="admin-status info">No quota discovery request submitted yet.</div>
 
+        <div class="surface" style="margin-bottom: 16px;">
+          <div class="filter-section-label">Quota Discovery Scope</div>
+          <div class="filters">
+            <label>Management Group
+              <select id="quotaManagementGroupFilter"></select>
+            </label>
+            <label>Quota Group
+              <select id="quotaGroupFilter"></select>
+            </label>
+          </div>
+        </div>
+
         <div class="admin-cards">
           <div class="admin-card">
             <div class="admin-card-icon">

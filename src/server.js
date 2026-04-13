@@ -15,7 +15,7 @@ const {
   getIngestionStatus,
   startIngestionScheduler
 } = require('./services/azureIngestionService');
-const { listQuotaGroups } = require('./services/quotaDiscoveryService');
+const { listManagementGroups, listQuotaGroups } = require('./services/quotaDiscoveryService');
 const { ensurePhase3Schema } = require('./store/sql');
 
 const app = express();
@@ -147,11 +147,20 @@ app.get('/api/capacity', async (req, res) => {
 
 app.get('/api/quota/groups', requireAdminRole, async (_, res) => {
   try {
-    const result = await listQuotaGroups();
+    const result = await listQuotaGroups(_.query.managementGroupId);
     res.json({ ok: true, ...result });
   } catch (err) {
     const status = err.message.includes('QUOTA_MANAGEMENT_GROUP_ID') ? 503 : 500;
     res.status(status).json({ ok: false, error: err.message, groups: [] });
+  }
+});
+
+app.get('/api/quota/management-groups', requireAdminRole, async (_, res) => {
+  try {
+    const groups = await listManagementGroups();
+    res.json({ ok: true, groups, defaultManagementGroupId: process.env.QUOTA_MANAGEMENT_GROUP_ID || null });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message, groups: [] });
   }
 });
 

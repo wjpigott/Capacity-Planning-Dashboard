@@ -1,5 +1,7 @@
 let rows = [];
 let subscriptionOptions = [];
+let managementGroupOptions = [];
+let quotaGroupOptions = [];
 const selectedSubscriptionIds = new Set();
 
 const regionPresets = {
@@ -22,6 +24,8 @@ const skuChart = document.querySelector('#skuChart');
 const subscriptionSelectionInfo = document.querySelector('#subscriptionSelectionInfo');
 const adminStatus = document.querySelector('#adminStatus');
 const quotaDiscoveryStatus = document.querySelector('#quotaDiscoveryStatus');
+const quotaManagementGroupFilter = document.querySelector('#quotaManagementGroupFilter');
+const quotaGroupFilter = document.querySelector('#quotaGroupFilter');
 const triggerIngestBtn = document.querySelector('#triggerIngestBtn');
 const subscriptionRefreshBtn = document.querySelector('#subscriptionRefreshBtn');
 const adminNavItems = document.querySelectorAll('[data-admin-only="true"]');
@@ -370,13 +374,18 @@ function renderQuotaGroups(groups) {
     return;
   }
 
+  const selectedQuotaGroup = quotaGroupFilter?.value || 'all';
+  const scopedGroups = selectedQuotaGroup === 'all'
+    ? groups
+    : groups.filter((group) => group.groupQuotaName === selectedQuotaGroup);
+
   quotaDiscoveryGridBody.innerHTML = '';
-  if (!groups || groups.length === 0) {
+  if (!scopedGroups || scopedGroups.length === 0) {
     quotaDiscoveryGridBody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 20px; color: #5d7085;">No quota groups found for the configured management group.</td></tr>';
     return;
   }
 
-  groups.forEach((group) => {
+  scopedGroups.forEach((group) => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${group.managementGroupId || 'n/a'}</td>
@@ -391,20 +400,90 @@ function renderQuotaGroups(groups) {
   });
 }
 
-async function loadQuotaGroups() {
-  setQuotaDiscoveryStatus('Discovering quota groups...', 'info');
+function renderManagementGroupOptions(groups, preferredId) {
+  if (!quotaManagementGroupFilter) {
+    return;
+  }
+
+  quotaManagementGroupFilter.innerHTML = '';
+  groups.forEach((group) => {
+    const option = document.createElement('option');
+    option.value = group.id;
+    option.textContent = `${group.displayName} (${group.id})`;
+    quotaManagementGroupFilter.appendChild(option);
+  });
+
+  if (groups.length === 0) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'No management groups available';
+    quotaManagementGroupFilter.appendChild(option);
+    return;
+  }
+
+  const selectedId = groups.some((group) => group.id === preferredId)
+    ? preferredId
+    : groups[0].id;
+  quotaManagementGroupFilter.value = selectedId;
+}
+
+function renderQuotaGroupOptions(groups) {
+  if (!quotaGroupFilter) {
+    return;
+  }
+
+  const previousValue = quotaGroupFilter.value;
+  fillSelect(quotaGroupFilter, groups.map((group) => group.groupQuotaName), 'All Quota Groups');
+  quotaGroupFilter.value = groups.some((group) => group.groupQuotaName === previousValue) ? previousValue : 'all';
+}
+
+async function loadManagementGroups() {
+  if (!quotaManagementGroupFilter) {
+    return;
+  }
 
   try {
-    const response = await fetch('/api/quota/groups');
+    const response = await fetch('/api/quota/management-groups');
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || 'Failed to load management groups.');
+    }
+
+    managementGroupOptions = Array.isArray(payload.groups) ? payload.groups : [];
+    renderManagementGroupOptions(managementGroupOptions, payload.defaultManagementGroupId);
+  } catch (error) {
+    managementGroupOptions = [];
+    renderManagementGroupOptions([], null);
+    setQuotaDiscoveryStatus(error.message || 'Failed to load management groups.', 'error');
+  }
+}
+
+async function loadQuotaGroups() {
+  const managementGroupId = quotaManagementGroupFilter?.value || '';
+  if (!managementGroupId) {
+    setQuotaDiscoveryStatus('Select a management group before discovering quota groups.', 'warn');
+    renderQuotaGroups([]);
+    return;
+  }
+
+  setQuotaDiscoveryStatus(`Discovering quota groups for management group ${managementGroupId}...`, 'info');
+
+  try {
+    const query = new URLSearchParams({ managementGroupId });
+    const response = await fetch(`/api/quota/groups?${query.toString()}`);
     const payload = await response.json();
     if (!response.ok || !payload.ok) {
       throw new Error(payload.error || 'Failed to discover quota groups.');
     }
 
-    const groups = Array.isArray(payload.groups) ? payload.groups : [];
+    quotaGroupOptions = Array.isArray(payload.groups) ? payload.groups : [];
+    renderQuotaGroupOptions(quotaGroupOptions);
+    const groups = quotaGroupOptions;
     renderQuotaGroups(groups);
     setQuotaDiscoveryStatus(`Quota discovery completed. ${groups.length} group quota(s) found for management group ${payload.managementGroupId}.`, 'success');
   } catch (error) {
+    quotaGroupOptions = [];
+    renderQuotaGroupOptions([]);
     renderQuotaGroups([]);
     setQuotaDiscoveryStatus(error.message || 'Failed to discover quota groups.', 'error');
   }
@@ -641,7 +720,15 @@ function wireButtons() {
   document.getElementById('exportBtn').addEventListener('click', notYet('Export CSV'));
   document.getElementById('discoverBtn').addEventListener('click', loadQuotaGroups);
   document.getElementById('planBtn').addEventListener('click', notYet('Build move plan'));
-  document.getElementById('candidateBtn').addEventListener('click', notYet('Generate quota candidates'));
+  document.getElementById('candidateBtn').addEventListener('click', () => {
+    const selectedQuotaGroup = quotaGroupFilter?.value || 'all';
+    if (selectedQuotaGroup === 'all') {
+      setQuotaDiscoveryStatus('Select a quota group before generating candidates. Candidate generation is the next step after scope selection.', 'warn');
+      return;
+    }
+
+    alert('Generate quota candidates is next to be wired. The selected quota group scope is now available for that implementation.');
+  });
   document.getElementById('historyBtn').addEventListener('click', notYet('Capture quota history'));
   document.getElementById('refreshAnalyticsBtn').addEventListener('click', loadAnalytics);
   document.getElementById('simulateBtn').addEventListener('click', notYet('Simulate impact'));
@@ -662,6 +749,17 @@ function wireButtons() {
     loadCapacityRows();
   });
 }
+
+quotaManagementGroupFilter?.addEventListener('change', () => {
+  quotaGroupOptions = [];
+  renderQuotaGroupOptions([]);
+  renderQuotaGroups([]);
+  setQuotaDiscoveryStatus('Management group changed. Run discovery to load quota groups for the new scope.', 'info');
+});
+
+quotaGroupFilter?.addEventListener('change', () => {
+  renderQuotaGroups(quotaGroupOptions);
+});
 
 regionPresetFilter.addEventListener('change', () => {
   syncRegionOptions();
@@ -692,6 +790,7 @@ wireViewTabs();
 wireButtons();
 syncRegionOptions();
 loadViewerAuth();
+loadManagementGroups();
 syncIngestStatus().catch(() => {});
 loadSubscriptions();
 loadCapacityRows();

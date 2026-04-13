@@ -88,6 +88,7 @@ Status legend:
 - [x] Chart views for region availability and top SKU available quota
 - [x] Ingestion status widget in UI
 - [ ] Admin UI setting for scheduled refresh rates (quota discovery, capacity ingestion, and future background refresh jobs)
+- [ ] Admin UI setting for quota discovery scope selection (management group and, if needed, quota group picker/default)
 - [ ] Pagination for report grids (prefer server-side paging for large result sets)
 - [ ] Export (CSV/XLSX) actions wired to backend
 
@@ -239,6 +240,7 @@ Admin UI endpoints:
 - `POST /api/admin/ingest/capacity` (same-origin route used by the Admin portal Run Ingest Now action)
 - `GET /api/admin/ingest/status` (same-origin route used by the Admin portal status banner)
 - `GET /api/auth/me` (returns App Service auth context and resolved Admin access state)
+- `GET /api/quota/management-groups` (returns accessible management groups for the Quota Discovery scope picker)
 
 Read APIs for analytics:
 
@@ -370,6 +372,7 @@ Write target:
 
 Current API state:
 - `GET /api/quota/groups` lists live GroupQuota resources for `QUOTA_MANAGEMENT_GROUP_ID` and includes associated subscription IDs.
+- `GET /api/quota/management-groups` lists accessible management groups so the Admin UI can select the discovery scope before loading quota groups.
 
 Planned data/API direction:
 - Discover group quotas from Microsoft.Quota APIs.

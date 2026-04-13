@@ -339,6 +339,13 @@ function fillSelect(select, values, allLabel = 'All') {
   });
 }
 
+function formatFamilyLabel(family) {
+  // "StandardDasv7Family" -> "Standard_Dasv7", "PremiumV2DiskCount" stays as-is
+  return (family || '')
+    .replace(/Family$/i, '')
+    .replace(/^(Standard|Basic|Premium)([A-Z])/i, '$1_$2');
+}
+
 function syncFamilyOptions() {
   const currentValue = familyFilter.value || 'all';
   const dataFamilies = unique('family');
@@ -364,7 +371,7 @@ function syncFamilyOptions() {
   dataFamilies.forEach((value) => {
     const option = document.createElement('option');
     option.value = value;
-    option.textContent = value;
+    option.textContent = formatFamilyLabel(value);
     familyFilter.appendChild(option);
   });
 

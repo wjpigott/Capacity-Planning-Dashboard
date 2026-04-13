@@ -5,6 +5,8 @@ const { insertCapacitySnapshots } = require('../store/sql');
 
 const ARM_SCOPE = 'https://management.azure.com/.default';
 const ARM_BASE = 'https://management.azure.com';
+const DEFAULT_ARM_MAX_RETRIES = 3;
+const DEFAULT_REGION_CONCURRENCY = 4;
 
 let schedulerHandle;
 const ingestStatus = {
@@ -67,18 +69,7 @@ async function armGetAll(url, token) {
   let next = url;
 
   while (next) {
-    const response = await fetch(next, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${token}`
-      }
-    });
-
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`ARM GET failed (${response.status}) for ${next}: ${body}`);
-    }
-
+    const response = await armGetPageWithRetry(next, token);
     const payload = await response.json();
     if (Array.isArray(payload.value)) {
       all.push(...payload.value);
@@ -178,22 +169,74 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function armGetWithRetry(url, token, maxRetries = 3) {
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      return await armGet(url, token);
-    } catch (err) {
-      const status = err.response?.status;
-      // 429 = rate limit, 503 = service unavailable
-      if ((status === 429 || status === 503) && attempt < maxRetries - 1) {
-        const delayMs = (err.response?.headers?.['retry-after'] || Math.pow(2, attempt + 1)) * 1000;
-        console.warn(`ARM API rate limit or unavailable (${status}). Retrying after ${delayMs}ms...`);
-        await sleep(delayMs);
-        continue;
-      }
-      throw err;
-    }
+function getRetryDelayMs(retryAfterHeader, attempt) {
+  if (!retryAfterHeader) {
+    return Math.pow(2, attempt + 1) * 1000;
   }
+
+  const asSeconds = Number.parseInt(retryAfterHeader, 10);
+  if (Number.isFinite(asSeconds)) {
+    return Math.max(asSeconds, 1) * 1000;
+  }
+
+  const asDateMs = Date.parse(retryAfterHeader);
+  if (!Number.isNaN(asDateMs)) {
+    return Math.max(asDateMs - Date.now(), 1000);
+  }
+
+  return Math.pow(2, attempt + 1) * 1000;
+}
+
+async function armGetPageWithRetry(url, token) {
+  const maxRetries = Math.max(Number(process.env.INGEST_ARM_MAX_RETRIES || DEFAULT_ARM_MAX_RETRIES), 1);
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    });
+
+    if (response.ok) {
+      return response;
+    }
+
+    const retryable = response.status === 429 || response.status === 503;
+    if (retryable && attempt < maxRetries - 1) {
+      const retryAfter = response.headers.get('retry-after');
+      const delayMs = getRetryDelayMs(retryAfter, attempt);
+      console.warn(`ARM GET throttled/unavailable (${response.status}) for ${url}. Retrying in ${delayMs}ms...`);
+      await sleep(delayMs);
+      continue;
+    }
+
+    const body = await response.text();
+    throw new Error(`ARM GET failed (${response.status}) for ${url}: ${body}`);
+  }
+
+  throw new Error(`ARM GET failed after retries for ${url}`);
+}
+
+async function mapWithConcurrency(items, concurrency, worker) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return [];
+  }
+
+  const safeConcurrency = Math.max(1, Math.min(concurrency || 1, items.length));
+  const results = new Array(items.length);
+  let index = 0;
+
+  const runners = Array.from({ length: safeConcurrency }, async () => {
+    while (index < items.length) {
+      const current = index;
+      index += 1;
+      results[current] = await worker(items[current], current);
+    }
+  });
+
+  await Promise.all(runners);
+  return results;
 }
 
 async function runCapacityIngestion(options = {}) {
@@ -211,6 +254,10 @@ async function runCapacityIngestion(options = {}) {
     const token = (await credential.getToken(ARM_SCOPE)).token;
     const subscriptions = await listSubscriptions(token, options.subscriptionIds);
     const regions = getRegions(options.regionPreset, options.regions);
+    const regionConcurrency = Math.max(
+      Number(process.env.INGEST_REGION_CONCURRENCY || DEFAULT_REGION_CONCURRENCY),
+      1
+    );
     const familyFilters = getFamilyFilters(options.familyFilters);
     const capturedAtUtc = new Date();
     const rows = [];
@@ -233,14 +280,18 @@ async function runCapacityIngestion(options = {}) {
         const subscriptionId = subscription.subscriptionId;
         const subscriptionName = subscription.displayName || 'Subscription';
         const subscriptionKey = getSubscriptionKey(subscriptionId);
-        for (const region of regions) {
+
+        const regionRows = await mapWithConcurrency(regions, regionConcurrency, async (region) => {
           const usageUrl = `${ARM_BASE}/subscriptions/${subscriptionId}/providers/Microsoft.Compute/locations/${region}/usages?api-version=2024-03-01`;
           const skusUrl = `${ARM_BASE}/subscriptions/${subscriptionId}/providers/Microsoft.Compute/skus?$filter=${encodeURIComponent(`location eq '${region}'`)}&api-version=2024-03-01`;
 
-          const usages = await armGetAll(usageUrl, token);
-          const skus = await armGetAll(skusUrl, token);
+          const [usages, skus] = await Promise.all([
+            armGetAll(usageUrl, token),
+            armGetAll(skusUrl, token)
+          ]);
 
           const familyUsages = usages.filter((item) => familyMatches(item?.name?.value, familyFilters));
+          const localRows = [];
 
           for (const usage of familyUsages) {
             const familyName = usage?.name?.value;
@@ -248,7 +299,7 @@ async function runCapacityIngestion(options = {}) {
             const quotaCurrent = Number(usage?.currentValue || 0);
             const quotaLimit = Number(usage?.limit || 0);
 
-            rows.push({
+            localRows.push({
               capturedAtUtc,
               sourceType: 'live-azure-ingest',
               subscriptionKey,
@@ -266,7 +317,11 @@ async function runCapacityIngestion(options = {}) {
               monthlyCostEstimate: null
             });
           }
-        }
+
+          return localRows;
+        });
+
+        rows.push(...regionRows.flat());
       }
     }
 

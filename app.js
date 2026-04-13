@@ -429,13 +429,76 @@ function renderSummary(data) {
   `;
 }
 
+function getActiveReportViewKey() {
+  const active = document.querySelector('.nav-sub-item.active[data-report-view]');
+  return active?.dataset?.reportView || 'capacity-grid';
+}
+
+function renderRegionMatrixSummary(data) {
+  const scopedData = Array.isArray(data) ? data : [];
+  const regions = resolveMatrixRegions(scopedData);
+  const familyMap = {};
+  const priority = { OK: 3, LIMITED: 2, CONSTRAINED: 1 };
+
+  scopedData.forEach((row) => {
+    const fam = normalizeFamilyLabel(row.family) || deriveFamilyFromSkuName(row.sku) || '?';
+    const region = String(row.region || '').trim().toLowerCase();
+    if (!region) {
+      return;
+    }
+
+    if (!familyMap[fam]) {
+      familyMap[fam] = {};
+    }
+
+    const incoming = String(row.availability || '').toUpperCase();
+    const current = familyMap[fam][region];
+    if (!current || (priority[incoming] || 0) > (priority[current] || 0)) {
+      familyMap[fam][region] = incoming || 'CONSTRAINED';
+    }
+  });
+
+  const families = [...new Set([...MATRIX_DEFAULT_FAMILIES, ...Object.keys(familyMap)])].sort();
+  let familiesWithAnyOk = 0;
+  let familiesFullyBlocked = 0;
+
+  families.forEach((family) => {
+    const statuses = Object.values(familyMap[family] || {});
+    if (statuses.includes('OK')) {
+      familiesWithAnyOk += 1;
+      return;
+    }
+
+    if (!statuses.includes('LIMITED') && !statuses.includes('CONSTRAINED')) {
+      familiesFullyBlocked += 1;
+    }
+  });
+
+  summaryCards.innerHTML = `
+    <div class="card"><h3>Families Shown</h3><p>${families.length}</p></div>
+    <div class="card"><h3>Families with Any OK</h3><p>${familiesWithAnyOk}</p></div>
+    <div class="card"><h3>Fully Blocked Families</h3><p>${familiesFullyBlocked}</p></div>
+    <div class="card"><h3>Regions in Scope</h3><p>${regions.length}</p></div>
+  `;
+}
+
+function renderSummaryForActiveView(gridData, matrixData) {
+  const view = getActiveReportViewKey();
+  if (view === 'region-matrix') {
+    renderRegionMatrixSummary(matrixData);
+    return;
+  }
+
+  renderSummary(gridData);
+}
+
 function renderGrid() {
   const data = filteredRows();
   const matrixData = reportScopedRows();
   gridBody.innerHTML = '';
   if (data.length === 0) {
     gridBody.innerHTML = '<tr><td colspan="12" style="text-align: center; padding: 20px; color: #5d7085;">No data available. Ensure ingestion is running and subscriptions are in scope.</td></tr>';
-    renderSummary([]);
+    renderSummaryForActiveView([], matrixData);
     renderCharts([]);
     renderRegionMatrix(matrixData);
     return;
@@ -459,7 +522,7 @@ function renderGrid() {
     `;
     gridBody.appendChild(tr);
   });
-  renderSummary(data);
+  renderSummaryForActiveView(data, matrixData);
   renderCharts(data);
   renderRegionMatrix(matrixData);
 }
@@ -994,6 +1057,70 @@ function renderFamilySummary(familyRows) {
   });
 }
 
+function deriveFamilySummaryFromRows(dataRows) {
+  const byFamily = new Map();
+
+  (dataRows || []).forEach((row) => {
+    const familyRaw = String(row.family || '').trim();
+    if (!familyRaw) {
+      return;
+    }
+
+    if (!byFamily.has(familyRaw)) {
+      byFamily.set(familyRaw, {
+        family: familyRaw,
+        skus: new Set(),
+        okSkus: new Set(),
+        zones: new Set(),
+        maxVcpu: 0,
+        maxMemoryGB: 0,
+        hasLimited: false,
+        hasConstrained: false,
+        quotaMax: 0
+      });
+    }
+
+    const entry = byFamily.get(familyRaw);
+    entry.skus.add(row.sku);
+    if (row.availability === 'OK') {
+      entry.okSkus.add(row.sku);
+    }
+
+    entry.maxVcpu = Math.max(entry.maxVcpu, Number(row.vCpu || 0));
+    entry.maxMemoryGB = Math.max(entry.maxMemoryGB, Number(row.memoryGB || 0));
+    entry.quotaMax = Math.max(entry.quotaMax, Number(row.quotaLimit || 0));
+    entry.hasLimited = entry.hasLimited || row.availability === 'LIMITED';
+    entry.hasConstrained = entry.hasConstrained || row.availability === 'CONSTRAINED';
+
+    String(row.zonesCsv || '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .forEach((zone) => entry.zones.add(zone));
+  });
+
+  return [...byFamily.values()]
+    .map((entry) => {
+      const zoneText = entry.zones.size > 0 ? `Zones ${[...entry.zones].sort().join(',')}` : 'No zone data';
+      const zoneStatus = entry.zones.size >= 3 ? '✓' : (entry.zones.size > 0 ? '⚠' : '-');
+      const status = entry.hasConstrained ? 'CONSTRAINED' : (entry.hasLimited ? 'LIMITED' : 'OK');
+      const largest = entry.maxVcpu > 0 || entry.maxMemoryGB > 0
+        ? `${entry.maxVcpu}vCPU/${entry.maxMemoryGB}GB`
+        : 'n/a';
+
+      return {
+        family: entry.family,
+        skus: entry.skus.size,
+        ok: entry.okSkus.size,
+        largest,
+        zones: `${zoneStatus} ${zoneText}`,
+        status,
+        quota: entry.quotaMax
+      };
+    })
+    .sort((left, right) => String(left.family).localeCompare(String(right.family)));
+}
+
 function normalizeFamilyLabel(rawFamily) {
   const value = String(rawFamily || '').trim();
   if (!value) {
@@ -1074,7 +1201,7 @@ function renderRegionMatrix(data) {
 
   // Row-level rollup: best status across all regions for row highlight
   function rowRollup(regionMap) {
-    const statuses = Object.values(regionMap);
+    const statuses = Object.values(regionMap || {});
     if (statuses.includes('OK')) return 'OK';
     if (statuses.includes('LIMITED')) return 'LIMITED';
     if (statuses.includes('CONSTRAINED')) return 'CONSTRAINED';
@@ -1109,7 +1236,7 @@ function renderRegionMatrix(data) {
   // Body rows
   const tbody = document.createElement('tbody');
   families.forEach((fam) => {
-    const regionMap = familyMap[fam];
+    const regionMap = familyMap[fam] || {};
     const rollup = rowRollup(regionMap);
     const tr = document.createElement('tr');
     tr.setAttribute('style', rowBg(rollup));
@@ -1196,7 +1323,7 @@ function renderCapacityScoreHistory(historyRows) {
     if (capacityScoreHistoryEmpty) {
       capacityScoreHistoryEmpty.style.display = 'block';
     }
-    capacityScoreHistoryGridBody.innerHTML = '<tr><td colspan="9" style="text-align: center; padding: 20px; color: #5d7085;">No persisted capacity score history is available for this filter window.</td></tr>';
+    capacityScoreHistoryGridBody.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 20px; color: #5d7085;">No persisted capacity score history is available for this filter window.</td></tr>';
     return;
   }
 
@@ -1211,11 +1338,7 @@ function renderCapacityScoreHistory(historyRows) {
       <td>${formatTimestamp(row.capturedAtUtc)}</td>
       <td>${row.region || 'n/a'}</td>
       <td>${row.sku || 'n/a'}</td>
-      <td>${row.family || 'n/a'}</td>
       <td><span class="badge ${scoreClass}">${row.score || 'n/a'}</span></td>
-      <td>${row.subscriptionCount ?? 0}</td>
-      <td>${row.totalQuotaAvailable ?? 0}</td>
-      <td>${row.utilizationPct ?? 0}%</td>
       <td>${row.reason || 'n/a'}</td>
     `;
     capacityScoreHistoryGridBody.appendChild(tr);
@@ -1371,7 +1494,8 @@ async function loadAnalytics() {
 
     renderSubscriptionSummary(Array.isArray(subscriptionPayload.rows) ? subscriptionPayload.rows : []);
     renderTrends(Array.isArray(trendPayload.rows) ? trendPayload.rows : []);
-    renderFamilySummary(Array.isArray(familyPayload.rows) ? familyPayload.rows : []);
+    const familyRows = Array.isArray(familyPayload.rows) ? familyPayload.rows : [];
+    renderFamilySummary(familyRows.length > 0 ? familyRows : deriveFamilySummaryFromRows(reportScopedRows()));
     renderCapacityScores(Array.isArray(scorePayload.rows) ? scorePayload.rows : []);
     renderCapacityScoreHistory(Array.isArray(scoreHistoryPayload.rows) ? scoreHistoryPayload.rows : []);
     if (capacityScoreLiveStatus) {
@@ -1390,20 +1514,38 @@ function renderSubscriptionOptions(options) {
   const subscriptionFilter = document.getElementById('subscriptionFilter');
   if (!subscriptionFilter) return;
 
+  if (selectedSubscriptionIds.size === 0 && Array.isArray(options) && options.length > 0) {
+    options.forEach((row) => {
+      if (row.subscriptionId) {
+        selectedSubscriptionIds.add(row.subscriptionId);
+      }
+    });
+  }
+
   subscriptionFilter.innerHTML = '';
   options.forEach((row) => {
-    const opt = document.createElement('option');
-    opt.value = row.subscriptionId;
-    opt.textContent = row.subscriptionName ? `${row.subscriptionName} (${row.subscriptionId})` : row.subscriptionId;
-    opt.selected = selectedSubscriptionIds.has(row.subscriptionId);
-    subscriptionFilter.appendChild(opt);
-  });
+    const wrapper = document.createElement('label');
+    wrapper.className = 'subscription-checkbox-item';
 
-  subscriptionFilter.addEventListener('change', () => {
-    const selected = Array.from(subscriptionFilter.selectedOptions).map((o) => o.value);
-    selectedSubscriptionIds.clear();
-    selected.forEach((id) => selectedSubscriptionIds.add(id));
-    subscriptionSelectionInfo.textContent = `${selectedSubscriptionIds.size} selected`;
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.value = row.subscriptionId;
+    checkbox.checked = selectedSubscriptionIds.has(row.subscriptionId);
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) {
+        selectedSubscriptionIds.add(row.subscriptionId);
+      } else {
+        selectedSubscriptionIds.delete(row.subscriptionId);
+      }
+      subscriptionSelectionInfo.textContent = `${selectedSubscriptionIds.size} selected`;
+    });
+
+    const text = document.createElement('span');
+    text.textContent = row.subscriptionName ? `${row.subscriptionName} (${row.subscriptionId})` : row.subscriptionId;
+
+    wrapper.appendChild(checkbox);
+    wrapper.appendChild(text);
+    subscriptionFilter.appendChild(wrapper);
   });
 
   subscriptionSelectionInfo.textContent = `${selectedSubscriptionIds.size} selected`;
@@ -1481,6 +1623,15 @@ function wireViewTabs() {
       const panel = document.getElementById(`view-${btn.dataset.reportView}`);
       if (panel) panel.classList.add('active');
       setActiveReportTitle(btn.dataset.reportView);
+
+      renderSummaryForActiveView(filteredRows(), reportScopedRows());
+
+      if (btn.dataset.reportView === 'region-matrix') {
+        renderRegionMatrix(reportScopedRows());
+      }
+      if (btn.dataset.reportView === 'family-summary' && familySummaryGridBody && familySummaryGridBody.children.length === 0) {
+        renderFamilySummary(deriveFamilySummaryFromRows(reportScopedRows()));
+      }
     });
   });
 }

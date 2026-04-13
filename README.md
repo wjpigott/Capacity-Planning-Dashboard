@@ -413,11 +413,14 @@ Data sources:
 Key query behavior:
 - Shared filters: region preset, region, family, availability, subscription IDs.
 - Subscription filter is applied against `ISNULL(subscriptionId, 'legacy-data')`.
+- Subscription selection in the reporting UI is rendered as a checkbox list (not multi-select highlight), and all loaded subscriptions are auto-selected on first load.
 - `SKU Family` options are primarily data-driven from `dbo.CapacityLatest.skuFamily`, with pinned report options for constrained HPC/GPU families (`HBv3`, `HBv4`, `ND-H100`, `NC-A100`) to ensure targeted live-placement checks remain available even when those families are absent from the latest ingestion snapshot.
 - When one of the pinned HPC/GPU family options is selected, `Refresh Live Placement` automatically injects representative SKUs for that family into the live placement request.
 - `GET /api/capacity/scores` remains a derived current-state dashboard score from `dbo.CapacityLatest`.
 - `GET /api/capacity/scores/history` returns persisted score snapshots from `dbo.CapacityScoreSnapshot` so planning can compare how regional SKU health changes over time.
+- Capacity Score history table is intentionally compact in the UI (`Captured`, `Region`, `SKU`, `Score`, `Reason`) to keep trend review readable.
 - `GET /api/capacity/families` in the reporting UX is intentionally requested with `family=all` so the Family Summary report remains populated even when the grid is currently scoped to a specific family.
+- Summary KPI cards are report-aware: Region Matrix shows family/region readiness metrics, while Capacity Grid and other views keep row/quota/cost totals.
 - The High/Medium/Low dashboard score is intentionally separate from the live Azure Placement Score API used by `Get-AzVMAvailability`.
 - `Desired Placement Count` in the `Capacity Score` view only affects the on-demand `Refresh Live Placement` action.
 - The value is passed through to `Get-AzVMAvailability` as `DesiredCount`, which tells Azure placement scoring how many VMs you want to place at once. Example: `1` asks "can I likely place one VM here?" while `5` asks for the likelihood of placing five VMs together.

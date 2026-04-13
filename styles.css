@@ -431,6 +431,32 @@ input {
   background: #fff;
 }
 
+.subscription-checkbox-list {
+  margin-top: 4px;
+  max-height: 120px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 6px 8px;
+  min-width: 320px;
+}
+
+.subscription-checkbox-item {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  font-size: 13px;
+  margin: 0;
+  padding: 2px 0;
+}
+
+.subscription-checkbox-item input {
+  margin: 0;
+}
+
 button {
   cursor: pointer;
   background: linear-gradient(135deg, #003a68, #0063b1);

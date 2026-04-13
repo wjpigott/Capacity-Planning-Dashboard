@@ -76,7 +76,7 @@ Status legend:
 - [x] `GET /api/capacity/trends` (daily trend rollups)
 - [x] `POST /internal/ingest/capacity`
 - [x] `GET /internal/ingest/status`
-- [ ] `GET /api/quota/groups` live implementation (currently placeholder)
+- [x] `GET /api/quota/groups` live implementation
 - [ ] Quota movement plan/apply endpoints
 
 #### UX and dashboard
@@ -87,12 +87,13 @@ Status legend:
 - [x] Quota Insights tab tables for subscription summary + trends
 - [x] Chart views for region availability and top SKU available quota
 - [x] Ingestion status widget in UI
+- [ ] Admin UI setting for scheduled refresh rates (quota discovery, capacity ingestion, and future background refresh jobs)
 - [ ] Pagination for report grids (prefer server-side paging for large result sets)
 - [ ] Export (CSV/XLSX) actions wired to backend
 
 #### Quota movement orchestration
 
-- [ ] Discover quota groups from live APIs
+- [x] Discover quota groups from live APIs
 - [ ] Generate candidate/move plans from analytics data
 - [ ] Approval workflow for quota apply actions
 - [ ] Safe apply with change caps, retries, and audit log views
@@ -221,6 +222,7 @@ Required app settings:
 - `INGEST_INTERVAL_MINUTES` (`0` disables scheduling)
 - `ADMIN_RBAC_MODE` (`off` by default; set to `enforce` after App Service Authentication is enabled)
 - `ADMIN_ROLE_NAME` (`CapacityAdmin` by default)
+- `QUOTA_MANAGEMENT_GROUP_ID` (required for live quota discovery)
 
 Required database permissions for the app identity:
 
@@ -367,7 +369,7 @@ Write target:
 #### Quota Discovery (Admin page)
 
 Current API state:
-- `GET /api/quota/groups` is placeholder response.
+- `GET /api/quota/groups` lists live GroupQuota resources for `QUOTA_MANAGEMENT_GROUP_ID` and includes associated subscription IDs.
 
 Planned data/API direction:
 - Discover group quotas from Microsoft.Quota APIs.

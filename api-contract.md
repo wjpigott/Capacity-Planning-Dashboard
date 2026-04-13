@@ -11,7 +11,7 @@ This dashboard should call backend APIs only. Do not expose ARM credentials, sub
   - Returns candidate rows with suggested movable quota and safety-buffer rationale
 
 - `GET /api/quota/groups`
-  - Returns accessible group quotas (managementGroupName, groupQuotaName, provisioningState)
+  - Returns accessible group quotas for the configured management group, including: managementGroupId, groupQuotaName, displayName, groupType, provisioningState, subscriptionCount, subscriptionIds
 
 ## Planning APIs
 

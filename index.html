@@ -236,6 +236,7 @@
       <section class="page" id="quota-discovery-page">
         <div class="admin-page-label">Quota Discovery</div>
         <p class="page-description">Discover and analyze quota group membership, headroom, and candidates for reallocation. Results are read from Azure APIs and optionally persisted to SQL.</p>
+        <div id="quotaDiscoveryStatus" class="admin-status info">No quota discovery request submitted yet.</div>
 
         <div class="admin-cards">
           <div class="admin-card">
@@ -281,6 +282,24 @@
               <button id="refreshAnalyticsBtn">Refresh Analytics</button>
             </div>
           </div>
+        </div>
+
+        <div class="surface overflow-auto" style="margin-top: 16px;">
+          <h3>Discovered Quota Groups</h3>
+          <table id="quotaDiscoveryGrid">
+            <thead>
+              <tr>
+                <th>Management Group</th>
+                <th>Quota Group</th>
+                <th>Display Name</th>
+                <th>Group Type</th>
+                <th>Provisioning State</th>
+                <th>Subscriptions</th>
+                <th>Subscription IDs</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
         </div>
 
         <div class="surface overflow-auto" style="margin-top: 16px;">

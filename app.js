@@ -13,6 +13,7 @@ const familyFilter = document.querySelector('#familyFilter');
 const availabilityFilter = document.querySelector('#availabilityFilter');
 const summaryCards = document.querySelector('#summaryCards');
 const subscriptionGridBody = document.querySelector('#subscriptionGrid tbody');
+const quotaDiscoveryGridBody = document.querySelector('#quotaDiscoveryGrid tbody');
 const trendGridBody = document.querySelector('#trendGrid tbody');
 const familySummaryGridBody = document.querySelector('#familySummaryGrid tbody');
 const familySummaryEmpty = document.querySelector('#familySummaryEmpty');
@@ -20,6 +21,7 @@ const regionChart = document.querySelector('#regionChart');
 const skuChart = document.querySelector('#skuChart');
 const subscriptionSelectionInfo = document.querySelector('#subscriptionSelectionInfo');
 const adminStatus = document.querySelector('#adminStatus');
+const quotaDiscoveryStatus = document.querySelector('#quotaDiscoveryStatus');
 const triggerIngestBtn = document.querySelector('#triggerIngestBtn');
 const subscriptionRefreshBtn = document.querySelector('#subscriptionRefreshBtn');
 const adminNavItems = document.querySelectorAll('[data-admin-only="true"]');
@@ -39,6 +41,12 @@ function setAdminStatus(message, tone = 'info') {
   if (!adminStatus) return;
   adminStatus.className = `admin-status ${tone}`;
   adminStatus.textContent = message;
+}
+
+function setQuotaDiscoveryStatus(message, tone = 'info') {
+  if (!quotaDiscoveryStatus) return;
+  quotaDiscoveryStatus.className = `admin-status ${tone}`;
+  quotaDiscoveryStatus.textContent = message;
 }
 
 function formatTimestamp(value) {
@@ -357,6 +365,51 @@ function renderSubscriptionSummary(summaryRows) {
   });
 }
 
+function renderQuotaGroups(groups) {
+  if (!quotaDiscoveryGridBody) {
+    return;
+  }
+
+  quotaDiscoveryGridBody.innerHTML = '';
+  if (!groups || groups.length === 0) {
+    quotaDiscoveryGridBody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 20px; color: #5d7085;">No quota groups found for the configured management group.</td></tr>';
+    return;
+  }
+
+  groups.forEach((group) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${group.managementGroupId || 'n/a'}</td>
+      <td>${group.groupQuotaName || 'n/a'}</td>
+      <td>${group.displayName || 'n/a'}</td>
+      <td>${group.groupType || 'n/a'}</td>
+      <td>${group.provisioningState || 'n/a'}</td>
+      <td>${group.subscriptionCount ?? 0}</td>
+      <td>${(group.subscriptionIds || []).join(', ') || 'n/a'}</td>
+    `;
+    quotaDiscoveryGridBody.appendChild(tr);
+  });
+}
+
+async function loadQuotaGroups() {
+  setQuotaDiscoveryStatus('Discovering quota groups...', 'info');
+
+  try {
+    const response = await fetch('/api/quota/groups');
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || 'Failed to discover quota groups.');
+    }
+
+    const groups = Array.isArray(payload.groups) ? payload.groups : [];
+    renderQuotaGroups(groups);
+    setQuotaDiscoveryStatus(`Quota discovery completed. ${groups.length} group quota(s) found for management group ${payload.managementGroupId}.`, 'success');
+  } catch (error) {
+    renderQuotaGroups([]);
+    setQuotaDiscoveryStatus(error.message || 'Failed to discover quota groups.', 'error');
+  }
+}
+
 function renderTrends(trendRows) {
   if (!trendGridBody) {
     return;
@@ -586,7 +639,7 @@ function wireButtons() {
   const notYet = (label) => () => alert(`${label} hooked to UI. Next step: connect backend endpoint.`);
   document.getElementById('refreshBtn').addEventListener('click', loadCapacityRows);
   document.getElementById('exportBtn').addEventListener('click', notYet('Export CSV'));
-  document.getElementById('discoverBtn').addEventListener('click', notYet('Discover quota groups'));
+  document.getElementById('discoverBtn').addEventListener('click', loadQuotaGroups);
   document.getElementById('planBtn').addEventListener('click', notYet('Build move plan'));
   document.getElementById('candidateBtn').addEventListener('click', notYet('Generate quota candidates'));
   document.getElementById('historyBtn').addEventListener('click', notYet('Capture quota history'));

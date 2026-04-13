@@ -82,6 +82,7 @@
             <button class="view-tab active" data-view="capacity-grid">Capacity Grid</button>
             <button class="view-tab" data-view="region-chart">By Region</button>
             <button class="view-tab" data-view="sku-chart">Top SKUs</button>
+            <button class="view-tab" data-view="capacity-score">Capacity Score</button>
             <button class="view-tab" data-view="family-summary">Family Summary</button>
             <button class="view-tab" data-view="trend">Trend History</button>
           </div>
@@ -122,6 +123,74 @@
           <div class="surface">
             <h3>Top SKUs by Available Quota</h3>
             <div id="skuChart" class="chart-bars"></div>
+          </div>
+        </div>
+
+        <div class="view-panel" id="view-capacity-score">
+          <div class="surface overflow-auto">
+            <h3>Regional SKU Capacity Score</h3>
+            <div class="filters toolbar-inline" style="margin-bottom: 10px; align-items: end;">
+              <label>History Window
+                <select id="capacityScoreHistoryDays">
+                  <option value="7">Last 7 days</option>
+                  <option value="14">Last 14 days</option>
+                  <option value="30" selected>Last 30 days</option>
+                </select>
+              </label>
+              <label>Desired Placement Count
+                <input id="capacityScoreDesiredCount" type="number" min="1" max="1000" value="1" />
+              </label>
+              <button id="refreshLivePlacementBtn" type="button">Refresh Live Placement</button>
+              <button id="refreshScoreHistoryBtn" type="button">Refresh Score History</button>
+              <label class="checkbox-inline checkbox-inline--muted">
+                <input id="capacityScoreRetentionReview" type="checkbox" />
+                Review 30-day score retention before adding automated cleanup
+              </label>
+            </div>
+            <p id="capacityScoreLiveStatus" class="inline-note" style="margin: 0 0 8px;">Live placement has not been refreshed in this session.</p>
+            <table id="capacityScoreGrid">
+              <thead>
+                <tr>
+                  <th>Region</th>
+                  <th>SKU</th>
+                  <th>Family</th>
+                  <th>Score</th>
+                  <th>Live Placement</th>
+                  <th>Placement Status</th>
+                  <th>Last Live Check</th>
+                  <th>Subscriptions</th>
+                  <th>OK Rows</th>
+                  <th>Limited Rows</th>
+                  <th>Constrained Rows</th>
+                  <th>Total Quota Available</th>
+                  <th>Utilization %</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+            <p id="capacityScoreEmpty" class="inline-note" style="display:none; margin-top:8px;">No capacity score data available</p>
+
+            <div class="history-section">
+              <h4>Score History</h4>
+              <table id="capacityScoreHistoryGrid">
+                <thead>
+                  <tr>
+                    <th>Captured</th>
+                    <th>Region</th>
+                    <th>SKU</th>
+                    <th>Family</th>
+                    <th>Score</th>
+                    <th>Subscriptions</th>
+                    <th>Quota Available</th>
+                    <th>Utilization %</th>
+                    <th>Reason</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+              <p id="capacityScoreHistoryEmpty" class="inline-note" style="display:none; margin-top:8px;">No persisted capacity score history is available for the selected window.</p>
+            </div>
           </div>
         </div>
 
@@ -189,6 +258,10 @@
           <div class="admin-status-card">
             <span class="admin-status-label">Inserted Rows</span>
             <strong id="ingestRowsValue">0</strong>
+          </div>
+          <div class="admin-status-card">
+            <span class="admin-status-label">Inserted Score Rows</span>
+            <strong id="ingestScoreRowsValue">0</strong>
           </div>
           <div class="admin-status-card">
             <span class="admin-status-label">Subscriptions</span>
@@ -389,6 +462,62 @@
               <button id="applyBtn" class="warn">Apply Movements</button>
             </div>
           </div>
+        </div>
+
+        <div id="quotaMovementStatus" class="admin-status info">Build Move Plan uses the latest captured candidate run for the selected quota group.</div>
+
+        <div class="surface" style="margin: 16px 0 0 0;">
+          <div class="filter-section-label">Move Planning Source</div>
+          <div class="filters">
+            <label>Captured Analysis Run
+              <select id="quotaRunFilter"></select>
+            </label>
+          </div>
+        </div>
+
+        <div class="table-card">
+          <div class="table-header">
+            <h3>Proposed Move Plan</h3>
+            <span>Read-only plan from the selected captured candidate run</span>
+          </div>
+          <table id="quotaPlanGrid">
+            <thead>
+              <tr>
+                <th>Region</th>
+                <th>Quota Family</th>
+                <th>From Subscription</th>
+                <th>To Subscription</th>
+                <th>Transfer</th>
+                <th>Recipient Need</th>
+                <th>Recipient State</th>
+                <th>Source Run</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <div class="table-card" style="margin-top: 16px;">
+          <div class="table-header">
+            <h3>Simulated Impact</h3>
+            <span>Projected quota available after applying the proposed plan, without writing to Azure</span>
+          </div>
+          <table id="quotaSimulationGrid">
+            <thead>
+              <tr>
+                <th>Role</th>
+                <th>Subscription</th>
+                <th>Region</th>
+                <th>Quota Family</th>
+                <th>Available Before</th>
+                <th>Available After</th>
+                <th>Delta</th>
+                <th>Safety Buffer</th>
+                <th>Projected State</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
         </div>
       </section>
     </main>

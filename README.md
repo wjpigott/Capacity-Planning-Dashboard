@@ -86,7 +86,11 @@ Status legend:
 - [x] Subscription search + multi-select filter UX (scales with search/limit)
 - [x] Quota Insights tab tables for subscription summary + trends
 - [x] Chart views for region availability and top SKU available quota
+- [x] Derived High/Medium/Low regional SKU capacity score view in reporting
+- [x] Persisted 30-day capacity score history view in reporting
+- [x] On-demand live placement refresh using `Get-AzVMAvailability` placement scores
 - [x] Ingestion status widget in UI
+- [ ] Review whether automated cleanup should trim `CapacityScoreSnapshot` history beyond 30 days
 - [ ] Admin UI setting for scheduled refresh rates (quota discovery, capacity ingestion, and future background refresh jobs)
 - [ ] Admin UI setting for quota discovery scope selection (management group and, if needed, quota group picker/default)
 - [ ] Pagination for report grids (prefer server-side paging for large result sets)
@@ -95,7 +99,7 @@ Status legend:
 #### Quota movement orchestration
 
 - [x] Discover quota groups from live APIs
-- [~] Generate candidate/move plans from analytics data (read-only candidate generation is live; move-plan orchestration is still pending)
+ - [~] Generate candidate/move plans from analytics data (read-only candidate generation, captured-run selection, move-plan building, and simulation are live; apply orchestration is still pending)
 - [ ] Approval workflow for quota apply actions
 - [ ] Safe apply with change caps, retries, and audit log views
 
@@ -341,16 +345,22 @@ Primary app APIs:
 - `GET /api/capacity`
 - `GET /api/subscriptions`
 - `GET /api/capacity/families`
+- `GET /api/capacity/scores`
+- `GET /api/capacity/scores/history`
 - `GET /api/capacity/subscriptions`
 - `GET /api/capacity/trends`
 
 Data sources:
 - `dbo.CapacityLatest` for current grid/subscription/family reporting.
 - `dbo.CapacitySnapshot` for trend rollups.
+- `dbo.CapacityScoreSnapshot` for historical regional SKU High/Medium/Low score snapshots captured during ingestion.
 
 Key query behavior:
 - Shared filters: region preset, region, family, availability, subscription IDs.
 - Subscription filter is applied against `ISNULL(subscriptionId, 'legacy-data')`.
+- `GET /api/capacity/scores` remains a derived current-state dashboard score from `dbo.CapacityLatest`.
+- `GET /api/capacity/scores/history` returns persisted score snapshots from `dbo.CapacityScoreSnapshot` so planning can compare how regional SKU health changes over time.
+- The High/Medium/Low dashboard score is intentionally separate from the live Azure Placement Score API used by `Get-AzVMAvailability`.
 
 #### Data Ingestion (Admin page)
 
@@ -365,6 +375,7 @@ Protected internal APIs:
 
 Current UI behavior:
 - `Refresh Subscriptions` refreshes the subscription catalog and updates the inline status banner.
+- Capacity ingestion now persists both raw `dbo.CapacitySnapshot` rows and aggregated `dbo.CapacityScoreSnapshot` history for the same captured timestamp.
 - `Run Ingest Now` starts a live ingestion run through the app server, updates button/status state, and refreshes report data after completion.
 
 External Azure APIs called by ingestion:
@@ -385,6 +396,9 @@ Current API state:
 - `GET /api/quota/management-groups` lists accessible management groups so the Admin UI can select the discovery scope before loading quota groups.
 - `GET /api/quota/candidates` generates read-only quota candidate rows for the selected management group and quota group using current capacity data.
 - `POST /api/quota/candidates/capture` persists the current candidate run into `dbo.QuotaCandidateSnapshot` with run metadata and source timestamps.
+- `GET /api/quota/candidate-runs` lists captured `analysisRunId` history for the selected management group, quota group, and optional region/family filters.
+- `GET /api/quota/plan` builds a read-only move plan from the selected captured `dbo.QuotaCandidateSnapshot` run.
+- `POST /api/quota/simulate` computes projected donor/recipient quota availability after the proposed plan without writing to Azure.
 
 Planned data/API direction:
 - Discover group quotas from Microsoft.Quota APIs.
@@ -393,7 +407,10 @@ Planned data/API direction:
 #### Quota Movements (Admin page)
 
 Current API state:
-- UI actions are currently frontend placeholders (no backend apply/simulate routes yet).
+- `GET /api/quota/candidate-runs` lets the Admin UI choose which captured `analysisRunId` to use for planning.
+- `GET /api/quota/plan` powers `Build Move Plan` as a read-only workflow sourced from the selected captured candidate run in SQL.
+- `POST /api/quota/simulate` powers `Simulate Impact` as a read-only projection over the selected captured run and proposed plan.
+- `Apply Movements` is still a frontend placeholder; backend write routes are not yet implemented.
 
 Planned data/API direction:
 - Execute quota apply/simulate workflows.

@@ -51,6 +51,24 @@ CREATE TABLE dbo.QuotaApplyRequestLog (
 );
 GO
 
+CREATE TABLE dbo.CapacityScoreSnapshot (
+    scoreSnapshotId BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    capturedAtUtc DATETIME2 NOT NULL,
+    region NVARCHAR(64) NOT NULL,
+    skuName NVARCHAR(128) NOT NULL,
+    skuFamily NVARCHAR(128) NOT NULL,
+    subscriptionCount INT NOT NULL,
+    okRows INT NOT NULL,
+    limitedRows INT NOT NULL,
+    constrainedRows INT NOT NULL,
+    totalQuotaAvailable INT NOT NULL,
+    utilizationPct INT NOT NULL,
+    score NVARCHAR(16) NOT NULL,
+    reason NVARCHAR(512) NOT NULL,
+    latestSourceCapturedAtUtc DATETIME2 NULL
+);
+GO
+
 CREATE OR ALTER VIEW dbo.CapacityLatest AS
 WITH Ranked AS (
     SELECT

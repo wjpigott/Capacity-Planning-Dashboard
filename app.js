@@ -2,6 +2,7 @@ let rows = [];
 let subscriptionOptions = [];
 let managementGroupOptions = [];
 let quotaGroupOptions = [];
+let quotaRunOptions = [];
 const selectedSubscriptionIds = new Set();
 
 const regionPresets = {
@@ -17,16 +18,29 @@ const summaryCards = document.querySelector('#summaryCards');
 const subscriptionGridBody = document.querySelector('#subscriptionGrid tbody');
 const quotaDiscoveryGridBody = document.querySelector('#quotaDiscoveryGrid tbody');
 const quotaCandidatesGridBody = document.querySelector('#quotaCandidatesGrid tbody');
+const quotaPlanGridBody = document.querySelector('#quotaPlanGrid tbody');
+const quotaSimulationGridBody = document.querySelector('#quotaSimulationGrid tbody');
 const trendGridBody = document.querySelector('#trendGrid tbody');
 const familySummaryGridBody = document.querySelector('#familySummaryGrid tbody');
 const familySummaryEmpty = document.querySelector('#familySummaryEmpty');
+const capacityScoreGridBody = document.querySelector('#capacityScoreGrid tbody');
+const capacityScoreEmpty = document.querySelector('#capacityScoreEmpty');
+const capacityScoreHistoryGridBody = document.querySelector('#capacityScoreHistoryGrid tbody');
+const capacityScoreHistoryEmpty = document.querySelector('#capacityScoreHistoryEmpty');
+const capacityScoreHistoryDays = document.querySelector('#capacityScoreHistoryDays');
+const capacityScoreDesiredCount = document.querySelector('#capacityScoreDesiredCount');
+const refreshLivePlacementBtn = document.querySelector('#refreshLivePlacementBtn');
+const refreshScoreHistoryBtn = document.querySelector('#refreshScoreHistoryBtn');
+const capacityScoreLiveStatus = document.querySelector('#capacityScoreLiveStatus');
 const regionChart = document.querySelector('#regionChart');
 const skuChart = document.querySelector('#skuChart');
 const subscriptionSelectionInfo = document.querySelector('#subscriptionSelectionInfo');
 const adminStatus = document.querySelector('#adminStatus');
 const quotaDiscoveryStatus = document.querySelector('#quotaDiscoveryStatus');
+const quotaMovementStatus = document.querySelector('#quotaMovementStatus');
 const quotaManagementGroupFilter = document.querySelector('#quotaManagementGroupFilter');
 const quotaGroupFilter = document.querySelector('#quotaGroupFilter');
+const quotaRunFilter = document.querySelector('#quotaRunFilter');
 const triggerIngestBtn = document.querySelector('#triggerIngestBtn');
 const subscriptionRefreshBtn = document.querySelector('#subscriptionRefreshBtn');
 const adminNavItems = document.querySelectorAll('[data-admin-only="true"]');
@@ -35,6 +49,7 @@ const ingestLastRunValue = document.querySelector('#ingestLastRunValue');
 const ingestLastSuccessValue = document.querySelector('#ingestLastSuccessValue');
 const ingestDurationValue = document.querySelector('#ingestDurationValue');
 const ingestRowsValue = document.querySelector('#ingestRowsValue');
+const ingestScoreRowsValue = document.querySelector('#ingestScoreRowsValue');
 const ingestSubscriptionsValue = document.querySelector('#ingestSubscriptionsValue');
 const ingestRegionsValue = document.querySelector('#ingestRegionsValue');
 const ingestFamiliesValue = document.querySelector('#ingestFamiliesValue');
@@ -54,8 +69,19 @@ function setQuotaDiscoveryStatus(message, tone = 'info') {
   quotaDiscoveryStatus.textContent = message;
 }
 
+function setQuotaMovementStatus(message, tone = 'info') {
+  if (!quotaMovementStatus) return;
+  quotaMovementStatus.className = `admin-status ${tone}`;
+  quotaMovementStatus.textContent = message;
+}
+
 function formatTimestamp(value) {
   return value ? new Date(value).toLocaleString() : 'Never';
+}
+
+function formatRunLabel(run) {
+  const captured = formatTimestamp(run.capturedAtUtc);
+  return `${captured} | ${run.analysisRunId} | rows ${run.rowCount ?? 0}`;
 }
 
 function formatDuration(ms) {
@@ -84,6 +110,9 @@ function renderIngestionStatusCard(status) {
   ingestLastSuccessValue.textContent = formatTimestamp(status?.lastSuccessUtc);
   ingestDurationValue.textContent = formatDuration(status?.lastDurationMs);
   ingestRowsValue.textContent = Number(status?.lastInsertedRows || 0).toLocaleString();
+  if (ingestScoreRowsValue) {
+    ingestScoreRowsValue.textContent = Number(summary.insertedScoreRows || 0).toLocaleString();
+  }
   ingestSubscriptionsValue.textContent = Number(summary.subscriptionCount || 0).toLocaleString();
   ingestRegionsValue.textContent = regions;
   ingestFamiliesValue.textContent = families;
@@ -431,6 +460,86 @@ function renderQuotaCandidates(candidates) {
   });
 }
 
+function renderQuotaPlan(planRows) {
+  if (!quotaPlanGridBody) {
+    return;
+  }
+
+  quotaPlanGridBody.innerHTML = '';
+  if (!planRows || planRows.length === 0) {
+    quotaPlanGridBody.innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 20px; color: #5d7085;">No move plan rows available for the latest captured candidate run.</td></tr>';
+    return;
+  }
+
+  planRows.forEach((row) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${row.region || 'n/a'}</td>
+      <td>${row.quotaName || 'n/a'}</td>
+      <td>${row.donorSubscriptionName || row.donorSubscriptionId || 'n/a'}</td>
+      <td>${row.recipientSubscriptionName || row.recipientSubscriptionId || 'n/a'}</td>
+      <td>${row.transferAmount ?? 0}</td>
+      <td>${row.recipientNeededQuota ?? 0}</td>
+      <td>${row.recipientAvailabilityState || 'n/a'}</td>
+      <td>${row.sourceAnalysisRunId || 'n/a'}</td>
+    `;
+    quotaPlanGridBody.appendChild(tr);
+  });
+}
+
+function renderQuotaSimulation(impactRows) {
+  if (!quotaSimulationGridBody) {
+    return;
+  }
+
+  quotaSimulationGridBody.innerHTML = '';
+  if (!impactRows || impactRows.length === 0) {
+    quotaSimulationGridBody.innerHTML = '<tr><td colspan="9" style="text-align: center; padding: 20px; color: #5d7085;">No simulation rows available. Build a move plan and run simulation for a captured analysis run.</td></tr>';
+    return;
+  }
+
+  impactRows.forEach((row) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${row.role || 'n/a'}</td>
+      <td>${row.subscriptionName || row.subscriptionId || 'n/a'}</td>
+      <td>${row.region || 'n/a'}</td>
+      <td>${row.quotaName || 'n/a'}</td>
+      <td>${row.quotaAvailableBefore ?? 0}</td>
+      <td>${row.quotaAvailableAfter ?? 0}</td>
+      <td>${row.delta ?? 0}</td>
+      <td>${row.safetyBuffer ?? 0}</td>
+      <td>${row.projectedState || 'n/a'}</td>
+    `;
+    quotaSimulationGridBody.appendChild(tr);
+  });
+}
+
+function renderQuotaRunOptions(runs) {
+  if (!quotaRunFilter) {
+    return;
+  }
+
+  quotaRunFilter.innerHTML = '';
+
+  if (!runs || runs.length === 0) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'No captured runs available';
+    quotaRunFilter.appendChild(option);
+    return;
+  }
+
+  runs.forEach((run) => {
+    const option = document.createElement('option');
+    option.value = run.analysisRunId;
+    option.textContent = formatRunLabel(run);
+    quotaRunFilter.appendChild(option);
+  });
+
+  quotaRunFilter.value = runs[0].analysisRunId;
+}
+
 function renderManagementGroupOptions(groups, preferredId) {
   if (!quotaManagementGroupFilter) {
     return;
@@ -563,6 +672,47 @@ async function loadQuotaCandidates() {
   }
 }
 
+async function loadQuotaCandidateRuns(showStatus = false) {
+  const managementGroupId = quotaManagementGroupFilter?.value || '';
+  const groupQuotaName = quotaGroupFilter?.value || 'all';
+
+  if (!quotaRunFilter) {
+    return;
+  }
+
+  if (!managementGroupId || groupQuotaName === 'all') {
+    quotaRunOptions = [];
+    renderQuotaRunOptions([]);
+    return;
+  }
+
+  try {
+    const query = new URLSearchParams({
+      managementGroupId,
+      groupQuotaName,
+      region: regionFilter.value || 'all',
+      family: familyFilter.value || 'all'
+    });
+    const response = await fetch(`/api/quota/candidate-runs?${query.toString()}`);
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || 'Failed to load captured candidate runs.');
+    }
+
+    quotaRunOptions = Array.isArray(payload.runs) ? payload.runs : [];
+    renderQuotaRunOptions(quotaRunOptions);
+    if (showStatus && quotaRunOptions.length > 0) {
+      setQuotaMovementStatus(`Loaded ${payload.runCount} captured analysis run(s) for ${groupQuotaName}.`, 'success');
+    }
+  } catch (error) {
+    quotaRunOptions = [];
+    renderQuotaRunOptions([]);
+    if (showStatus) {
+      setQuotaMovementStatus(error.message || 'Failed to load captured candidate runs.', 'error');
+    }
+  }
+}
+
 async function captureQuotaCandidateHistory() {
   const managementGroupId = quotaManagementGroupFilter?.value || '';
   const groupQuotaName = quotaGroupFilter?.value || 'all';
@@ -600,8 +750,114 @@ async function captureQuotaCandidateHistory() {
 
     renderQuotaCandidates(Array.isArray(payload.candidates) ? payload.candidates : []);
     setQuotaDiscoveryStatus(`Captured ${payload.insertedRows} candidate snapshot row(s) in analysis run ${payload.analysisRunId}.`, 'success');
+    await loadQuotaCandidateRuns(true);
   } catch (error) {
     setQuotaDiscoveryStatus(error.message || 'Failed to capture quota candidate history.', 'error');
+  }
+}
+
+async function loadQuotaMovePlan() {
+  const managementGroupId = quotaManagementGroupFilter?.value || '';
+  const groupQuotaName = quotaGroupFilter?.value || 'all';
+  const analysisRunId = quotaRunFilter?.value || '';
+
+  if (!managementGroupId) {
+    setQuotaMovementStatus('Select a management group before building a move plan.', 'warn');
+    renderQuotaPlan([]);
+    return;
+  }
+
+  if (groupQuotaName === 'all') {
+    setQuotaMovementStatus('Select a quota group before building a move plan.', 'warn');
+    renderQuotaPlan([]);
+    return;
+  }
+
+  if (!analysisRunId) {
+    setQuotaMovementStatus('Capture quota history first, then select an analysis run before building a move plan.', 'warn');
+    renderQuotaPlan([]);
+    return;
+  }
+
+  setQuotaMovementStatus(`Building move plan from captured analysis run ${analysisRunId}...`, 'info');
+
+  try {
+    const query = new URLSearchParams({
+      managementGroupId,
+      groupQuotaName,
+      analysisRunId,
+      region: regionFilter.value || 'all',
+      family: familyFilter.value || 'all'
+    });
+    const response = await fetch(`/api/quota/plan?${query.toString()}`);
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || 'Failed to build quota move plan.');
+    }
+
+    const planRows = Array.isArray(payload.planRows) ? payload.planRows : [];
+    renderQuotaPlan(planRows);
+    if (planRows.length === 0) {
+      setQuotaMovementStatus(`No move plan rows were produced from source run ${payload.sourceAnalysisRunId}. Captured candidates exist, but there is no matching donor/recipient pair under the current filters.`, 'warn');
+      return;
+    }
+
+    setQuotaMovementStatus(`Built ${payload.planRowCount} move row(s) from source run ${payload.sourceAnalysisRunId}. Planned transfer total: ${payload.totalPlannedQuota}. Unresolved recipients: ${payload.unresolvedRecipientCount}.`, 'success');
+  } catch (error) {
+    renderQuotaPlan([]);
+    setQuotaMovementStatus(error.message || 'Failed to build quota move plan.', 'error');
+  }
+}
+
+async function simulateQuotaImpact() {
+  const managementGroupId = quotaManagementGroupFilter?.value || '';
+  const groupQuotaName = quotaGroupFilter?.value || 'all';
+  const analysisRunId = quotaRunFilter?.value || '';
+
+  if (!managementGroupId) {
+    setQuotaMovementStatus('Select a management group before simulating impact.', 'warn');
+    renderQuotaSimulation([]);
+    return;
+  }
+
+  if (groupQuotaName === 'all') {
+    setQuotaMovementStatus('Select a quota group before simulating impact.', 'warn');
+    renderQuotaSimulation([]);
+    return;
+  }
+
+  if (!analysisRunId) {
+    setQuotaMovementStatus('Select a captured analysis run before simulating impact.', 'warn');
+    renderQuotaSimulation([]);
+    return;
+  }
+
+  setQuotaMovementStatus(`Simulating impact for analysis run ${analysisRunId}...`, 'info');
+
+  try {
+    const response = await fetch('/api/quota/simulate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        managementGroupId,
+        groupQuotaName,
+        analysisRunId,
+        region: regionFilter.value || 'all',
+        family: familyFilter.value || 'all'
+      })
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || 'Failed to simulate quota plan impact.');
+    }
+
+    renderQuotaSimulation(Array.isArray(payload.impactRows) ? payload.impactRows : []);
+    setQuotaMovementStatus(`Simulation completed for run ${payload.sourceAnalysisRunId}. Impacted rows: ${payload.impactedRowCount}. Recipients fully covered: ${payload.recipientResolvedCount}. Donors below buffer: ${payload.atRiskDonorCount}.`, 'success');
+  } catch (error) {
+    renderQuotaSimulation([]);
+    setQuotaMovementStatus(error.message || 'Failed to simulate quota plan impact.', 'error');
   }
 }
 
@@ -653,6 +909,146 @@ function renderFamilySummary(familyRows) {
     `;
     familySummaryGridBody.appendChild(tr);
   });
+}
+
+function renderCapacityScores(scoreRows) {
+  if (!capacityScoreGridBody) {
+    return;
+  }
+
+  capacityScoreGridBody.innerHTML = '';
+  if (!scoreRows || scoreRows.length === 0) {
+    if (capacityScoreEmpty) {
+      capacityScoreEmpty.style.display = 'block';
+    }
+    capacityScoreGridBody.innerHTML = '<tr><td colspan="14" style="text-align: center; padding: 20px; color: #5d7085;">No derived capacity scores available for the current filter scope.</td></tr>';
+    return;
+  }
+
+  if (capacityScoreEmpty) {
+    capacityScoreEmpty.style.display = 'none';
+  }
+
+  scoreRows.forEach((row) => {
+    const scoreClass = String(row.score || '').toUpperCase();
+    const liveScoreClass = String(row.livePlacementScore || '').toUpperCase();
+    const liveStatus = row.livePlacementAvailable == null
+      ? 'Not checked'
+      : (row.livePlacementAvailable ? 'Available' : (row.livePlacementRestricted ? 'Restricted' : 'Unavailable'));
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${row.region || 'n/a'}</td>
+      <td>${row.sku || 'n/a'}</td>
+      <td>${row.family || 'n/a'}</td>
+      <td><span class="badge ${scoreClass}">${row.score || 'n/a'}</span></td>
+      <td><span class="badge ${liveScoreClass}">${row.livePlacementScore || 'N/A'}</span></td>
+      <td>${liveStatus}</td>
+      <td>${row.liveCheckedAtUtc ? formatTimestamp(row.liveCheckedAtUtc) : 'Not checked'}</td>
+      <td>${row.subscriptionCount ?? 0}</td>
+      <td>${row.okRows ?? 0}</td>
+      <td>${row.limitedRows ?? 0}</td>
+      <td>${row.constrainedRows ?? 0}</td>
+      <td>${row.totalQuotaAvailable ?? 0}</td>
+      <td>${row.utilizationPct ?? 0}%</td>
+      <td>${row.reason || 'n/a'}</td>
+    `;
+    capacityScoreGridBody.appendChild(tr);
+  });
+}
+
+function renderCapacityScoreHistory(historyRows) {
+  if (!capacityScoreHistoryGridBody) {
+    return;
+  }
+
+  capacityScoreHistoryGridBody.innerHTML = '';
+  if (!historyRows || historyRows.length === 0) {
+    if (capacityScoreHistoryEmpty) {
+      capacityScoreHistoryEmpty.style.display = 'block';
+    }
+    capacityScoreHistoryGridBody.innerHTML = '<tr><td colspan="9" style="text-align: center; padding: 20px; color: #5d7085;">No persisted capacity score history is available for this filter window.</td></tr>';
+    return;
+  }
+
+  if (capacityScoreHistoryEmpty) {
+    capacityScoreHistoryEmpty.style.display = 'none';
+  }
+
+  historyRows.forEach((row) => {
+    const scoreClass = String(row.score || '').toUpperCase();
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${formatTimestamp(row.capturedAtUtc)}</td>
+      <td>${row.region || 'n/a'}</td>
+      <td>${row.sku || 'n/a'}</td>
+      <td>${row.family || 'n/a'}</td>
+      <td><span class="badge ${scoreClass}">${row.score || 'n/a'}</span></td>
+      <td>${row.subscriptionCount ?? 0}</td>
+      <td>${row.totalQuotaAvailable ?? 0}</td>
+      <td>${row.utilizationPct ?? 0}%</td>
+      <td>${row.reason || 'n/a'}</td>
+    `;
+    capacityScoreHistoryGridBody.appendChild(tr);
+  });
+}
+
+async function loadCapacityScoreHistory() {
+  const baseFilters = getQueryFilters();
+  const query = new URLSearchParams({
+    days: capacityScoreHistoryDays?.value || '30',
+    region: baseFilters.region,
+    family: baseFilters.family
+  });
+
+  try {
+    const response = await fetch(`/api/capacity/scores/history?${query.toString()}`);
+    const payload = response.ok ? await response.json() : { rows: [] };
+    renderCapacityScoreHistory(Array.isArray(payload.rows) ? payload.rows : []);
+  } catch (_) {
+    renderCapacityScoreHistory([]);
+  }
+}
+
+async function refreshLivePlacementScores() {
+  if (!refreshLivePlacementBtn) {
+    return;
+  }
+
+  const filters = getQueryFilters();
+  const desiredCount = Math.max(1, Math.min(Number(capacityScoreDesiredCount?.value || 1), 1000));
+  setButtonBusy(refreshLivePlacementBtn, true, 'Refreshing...');
+  if (capacityScoreLiveStatus) {
+    capacityScoreLiveStatus.textContent = 'Refreshing live placement scores from Get-AzVMAvailability...';
+  }
+
+  try {
+    const response = await fetch('/api/capacity/scores/live', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        ...filters,
+        desiredCount
+      })
+    });
+
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.detail || payload.error || 'Failed to refresh live placement scores.');
+    }
+
+    renderCapacityScores(Array.isArray(payload.rows) ? payload.rows : []);
+    if (capacityScoreLiveStatus) {
+      capacityScoreLiveStatus.textContent = `Live placement refreshed at ${formatTimestamp(payload.liveCheckedAtUtc)} via ${payload.source}.`;
+    }
+  } catch (error) {
+    if (capacityScoreLiveStatus) {
+      capacityScoreLiveStatus.textContent = error.message || 'Failed to refresh live placement scores.';
+    }
+  } finally {
+    setButtonBusy(refreshLivePlacementBtn, false);
+  }
 }
 
 function renderBarChart(host, items) {
@@ -716,25 +1112,41 @@ async function loadAnalytics() {
   const baseFilters = getQueryFilters();
   const base = new URLSearchParams(baseFilters);
   const trendQuery = new URLSearchParams({ ...baseFilters, days: '7' });
+  const scoreHistoryQuery = new URLSearchParams({
+    days: capacityScoreHistoryDays?.value || '30',
+    region: baseFilters.region,
+    family: baseFilters.family
+  });
 
   try {
-    const [subscriptionResponse, trendResponse, familyResponse] = await Promise.all([
+    const [subscriptionResponse, trendResponse, familyResponse, scoreResponse, scoreHistoryResponse] = await Promise.all([
       fetch(`/api/capacity/subscriptions?${base.toString()}`),
       fetch(`/api/capacity/trends?${trendQuery.toString()}`),
-      fetch(`/api/capacity/families?${base.toString()}`)
+      fetch(`/api/capacity/families?${base.toString()}`),
+      fetch(`/api/capacity/scores?${base.toString()}`),
+      fetch(`/api/capacity/scores/history?${scoreHistoryQuery.toString()}`)
     ]);
 
     const subscriptionPayload = subscriptionResponse.ok ? await subscriptionResponse.json() : { rows: [] };
     const trendPayload = trendResponse.ok ? await trendResponse.json() : { rows: [] };
     const familyPayload = familyResponse.ok ? await familyResponse.json() : { rows: [] };
+    const scorePayload = scoreResponse.ok ? await scoreResponse.json() : { rows: [] };
+    const scoreHistoryPayload = scoreHistoryResponse.ok ? await scoreHistoryResponse.json() : { rows: [] };
 
     renderSubscriptionSummary(Array.isArray(subscriptionPayload.rows) ? subscriptionPayload.rows : []);
     renderTrends(Array.isArray(trendPayload.rows) ? trendPayload.rows : []);
     renderFamilySummary(Array.isArray(familyPayload.rows) ? familyPayload.rows : []);
+    renderCapacityScores(Array.isArray(scorePayload.rows) ? scorePayload.rows : []);
+    renderCapacityScoreHistory(Array.isArray(scoreHistoryPayload.rows) ? scoreHistoryPayload.rows : []);
+    if (capacityScoreLiveStatus) {
+      capacityScoreLiveStatus.textContent = 'Live placement has not been refreshed in this session.';
+    }
   } catch (_) {
     renderSubscriptionSummary([]);
     renderTrends([]);
     renderFamilySummary([]);
+    renderCapacityScores([]);
+    renderCapacityScoreHistory([]);
   }
 }
 
@@ -835,12 +1247,14 @@ function wireButtons() {
   document.getElementById('refreshBtn').addEventListener('click', loadCapacityRows);
   document.getElementById('exportBtn').addEventListener('click', notYet('Export CSV'));
   document.getElementById('discoverBtn').addEventListener('click', loadQuotaGroups);
-  document.getElementById('planBtn').addEventListener('click', notYet('Build move plan'));
+  document.getElementById('planBtn').addEventListener('click', loadQuotaMovePlan);
   document.getElementById('candidateBtn').addEventListener('click', loadQuotaCandidates);
   document.getElementById('historyBtn').addEventListener('click', captureQuotaCandidateHistory);
   document.getElementById('refreshAnalyticsBtn').addEventListener('click', loadAnalytics);
-  document.getElementById('simulateBtn').addEventListener('click', notYet('Simulate impact'));
+  document.getElementById('simulateBtn').addEventListener('click', simulateQuotaImpact);
   triggerIngestBtn.addEventListener('click', triggerCapacityIngest);
+  refreshLivePlacementBtn?.addEventListener('click', refreshLivePlacementScores);
+  refreshScoreHistoryBtn?.addEventListener('click', loadCapacityScoreHistory);
   document.getElementById('applyBtn').addEventListener('click', () => {
     const ok = confirm('Apply quota movements is a write operation. Continue?');
     if (ok) alert('Apply request queued. Next step: backend orchestration + approval flow.');
@@ -861,14 +1275,30 @@ function wireButtons() {
 quotaManagementGroupFilter?.addEventListener('change', () => {
   quotaGroupOptions = [];
   renderQuotaGroupOptions([]);
+  renderQuotaRunOptions([]);
   renderQuotaGroups([]);
   renderQuotaCandidates([]);
+  renderQuotaPlan([]);
+  renderQuotaSimulation([]);
   setQuotaDiscoveryStatus('Management group changed. Run discovery to load quota groups for the new scope.', 'info');
+  setQuotaMovementStatus('Management group changed. Select a quota group and captured analysis run before planning or simulation.', 'info');
 });
 
 quotaGroupFilter?.addEventListener('change', () => {
   renderQuotaGroups(quotaGroupOptions);
   renderQuotaCandidates([]);
+  renderQuotaPlan([]);
+  renderQuotaSimulation([]);
+  loadQuotaCandidateRuns(true);
+  setQuotaMovementStatus('Quota group changed. Build Move Plan and Simulate Impact use the selected captured analysis run.', 'info');
+});
+
+quotaRunFilter?.addEventListener('change', () => {
+  renderQuotaPlan([]);
+  renderQuotaSimulation([]);
+  if (quotaRunFilter.value) {
+    setQuotaMovementStatus(`Selected analysis run ${quotaRunFilter.value}. Build Move Plan or Simulate Impact to continue.`, 'info');
+  }
 });
 
 regionPresetFilter.addEventListener('change', () => {
@@ -894,6 +1324,8 @@ availabilityFilter.addEventListener('change', () => {
   renderGrid();
   loadAnalytics();
 });
+
+capacityScoreHistoryDays?.addEventListener('change', loadCapacityScoreHistory);
 
 wireTabs();
 wireViewTabs();

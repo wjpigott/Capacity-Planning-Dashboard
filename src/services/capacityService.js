@@ -249,6 +249,115 @@ function toFamilyLabel(familyName) {
   return (simple || 'Unknown').toUpperCase();
 }
 
+function getCapacityScoreLabel(summary) {
+  if (summary.constrainedRows > 0 && summary.okRows === 0 && summary.totalQuotaAvailable <= 0) {
+    return 'Low';
+  }
+
+  if (summary.constrainedRows === 0 && summary.limitedRows === 0 && summary.totalQuotaAvailable > 0) {
+    return 'High';
+  }
+
+  if (summary.okRows > 0 || summary.totalQuotaAvailable > 0 || summary.limitedRows > 0) {
+    return 'Medium';
+  }
+
+  return 'Low';
+}
+
+function getCapacityScoreReason(summary) {
+  if (summary.score === 'High') {
+    return 'All in-scope rows are OK with positive available quota.';
+  }
+
+  if (summary.score === 'Medium') {
+    if (summary.constrainedRows > 0) {
+      return 'Mixed signal: at least one constrained row exists, but some capacity or quota remains.';
+    }
+
+    return 'Usable capacity remains, but at least one row is limited or quota headroom is narrow.';
+  }
+
+  return 'No positive quota headroom remains and constrained rows dominate the in-scope snapshot.';
+}
+
+function deriveCapacityScoreRows(rows) {
+  const bySkuRegion = new Map();
+
+  for (const row of rows) {
+    const key = [row.region, row.sku].join('|');
+    if (!bySkuRegion.has(key)) {
+      bySkuRegion.set(key, {
+        region: row.region,
+        sku: row.sku,
+        family: row.family,
+        subscriptions: new Set(),
+        okRows: 0,
+        limitedRows: 0,
+        constrainedRows: 0,
+        totalQuotaAvailable: 0,
+        quotaLimitTotal: 0,
+        quotaCurrentTotal: 0,
+        latestCapturedAtUtc: row.capturedAtUtc || null
+      });
+    }
+
+    const entry = bySkuRegion.get(key);
+    entry.subscriptions.add(row.subscriptionId || row.subscriptionKey || 'legacy-data');
+    entry.totalQuotaAvailable += Math.max(0, Number(row.quotaLimit || 0) - Number(row.quotaCurrent || 0));
+    entry.quotaLimitTotal += Number(row.quotaLimit || 0);
+    entry.quotaCurrentTotal += Number(row.quotaCurrent || 0);
+
+    if (row.availability === 'OK') {
+      entry.okRows += 1;
+    } else if (row.availability === 'LIMITED') {
+      entry.limitedRows += 1;
+    } else {
+      entry.constrainedRows += 1;
+    }
+
+    if (row.capturedAtUtc && (!entry.latestCapturedAtUtc || new Date(row.capturedAtUtc) > new Date(entry.latestCapturedAtUtc))) {
+      entry.latestCapturedAtUtc = row.capturedAtUtc;
+    }
+  }
+
+  return [...bySkuRegion.values()]
+    .map((entry) => {
+      const score = getCapacityScoreLabel(entry);
+
+      return {
+        region: entry.region,
+        sku: entry.sku,
+        family: entry.family,
+        subscriptionCount: entry.subscriptions.size,
+        okRows: entry.okRows,
+        limitedRows: entry.limitedRows,
+        constrainedRows: entry.constrainedRows,
+        totalQuotaAvailable: entry.totalQuotaAvailable,
+        utilizationPct: entry.quotaLimitTotal > 0 ? Math.round((entry.quotaCurrentTotal / entry.quotaLimitTotal) * 100) : 0,
+        score,
+        reason: getCapacityScoreReason({ ...entry, score }),
+        latestCapturedAtUtc: entry.latestCapturedAtUtc
+      };
+    })
+    .sort((left, right) => {
+      const rank = { High: 0, Medium: 1, Low: 2 };
+      if (rank[left.score] !== rank[right.score]) {
+        return rank[left.score] - rank[right.score];
+      }
+
+      if (right.totalQuotaAvailable !== left.totalQuotaAvailable) {
+        return right.totalQuotaAvailable - left.totalQuotaAvailable;
+      }
+
+      if (left.region !== right.region) {
+        return left.region.localeCompare(right.region);
+      }
+
+      return left.sku.localeCompare(right.sku);
+    });
+}
+
 async function getFamilySummary(filters) {
   const rows = await getCapacityRows(filters);
   const byFamily = new Map();
@@ -312,10 +421,17 @@ async function getFamilySummary(filters) {
     .sort((a, b) => a.family.localeCompare(b.family));
 }
 
+async function getCapacityScoreSummary(filters) {
+  const rows = await getCapacityRows(filters);
+  return deriveCapacityScoreRows(rows);
+}
+
 module.exports = {
   getCapacityRows,
   getSubscriptions,
   getSubscriptionSummary,
   getCapacityTrends,
-  getFamilySummary
+  getFamilySummary,
+  deriveCapacityScoreRows,
+  getCapacityScoreSummary
 };

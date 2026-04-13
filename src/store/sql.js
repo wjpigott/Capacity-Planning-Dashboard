@@ -99,6 +99,167 @@ async function insertCapacitySnapshots(rows) {
   }
 }
 
+async function ensureCapacityScoreSnapshotSchema(pool) {
+  const createScript = `
+    IF OBJECT_ID('dbo.CapacityScoreSnapshot', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.CapacityScoreSnapshot (
+        scoreSnapshotId BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        capturedAtUtc DATETIME2 NOT NULL,
+        region NVARCHAR(64) NOT NULL,
+        skuName NVARCHAR(128) NOT NULL,
+        skuFamily NVARCHAR(128) NOT NULL,
+        subscriptionCount INT NOT NULL,
+        okRows INT NOT NULL,
+        limitedRows INT NOT NULL,
+        constrainedRows INT NOT NULL,
+        totalQuotaAvailable INT NOT NULL,
+        utilizationPct INT NOT NULL,
+        score NVARCHAR(16) NOT NULL,
+        reason NVARCHAR(512) NOT NULL,
+        latestSourceCapturedAtUtc DATETIME2 NULL
+      )
+    END;
+  `;
+
+  const createIndexScript = `
+    IF NOT EXISTS (
+      SELECT 1
+      FROM sys.indexes
+      WHERE name = 'IX_CapacityScoreSnapshot_CapturedRegionSku'
+        AND object_id = OBJECT_ID('dbo.CapacityScoreSnapshot')
+    )
+    BEGIN
+      CREATE INDEX IX_CapacityScoreSnapshot_CapturedRegionSku
+        ON dbo.CapacityScoreSnapshot (capturedAtUtc DESC, region, skuName);
+    END;
+  `;
+
+  await pool.request().query(createScript);
+  await pool.request().query(createIndexScript);
+}
+
+async function insertCapacityScoreSnapshots(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return 0;
+  }
+
+  const pool = await getSqlPool();
+  if (!pool) {
+    throw new Error('SQL connection is not configured for capacity score history.');
+  }
+
+  await ensureCapacityScoreSnapshotSchema(pool);
+
+  const transaction = new sql.Transaction(pool);
+  await transaction.begin();
+
+  try {
+    for (const row of rows) {
+      const request = new sql.Request(transaction);
+      request.input('capturedAtUtc', sql.DateTime2, row.capturedAtUtc || new Date());
+      request.input('region', sql.NVarChar(64), row.region);
+      request.input('skuName', sql.NVarChar(128), row.sku);
+      request.input('skuFamily', sql.NVarChar(128), row.family);
+      request.input('subscriptionCount', sql.Int, row.subscriptionCount ?? 0);
+      request.input('okRows', sql.Int, row.okRows ?? 0);
+      request.input('limitedRows', sql.Int, row.limitedRows ?? 0);
+      request.input('constrainedRows', sql.Int, row.constrainedRows ?? 0);
+      request.input('totalQuotaAvailable', sql.Int, row.totalQuotaAvailable ?? 0);
+      request.input('utilizationPct', sql.Int, row.utilizationPct ?? 0);
+      request.input('score', sql.NVarChar(16), row.score || 'Unknown');
+      request.input('reason', sql.NVarChar(512), row.reason || 'No reason recorded.');
+      request.input('latestSourceCapturedAtUtc', sql.DateTime2, row.latestCapturedAtUtc ?? null);
+
+      await request.query(`
+        INSERT INTO dbo.CapacityScoreSnapshot
+        (capturedAtUtc, region, skuName, skuFamily, subscriptionCount, okRows, limitedRows, constrainedRows, totalQuotaAvailable, utilizationPct, score, reason, latestSourceCapturedAtUtc)
+        VALUES
+        (@capturedAtUtc, @region, @skuName, @skuFamily, @subscriptionCount, @okRows, @limitedRows, @constrainedRows, @totalQuotaAvailable, @utilizationPct, @score, @reason, @latestSourceCapturedAtUtc)
+      `);
+    }
+
+    await transaction.commit();
+    return rows.length;
+  } catch (err) {
+    await transaction.rollback();
+    throw err;
+  }
+}
+
+async function getCapacityScoreSnapshotHistory(filters = {}) {
+  const pool = await getSqlPool();
+  if (!pool) {
+    return [];
+  }
+
+  await ensureCapacityScoreSnapshotSchema(pool);
+
+  const days = Math.max(1, Math.min(Number(filters.days || 30), 365));
+  const request = pool.request();
+  request.input('daysBack', sql.Int, days);
+
+  let where = `
+    WHERE capturedAtUtc >= DATEADD(day, -@daysBack, SYSUTCDATETIME())
+  `;
+
+  if (filters.region && filters.region !== 'all') {
+    where += ' AND region = @region';
+    request.input('region', sql.NVarChar(64), filters.region);
+  }
+
+  if (filters.family && filters.family !== 'all') {
+    where += ' AND skuFamily = @family';
+    request.input('family', sql.NVarChar(128), filters.family);
+  }
+
+  if (filters.score && filters.score !== 'all') {
+    where += ' AND score = @score';
+    request.input('score', sql.NVarChar(16), filters.score);
+  }
+
+  if (filters.sku && filters.sku !== 'all') {
+    where += ' AND skuName = @sku';
+    request.input('sku', sql.NVarChar(128), filters.sku);
+  }
+
+  const result = await request.query(`
+    SELECT
+      capturedAtUtc,
+      region,
+      skuName,
+      skuFamily,
+      subscriptionCount,
+      okRows,
+      limitedRows,
+      constrainedRows,
+      totalQuotaAvailable,
+      utilizationPct,
+      score,
+      reason,
+      latestSourceCapturedAtUtc
+    FROM dbo.CapacityScoreSnapshot
+    ${where}
+    ORDER BY capturedAtUtc DESC, region ASC, skuName ASC
+  `);
+
+  return (result.recordset || []).map((row) => ({
+    capturedAtUtc: row.capturedAtUtc,
+    region: row.region,
+    sku: row.skuName,
+    family: row.skuFamily,
+    subscriptionCount: Number(row.subscriptionCount || 0),
+    okRows: Number(row.okRows || 0),
+    limitedRows: Number(row.limitedRows || 0),
+    constrainedRows: Number(row.constrainedRows || 0),
+    totalQuotaAvailable: Number(row.totalQuotaAvailable || 0),
+    utilizationPct: Number(row.utilizationPct || 0),
+    score: row.score,
+    reason: row.reason,
+    latestCapturedAtUtc: row.latestSourceCapturedAtUtc
+  }));
+}
+
 async function ensureQuotaCandidateSnapshotSchema(pool) {
   const createScript = `
     IF OBJECT_ID('dbo.QuotaCandidateSnapshot', 'U') IS NULL
@@ -221,11 +382,132 @@ async function insertQuotaCandidateSnapshots(rows) {
   }
 }
 
+async function getQuotaCandidateSnapshots(filters = {}) {
+  const pool = await getSqlPool();
+  if (!pool) {
+    throw new Error('SQL connection is not configured for quota planning.');
+  }
+
+  const managementGroupId = filters.managementGroupId;
+  const groupQuotaName = filters.groupQuotaName;
+  const region = filters.region || 'all';
+  const quotaName = filters.quotaName || filters.family || 'all';
+  const analysisRunId = filters.analysisRunId || null;
+
+  if (!managementGroupId) {
+    throw new Error('managementGroupId is required.');
+  }
+
+  if (!groupQuotaName || groupQuotaName === 'all') {
+    throw new Error('groupQuotaName is required.');
+  }
+
+  await ensureQuotaCandidateSnapshotSchema(pool);
+
+  const request = pool.request();
+  request.input('managementGroupId', sql.NVarChar(128), managementGroupId);
+  request.input('groupQuotaName', sql.NVarChar(128), groupQuotaName);
+  request.input('region', sql.NVarChar(64), region);
+  request.input('quotaName', sql.NVarChar(128), quotaName);
+  request.input('analysisRunId', sql.UniqueIdentifier, analysisRunId);
+
+  const result = await request.query(`
+    WITH SelectedRun AS (
+      SELECT TOP (1)
+        analysisRunId,
+        capturedAtUtc
+      FROM dbo.QuotaCandidateSnapshot
+      WHERE managementGroupId = @managementGroupId
+        AND groupQuotaName = @groupQuotaName
+        AND (@analysisRunId IS NULL OR analysisRunId = @analysisRunId)
+        AND (@region = 'all' OR region = @region)
+        AND (@quotaName = 'all' OR quotaName = @quotaName)
+      GROUP BY analysisRunId, capturedAtUtc
+      ORDER BY capturedAtUtc DESC, analysisRunId DESC
+    )
+    SELECT
+      qcs.analysisRunId,
+      qcs.capturedAtUtc,
+      qcs.sourceCapturedAtUtc,
+      qcs.managementGroupId,
+      qcs.groupQuotaName,
+      qcs.subscriptionId,
+      qcs.subscriptionName,
+      qcs.region,
+      qcs.quotaName,
+      qcs.availabilityState,
+      qcs.quotaCurrent,
+      qcs.quotaLimit,
+      qcs.quotaAvailable,
+      qcs.suggestedMovable,
+      qcs.safetyBuffer,
+      qcs.subscriptionHash,
+      qcs.candidateStatus
+    FROM dbo.QuotaCandidateSnapshot qcs
+    INNER JOIN SelectedRun selectedRun
+      ON selectedRun.analysisRunId = qcs.analysisRunId
+    WHERE (@region = 'all' OR qcs.region = @region)
+      AND (@quotaName = 'all' OR qcs.quotaName = @quotaName)
+    ORDER BY qcs.region, qcs.quotaName, qcs.suggestedMovable DESC, qcs.subscriptionName
+  `);
+
+  return result.recordset || [];
+}
+
+async function listQuotaCandidateRuns(filters = {}) {
+  const pool = await getSqlPool();
+  if (!pool) {
+    throw new Error('SQL connection is not configured for quota planning.');
+  }
+
+  const managementGroupId = filters.managementGroupId;
+  const groupQuotaName = filters.groupQuotaName;
+  const region = filters.region || 'all';
+  const quotaName = filters.quotaName || filters.family || 'all';
+
+  if (!managementGroupId) {
+    throw new Error('managementGroupId is required.');
+  }
+
+  if (!groupQuotaName || groupQuotaName === 'all') {
+    throw new Error('groupQuotaName is required.');
+  }
+
+  await ensureQuotaCandidateSnapshotSchema(pool);
+
+  const request = pool.request();
+  request.input('managementGroupId', sql.NVarChar(128), managementGroupId);
+  request.input('groupQuotaName', sql.NVarChar(128), groupQuotaName);
+  request.input('region', sql.NVarChar(64), region);
+  request.input('quotaName', sql.NVarChar(128), quotaName);
+
+  const result = await request.query(`
+    SELECT
+      analysisRunId,
+      capturedAtUtc,
+      MAX(sourceCapturedAtUtc) AS latestSourceCapturedAtUtc,
+      COUNT(*) AS rowCount,
+      COUNT(DISTINCT subscriptionId) AS subscriptionCount,
+      SUM(CASE WHEN suggestedMovable > 0 THEN 1 ELSE 0 END) AS movableCandidateCount
+    FROM dbo.QuotaCandidateSnapshot
+    WHERE managementGroupId = @managementGroupId
+      AND groupQuotaName = @groupQuotaName
+      AND (@region = 'all' OR region = @region)
+      AND (@quotaName = 'all' OR quotaName = @quotaName)
+    GROUP BY analysisRunId, capturedAtUtc
+    ORDER BY capturedAtUtc DESC, analysisRunId DESC
+  `);
+
+  return result.recordset || [];
+}
+
 async function ensurePhase3Schema() {
   const pool = await getSqlPool();
   if (!pool) {
     throw new Error('SQL connection is not configured.');
   }
+
+  await ensureCapacityScoreSnapshotSchema(pool);
 
   const alterScript = `
     IF COL_LENGTH('dbo.CapacitySnapshot', 'subscriptionId') IS NULL
@@ -301,4 +583,13 @@ async function ensurePhase3Schema() {
   return { ok: true };
 }
 
-module.exports = { getSqlPool, insertCapacitySnapshots, insertQuotaCandidateSnapshots, ensurePhase3Schema };
+module.exports = {
+  getSqlPool,
+  insertCapacitySnapshots,
+  insertCapacityScoreSnapshots,
+  insertQuotaCandidateSnapshots,
+  getCapacityScoreSnapshotHistory,
+  getQuotaCandidateSnapshots,
+  listQuotaCandidateRuns,
+  ensurePhase3Schema
+};

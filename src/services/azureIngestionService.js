@@ -1,7 +1,8 @@
 const { DefaultAzureCredential } = require('@azure/identity');
 const crypto = require('crypto');
 const { getRegionsForPreset } = require('../config/regionPresets');
-const { insertCapacitySnapshots } = require('../store/sql');
+const { deriveCapacityScoreRows } = require('./capacityService');
+const { insertCapacitySnapshots, insertCapacityScoreSnapshots } = require('../store/sql');
 
 const ARM_SCOPE = 'https://management.azure.com/.default';
 const ARM_BASE = 'https://management.azure.com';
@@ -326,6 +327,12 @@ async function runCapacityIngestion(options = {}) {
     }
 
     const insertedRows = await insertCapacitySnapshots(rows);
+    const scoreRows = deriveCapacityScoreRows(rows).map((row) => ({
+      ...row,
+      capturedAtUtc,
+      latestCapturedAtUtc: row.latestCapturedAtUtc || capturedAtUtc
+    }));
+    const insertedScoreRows = await insertCapacityScoreSnapshots(scoreRows);
     const durationMs = Date.now() - started;
 
     ingestStatus.lastSuccessUtc = new Date().toISOString();
@@ -336,7 +343,8 @@ async function runCapacityIngestion(options = {}) {
       subscriptionKeys: [...new Set(rows.map((r) => r.subscriptionKey))],
       regions,
       familyFilters,
-      insertedRows
+      insertedRows,
+      insertedScoreRows
     };
 
     return ingestStatus.lastSummary;

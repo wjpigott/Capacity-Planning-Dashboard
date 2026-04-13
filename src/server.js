@@ -8,16 +8,19 @@ const {
   getSubscriptions,
   getSubscriptionSummary,
   getCapacityTrends,
-  getFamilySummary
+  getFamilySummary,
+  getCapacityScoreSummary
 } = require('./services/capacityService');
+const { getLivePlacementScoreRows } = require('./services/livePlacementService');
 const { getQuotaCandidates, captureQuotaCandidateSnapshots } = require('./services/quotaCandidateService');
+const { buildQuotaMovePlan, getQuotaCandidateRunHistory, simulateQuotaMovePlan } = require('./services/quotaPlanService');
 const {
   runCapacityIngestion,
   getIngestionStatus,
   startIngestionScheduler
 } = require('./services/azureIngestionService');
 const { listManagementGroups, listQuotaGroups } = require('./services/quotaDiscoveryService');
-const { ensurePhase3Schema } = require('./store/sql');
+const { ensurePhase3Schema, getCapacityScoreSnapshotHistory } = require('./store/sql');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -197,6 +200,53 @@ app.post('/api/quota/candidates/capture', requireAdminRole, async (req, res) => 
   }
 });
 
+app.get('/api/quota/candidate-runs', requireAdminRole, async (req, res) => {
+  try {
+    const result = await getQuotaCandidateRunHistory({
+      managementGroupId: req.query.managementGroupId,
+      groupQuotaName: req.query.groupQuotaName,
+      region: req.query.region,
+      family: req.query.family
+    });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    const status = err.message.includes('required') ? 400 : 500;
+    res.status(status).json({ ok: false, error: err.message, runs: [] });
+  }
+});
+
+app.get('/api/quota/plan', requireAdminRole, async (req, res) => {
+  try {
+    const result = await buildQuotaMovePlan({
+      managementGroupId: req.query.managementGroupId,
+      groupQuotaName: req.query.groupQuotaName,
+      analysisRunId: req.query.analysisRunId,
+      region: req.query.region,
+      family: req.query.family
+    });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    const status = err.message.includes('required') || err.message.includes('Run Capture History first') ? 400 : 500;
+    res.status(status).json({ ok: false, error: err.message, planRows: [] });
+  }
+});
+
+app.post('/api/quota/simulate', requireAdminRole, async (req, res) => {
+  try {
+    const result = await simulateQuotaMovePlan({
+      managementGroupId: req.body?.managementGroupId,
+      groupQuotaName: req.body?.groupQuotaName,
+      analysisRunId: req.body?.analysisRunId,
+      region: req.body?.region,
+      family: req.body?.family
+    });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    const status = err.message.includes('required') || err.message.includes('Run Capture History first') ? 400 : 500;
+    res.status(status).json({ ok: false, error: err.message, impactRows: [] });
+  }
+});
+
 app.get('/api/subscriptions', async (req, res) => {
   try {
     const rows = await getSubscriptions({
@@ -252,6 +302,53 @@ app.get('/api/capacity/families', async (req, res) => {
     res.json({ rows });
   } catch (err) {
     res.status(500).json({ error: 'Failed to retrieve family summary', detail: err.message });
+  }
+});
+
+app.get('/api/capacity/scores', async (req, res) => {
+  try {
+    const rows = await getCapacityScoreSummary({
+      regionPreset: req.query.regionPreset,
+      subscriptionIds: req.query.subscriptionIds,
+      region: req.query.region,
+      family: req.query.family,
+      availability: req.query.availability
+    });
+    res.json({ rows });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve capacity score summary', detail: err.message });
+  }
+});
+
+app.get('/api/capacity/scores/history', async (req, res) => {
+  try {
+    const rows = await getCapacityScoreSnapshotHistory({
+      days: req.query.days,
+      region: req.query.region,
+      family: req.query.family,
+      sku: req.query.sku,
+      score: req.query.score
+    });
+    res.json({ rows });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve capacity score history', detail: err.message });
+  }
+});
+
+app.post('/api/capacity/scores/live', async (req, res) => {
+  try {
+    const result = await getLivePlacementScoreRows({
+      regionPreset: req.body?.regionPreset,
+      subscriptionIds: req.body?.subscriptionIds,
+      region: req.body?.region,
+      family: req.body?.family,
+      availability: req.body?.availability,
+      desiredCount: req.body?.desiredCount
+    });
+    res.json(result);
+  } catch (err) {
+    const status = err.message.includes('not found') || err.message.includes('not configured') ? 503 : 500;
+    res.status(status).json({ error: 'Failed to retrieve live placement scores', detail: err.message, rows: [] });
   }
 });
 

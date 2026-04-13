@@ -10,6 +10,10 @@ This dashboard should call backend APIs only. Do not expose ARM credentials, sub
 - `GET /api/quota/candidates?managementGroupId={mgId}&groupQuotaName={quotaGroup}&region={region}`
   - Returns read-only candidate rows with subscription, region, family, quotaAvailable, safetyBuffer, suggestedMovable, and candidateStatus for the selected quota group scope
 
+- `POST /api/quota/candidates/capture`
+  - Body: managementGroupId, groupQuotaName, regionPreset, region, family
+  - Persists the current candidate run into `QuotaCandidateSnapshot` with analysisRunId, capturedAtUtc, sourceCapturedAtUtc, and scope metadata
+
 - `GET /api/quota/groups`
   - Returns accessible group quotas for the configured management group, including: managementGroupId, groupQuotaName, displayName, groupType, provisioningState, subscriptionCount, subscriptionIds
 

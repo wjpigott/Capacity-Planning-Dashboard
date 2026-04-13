@@ -299,16 +299,26 @@ Purpose:
 #### `dbo.QuotaCandidateSnapshot` (planned quota movement analytics)
 
 - `candidateId` `BIGINT IDENTITY` (PK)
+- `analysisRunId` `UNIQUEIDENTIFIER`
 - `capturedAtUtc` `DATETIME2`
+- `sourceCapturedAtUtc` `DATETIME2`
+- `managementGroupId` `NVARCHAR(128)`
+- `groupQuotaName` `NVARCHAR(128)`
+- `subscriptionId` `NVARCHAR(64)`
+- `subscriptionName` `NVARCHAR(256)`
 - `region` `NVARCHAR(64)`
 - `quotaName` `NVARCHAR(128)`
+- `availabilityState` `NVARCHAR(32)`
+- `quotaCurrent` `INT`
+- `quotaLimit` `INT`
+- `quotaAvailable` `INT`
 - `suggestedMovable` `INT`
 - `safetyBuffer` `INT`
 - `subscriptionHash` `NVARCHAR(128)`
 - `candidateStatus` `NVARCHAR(32)`
 
 Status:
-- Table exists in schema, but active API writers/readers are not yet implemented in this phase.
+- Table exists in schema and is now written by the Admin `Capture History` flow for read-only candidate analysis runs.
 
 #### `dbo.QuotaApplyRequestLog` (planned apply audit)
 
@@ -374,10 +384,11 @@ Current API state:
 - `GET /api/quota/groups` lists live GroupQuota resources for `QUOTA_MANAGEMENT_GROUP_ID` and includes associated subscription IDs.
 - `GET /api/quota/management-groups` lists accessible management groups so the Admin UI can select the discovery scope before loading quota groups.
 - `GET /api/quota/candidates` generates read-only quota candidate rows for the selected management group and quota group using current capacity data.
+- `POST /api/quota/candidates/capture` persists the current candidate run into `dbo.QuotaCandidateSnapshot` with run metadata and source timestamps.
 
 Planned data/API direction:
 - Discover group quotas from Microsoft.Quota APIs.
-- Persist candidate analytics into `dbo.QuotaCandidateSnapshot`.
+- Extend candidate analytics with configurable thresholds and report views over captured runs.
 
 #### Quota Movements (Admin page)
 

@@ -89,7 +89,7 @@ async function getCapacityRows(filters) {
 
   const request = pool.request();
   let query = `
-      SELECT subscriptionKey, subscriptionId, subscriptionName, region, skuName AS sku, skuFamily AS family, availabilityState AS availability,
+      SELECT capturedAtUtc, subscriptionKey, subscriptionId, subscriptionName, region, skuName AS sku, skuFamily AS family, availabilityState AS availability,
         quotaCurrent, quotaLimit, monthlyCostEstimate AS monthlyCost, vCpu, memoryGB, zonesCsv
     FROM dbo.CapacityLatest
     WHERE 1 = 1
@@ -99,6 +99,7 @@ async function getCapacityRows(filters) {
 
   const result = await request.query(query);
   return applyRegionPreset(result.recordset.map((r) => ({
+    capturedAtUtc: r.capturedAtUtc,
     subscriptionKey: r.subscriptionKey || 'legacy-data',
     subscriptionId: r.subscriptionId || 'legacy-data',
     subscriptionName: r.subscriptionName || 'Legacy data',

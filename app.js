@@ -563,6 +563,48 @@ async function loadQuotaCandidates() {
   }
 }
 
+async function captureQuotaCandidateHistory() {
+  const managementGroupId = quotaManagementGroupFilter?.value || '';
+  const groupQuotaName = quotaGroupFilter?.value || 'all';
+
+  if (!managementGroupId) {
+    setQuotaDiscoveryStatus('Select a management group before capturing candidate history.', 'warn');
+    return;
+  }
+
+  if (groupQuotaName === 'all') {
+    setQuotaDiscoveryStatus('Select a quota group before capturing candidate history.', 'warn');
+    return;
+  }
+
+  setQuotaDiscoveryStatus(`Capturing candidate history for quota group ${groupQuotaName}...`, 'info');
+
+  try {
+    const response = await fetch('/api/quota/candidates/capture', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        managementGroupId,
+        groupQuotaName,
+        regionPreset: regionPresetFilter.value || 'all',
+        region: regionFilter.value || 'all',
+        family: familyFilter.value || 'all'
+      })
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || 'Failed to capture quota candidate history.');
+    }
+
+    renderQuotaCandidates(Array.isArray(payload.candidates) ? payload.candidates : []);
+    setQuotaDiscoveryStatus(`Captured ${payload.insertedRows} candidate snapshot row(s) in analysis run ${payload.analysisRunId}.`, 'success');
+  } catch (error) {
+    setQuotaDiscoveryStatus(error.message || 'Failed to capture quota candidate history.', 'error');
+  }
+}
+
 function renderTrends(trendRows) {
   if (!trendGridBody) {
     return;
@@ -795,7 +837,7 @@ function wireButtons() {
   document.getElementById('discoverBtn').addEventListener('click', loadQuotaGroups);
   document.getElementById('planBtn').addEventListener('click', notYet('Build move plan'));
   document.getElementById('candidateBtn').addEventListener('click', loadQuotaCandidates);
-  document.getElementById('historyBtn').addEventListener('click', notYet('Capture quota history'));
+  document.getElementById('historyBtn').addEventListener('click', captureQuotaCandidateHistory);
   document.getElementById('refreshAnalyticsBtn').addEventListener('click', loadAnalytics);
   document.getElementById('simulateBtn').addEventListener('click', notYet('Simulate impact'));
   triggerIngestBtn.addEventListener('click', triggerCapacityIngest);

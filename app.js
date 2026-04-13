@@ -10,12 +10,12 @@ const MATRIX_DEFAULT_FAMILIES = [
   'L', 'M', 'N', 'NC', 'NCC', 'ND', 'NG', 'NV'
 ];
 
-const PINNED_GPU_HPC_FAMILIES = [
-  { value: 'standardHBv3Family', label: 'HBv3' },
-  { value: 'standardHBv4Family', label: 'HBv4' },
-  { value: 'standardNDH100v5Family', label: 'ND-H100' },
-  { value: 'standardNCA100v4Family', label: 'NC-A100' }
-];
+function getFamilyResourceType(family) {
+  const f = (family || '').toLowerCase();
+  if (f.endsWith('family')) return 'Compute';
+  if (f.includes('disk')) return 'Disk';
+  return 'Other';
+}
 
 const FAMILY_EXTRA_SKU_MAP = {
   standardHBv3Family: ['Standard_HB120rs_v3'],
@@ -32,6 +32,7 @@ const gridBody = document.querySelector('#capacityGrid tbody');
 const regionPresetFilter = document.querySelector('#regionPresetFilter');
 const regionFilter = document.querySelector('#regionFilter');
 const familyFilter = document.querySelector('#familyFilter');
+const resourceTypeFilter = document.querySelector('#resourceTypeFilter');
 const availabilityFilter = document.querySelector('#availabilityFilter');
 const summaryCards = document.querySelector('#summaryCards');
 const subscriptionGridBody = document.querySelector('#subscriptionGrid tbody');
@@ -349,7 +350,11 @@ function formatFamilyLabel(family) {
 function syncFamilyOptions() {
   const currentValue = familyFilter.value || 'all';
   const dataFamilies = unique('family');
-  const dataFamilySet = new Set(dataFamilies.map((value) => String(value).toLowerCase()));
+
+  const selectedType = resourceTypeFilter?.value || 'all';
+  const filteredFamilies = selectedType === 'all'
+    ? dataFamilies
+    : dataFamilies.filter((f) => getFamilyResourceType(f) === selectedType);
 
   familyFilter.innerHTML = '';
   const all = document.createElement('option');
@@ -357,18 +362,7 @@ function syncFamilyOptions() {
   all.textContent = 'All';
   familyFilter.appendChild(all);
 
-  PINNED_GPU_HPC_FAMILIES.forEach((entry) => {
-    if (dataFamilySet.has(entry.value.toLowerCase())) {
-      return;
-    }
-
-    const option = document.createElement('option');
-    option.value = entry.value;
-    option.textContent = entry.label;
-    familyFilter.appendChild(option);
-  });
-
-  dataFamilies.forEach((value) => {
+  filteredFamilies.forEach((value) => {
     const option = document.createElement('option');
     option.value = value;
     option.textContent = formatFamilyLabel(value);
@@ -385,11 +379,13 @@ function utilization(row) {
 }
 
 function filteredRows() {
+  const selectedType = resourceTypeFilter?.value || 'all';
   return presetScopedRows(rows).filter((r) => {
     const byRegion = regionFilter.value === 'all' || r.region === regionFilter.value;
     const byFamily = familyFilter.value === 'all' || r.family === familyFilter.value;
     const byAvailability = availabilityFilter.value === 'all' || r.availability === availabilityFilter.value;
-    return byRegion && byFamily && byAvailability;
+    const byType = selectedType === 'all' || getFamilyResourceType(r.family) === selectedType;
+    return byRegion && byFamily && byAvailability && byType;
   });
 }
 
@@ -1658,6 +1654,13 @@ regionFilter.addEventListener('change', () => {
     loadCapacityRows();
     return;
   }
+  renderGrid();
+  loadAnalytics();
+});
+
+resourceTypeFilter?.addEventListener('change', () => {
+  familyFilter.value = 'all';
+  syncFamilyOptions();
   renderGrid();
   loadAnalytics();
 });

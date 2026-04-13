@@ -1048,7 +1048,7 @@ function renderFamilySummary(familyRows) {
   familyRows.forEach((row) => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>${row.family}</td>
+      <td>${formatFamilyLabel(row.family)}</td>
       <td>${row.skus}</td>
       <td>${row.ok}</td>
       <td>${row.largest}</td>

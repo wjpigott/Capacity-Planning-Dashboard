@@ -1281,13 +1281,13 @@ function renderCapacityScores(scoreRows) {
       : (row.livePlacementAvailable ? 'Available' : (row.livePlacementRestricted ? 'Restricted' : 'Unavailable'));
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>${row.region || 'n/a'}</td>
-      <td>${row.sku || 'n/a'}</td>
-      <td>${row.family || 'n/a'}</td>
+      <td style="white-space:nowrap">${row.region || 'n/a'}</td>
+      <td style="white-space:nowrap">${row.sku || 'n/a'}</td>
+      <td style="white-space:nowrap">${formatFamilyLabel(row.family) || 'n/a'}</td>
       <td><span class="badge ${scoreClass}">${row.score || 'n/a'}</span></td>
       <td><span class="badge ${liveScoreClass}">${row.livePlacementScore || 'N/A'}</span></td>
-      <td>${liveStatus}</td>
-      <td>${row.liveCheckedAtUtc ? formatTimestamp(row.liveCheckedAtUtc) : 'Not checked'}</td>
+      <td style="white-space:nowrap">${liveStatus}</td>
+      <td style="white-space:nowrap">${row.liveCheckedAtUtc ? formatTimestamp(row.liveCheckedAtUtc) : 'Not checked'}</td>
       <td>${row.subscriptionCount ?? 0}</td>
       <td>${row.okRows ?? 0}</td>
       <td>${row.limitedRows ?? 0}</td>

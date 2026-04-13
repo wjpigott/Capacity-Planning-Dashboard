@@ -38,9 +38,9 @@ Status legend:
 | Platform and infrastructure | `[x]` | App Service, SQL, Key Vault, App Insights, Log Analytics deployed via Bicep |
 | Worker execution host | `[~]` | Azure Functions PowerShell 7 worker runs on a dedicated App Service plan with managed-identity host storage; live placement worker still needs module restore validation |
 | Security and identity | `[~]` | Entra admin + AAD-only SQL auth, managed identity runtime access, no raw subscription IDs stored in snapshots; Entra RBAC for Admin sections pending |
-| Live ingestion pipeline | `[x]` | Internal ingestion endpoint + scheduler + BS/DS family filtering + SQL snapshot writes |
+| Live ingestion pipeline | `[x]` | Internal ingestion endpoint + scheduler; family filtering is optional (omit `INGEST_QUOTA_FAMILY_FILTERS` to ingest all families) + SQL snapshot writes |
 | API and analytics | `[~]` | Capacity API, subscription catalog, family summary, masked subscription summary, and trend APIs complete; quota-group APIs still placeholder |
-| UX and dashboard | `[~]` | Capacity grid, filters, sidebar report navigation, analytics tables, and chart views complete; export/workflow pages still pending |
+| UX and dashboard | `[~]` | Capacity grid, filters (region, resource type, SKU family search, availability, subscription), sidebar report navigation, analytics tables, and chart views complete; export/workflow pages still pending |
 | Quota movement orchestration | `[ ]` | Discover/plan/apply backend flow and approvals not implemented yet |
 | Operations and release | `[~]` | Deployment scripts and migration scripts complete; CI/CD pipeline and runbooks still pending |
 
@@ -67,7 +67,7 @@ Status legend:
 
 - [x] Managed identity token flow for ARM ingestion
 - [x] Region preset ingestion (`USMajor`)
-- [x] Family filter ingestion (`standard_BS`, `standard_DS`)
+- [x] Family filter ingestion — optional; set `INGEST_QUOTA_FAMILY_FILTERS` to a comma-separated list to restrict, or omit entirely to ingest all VM families
 - [x] Ingestion scheduler (`INGEST_ON_STARTUP`, `INGEST_INTERVAL_MINUTES`)
 - [ ] Retry/backoff and dead-letter behavior for ingestion failures
 
@@ -87,15 +87,16 @@ Status legend:
 
 - [x] Capacity Explorer tab with filters and grid
 - [x] Region group defaulting (`USMajor`)
-- [x] Subscription search + multi-select filter UX (scales with search/limit)
+- [x] Subscription checkbox list with auto-select on first load
+- [x] Resource Type filter (Compute / Disk / Other / All) scopes the SKU Family dropdown
+- [x] SKU Family live search text input with filtered results dropdown alongside it
+- [x] SKU family labels formatted for readability (`Standard_Dasv7` instead of `StandardDasv7Family`)
 - [x] Quota Insights tab tables for subscription summary + trends
 - [x] Chart views for region availability and top SKU available quota
 - [x] Derived High/Medium/Low regional SKU capacity score view in reporting
-- [x] Persisted 30-day capacity score history view in reporting
 - [x] On-demand live placement refresh using `Get-AzVMAvailability` placement scores
 - [x] Worker-first live placement routing with local fallback for rollback safety
 - [x] Ingestion status widget in UI
-- [ ] Review whether automated cleanup should trim `CapacityScoreSnapshot` history beyond 30 days
 - [ ] Admin UI setting for scheduled refresh rates (quota discovery, capacity ingestion, and future background refresh jobs)
 - [ ] Admin UI setting for quota discovery scope selection (management group and, if needed, quota group picker/default)
 - [ ] Pagination for report grids (prefer server-side paging for large result sets)
@@ -258,7 +259,7 @@ The dashboard now supports a secure internal ingestion path that reads Azure Com
 Defaults:
 
 - Region preset: `USMajor`
-- Family filters: `standard_BS`, `standard_DS`
+- Family filters: all families (no restriction by default; set `INGEST_QUOTA_FAMILY_FILTERS` to limit scope)
 - Source type written to SQL: `live-azure-ingest`
 
 Required app settings:
@@ -308,10 +309,16 @@ Read APIs for analytics:
 - `GET /api/capacity/trends?days=7` (daily trend rollup)
 - `GET /api/capacity/families` (quota-style family summary)
 
-Example trigger:
+Example trigger (all families — omit `familyFilters` or pass empty array):
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri "https://<your-app>.azurewebsites.net/internal/ingest/capacity" -Headers @{ "x-ingest-key" = "<ingest-key>" } -Body (@{ regionPreset = "USMajor"; familyFilters = @("standard_BS","standard_DS") } | ConvertTo-Json) -ContentType "application/json"
+Invoke-RestMethod -Method Post -Uri "https://<your-app>.azurewebsites.net/internal/ingest/capacity" -Headers @{ "x-ingest-key" = "<ingest-key>" } -Body (@{ regionPreset = "USMajor" } | ConvertTo-Json) -ContentType "application/json"
+```
+
+Example trigger (restricted to specific families):
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "https://<your-app>.azurewebsites.net/internal/ingest/capacity" -Headers @{ "x-ingest-key" = "<ingest-key>" } -Body (@{ regionPreset = "USMajor"; familyFilters = @("standard_D","standard_E") } | ConvertTo-Json) -ContentType "application/json"
 ```
 
 ## Database and API Mapping by Area
@@ -411,14 +418,14 @@ Data sources:
 - `dbo.CapacityScoreSnapshot` for historical regional SKU High/Medium/Low score snapshots captured during ingestion.
 
 Key query behavior:
-- Shared filters: region preset, region, family, availability, subscription IDs.
+- Shared filters: region preset, region, resource type, family, availability, subscription IDs.
 - Subscription filter is applied against `ISNULL(subscriptionId, 'legacy-data')`.
 - Subscription selection in the reporting UI is rendered as a checkbox list (not multi-select highlight), and all loaded subscriptions are auto-selected on first load.
-- `SKU Family` options are primarily data-driven from `dbo.CapacityLatest.skuFamily`, with pinned report options for constrained HPC/GPU families (`HBv3`, `HBv4`, `ND-H100`, `NC-A100`) to ensure targeted live-placement checks remain available even when those families are absent from the latest ingestion snapshot.
-- When one of the pinned HPC/GPU family options is selected, `Refresh Live Placement` automatically injects representative SKUs for that family into the live placement request.
-- `GET /api/capacity/scores` remains a derived current-state dashboard score from `dbo.CapacityLatest`.
-- `GET /api/capacity/scores/history` returns persisted score snapshots from `dbo.CapacityScoreSnapshot` so planning can compare how regional SKU health changes over time.
-- Capacity Score history table is intentionally compact in the UI (`Captured`, `Region`, `SKU`, `Score`, `Reason`) to keep trend review readable.
+- **Resource Type filter** (`Compute` / `Disk` / `Other` / `All`) controls which families appear in the SKU Family dropdown. Defaults to `Compute` on load. Changing it resets the family selection and updates the grid.
+- **SKU Family** has a live search text input above it; typing filters the dropdown options in real time to matching formatted labels or raw family values. The search resets when Resource Type changes.
+- `SKU Family` dropdown options are entirely data-driven from `dbo.CapacityLatest.skuFamily`; there are no hardcoded pinned families. Family labels are formatted for readability (`Standard_Dasv7` instead of `StandardDasv7Family`).
+- When a family that has a representative SKU mapping (defined in `FAMILY_EXTRA_SKU_MAP`) is selected, `Refresh Live Placement` automatically injects those SKUs into the live placement request.
+- `GET /api/capacity/scores` remains a derived current-state dashboard score from `dbo.CapacityLatest`. The Score History table has been removed from the UI; persisted score snapshots remain in `dbo.CapacityScoreSnapshot` for backend use.
 - `GET /api/capacity/families` in the reporting UX is intentionally requested with `family=all` so the Family Summary report remains populated even when the grid is currently scoped to a specific family.
 - Summary KPI cards are report-aware: Region Matrix shows family/region readiness metrics, while Capacity Grid and other views keep row/quota/cost totals.
 - The High/Medium/Low dashboard score is intentionally separate from the live Azure Placement Score API used by `Get-AzVMAvailability`.

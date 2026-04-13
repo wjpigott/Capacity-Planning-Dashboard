@@ -7,8 +7,8 @@ This dashboard should call backend APIs only. Do not expose ARM credentials, sub
 - `GET /api/capacity?region={region}&family={family}&availability={status}`
   - Returns rows with: region, sku, family, availability, quotaCurrent, quotaLimit, monthlyCost
 
-- `GET /api/quota/candidates?region={region}`
-  - Returns candidate rows with suggested movable quota and safety-buffer rationale
+- `GET /api/quota/candidates?managementGroupId={mgId}&groupQuotaName={quotaGroup}&region={region}`
+  - Returns read-only candidate rows with subscription, region, family, quotaAvailable, safetyBuffer, suggestedMovable, and candidateStatus for the selected quota group scope
 
 - `GET /api/quota/groups`
   - Returns accessible group quotas for the configured management group, including: managementGroupId, groupQuotaName, displayName, groupType, provisioningState, subscriptionCount, subscriptionIds

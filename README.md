@@ -95,7 +95,7 @@ Status legend:
 #### Quota movement orchestration
 
 - [x] Discover quota groups from live APIs
-- [ ] Generate candidate/move plans from analytics data
+- [~] Generate candidate/move plans from analytics data (read-only candidate generation is live; move-plan orchestration is still pending)
 - [ ] Approval workflow for quota apply actions
 - [ ] Safe apply with change caps, retries, and audit log views
 
@@ -373,6 +373,7 @@ Write target:
 Current API state:
 - `GET /api/quota/groups` lists live GroupQuota resources for `QUOTA_MANAGEMENT_GROUP_ID` and includes associated subscription IDs.
 - `GET /api/quota/management-groups` lists accessible management groups so the Admin UI can select the discovery scope before loading quota groups.
+- `GET /api/quota/candidates` generates read-only quota candidate rows for the selected management group and quota group using current capacity data.
 
 Planned data/API direction:
 - Discover group quotas from Microsoft.Quota APIs.

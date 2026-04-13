@@ -10,6 +10,7 @@ const {
   getCapacityTrends,
   getFamilySummary
 } = require('./services/capacityService');
+const { getQuotaCandidates } = require('./services/quotaCandidateService');
 const {
   runCapacityIngestion,
   getIngestionStatus,
@@ -161,6 +162,22 @@ app.get('/api/quota/management-groups', requireAdminRole, async (_, res) => {
     res.json({ ok: true, groups, defaultManagementGroupId: process.env.QUOTA_MANAGEMENT_GROUP_ID || null });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message, groups: [] });
+  }
+});
+
+app.get('/api/quota/candidates', requireAdminRole, async (req, res) => {
+  try {
+    const result = await getQuotaCandidates({
+      managementGroupId: req.query.managementGroupId,
+      groupQuotaName: req.query.groupQuotaName,
+      regionPreset: req.query.regionPreset,
+      region: req.query.region,
+      family: req.query.family
+    });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    const status = err.message.includes('required') ? 400 : 500;
+    res.status(status).json({ ok: false, error: err.message, candidates: [] });
   }
 });
 

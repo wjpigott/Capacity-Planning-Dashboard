@@ -19,6 +19,142 @@ const familySummaryEmpty = document.querySelector('#familySummaryEmpty');
 const regionChart = document.querySelector('#regionChart');
 const skuChart = document.querySelector('#skuChart');
 const subscriptionSelectionInfo = document.querySelector('#subscriptionSelectionInfo');
+const adminStatus = document.querySelector('#adminStatus');
+const triggerIngestBtn = document.querySelector('#triggerIngestBtn');
+const subscriptionRefreshBtn = document.querySelector('#subscriptionRefreshBtn');
+
+let ingestStatusPollHandle = null;
+
+function setAdminStatus(message, tone = 'info') {
+  if (!adminStatus) return;
+  adminStatus.className = `admin-status ${tone}`;
+  adminStatus.textContent = message;
+}
+
+function setButtonBusy(button, isBusy, busyLabel) {
+  if (!button) return;
+  if (!button.dataset.defaultLabel) {
+    button.dataset.defaultLabel = button.textContent;
+  }
+
+  button.disabled = isBusy;
+  button.textContent = isBusy ? busyLabel : button.dataset.defaultLabel;
+}
+
+function summarizeIngestionStatus(status) {
+  if (!status) {
+    return 'Ingestion status unavailable.';
+  }
+
+  if (status.inProgress) {
+    const started = status.lastRunUtc ? ` Started ${new Date(status.lastRunUtc).toLocaleTimeString()}.` : '';
+    return `Capacity ingestion is running.${started}`;
+  }
+
+  if (status.lastError) {
+    return `Last ingestion failed: ${status.lastError}`;
+  }
+
+  if (status.lastSuccessUtc) {
+    const rowCount = Number(status.lastInsertedRows || 0).toLocaleString();
+    return `Last ingestion succeeded at ${new Date(status.lastSuccessUtc).toLocaleTimeString()} with ${rowCount} row(s) inserted.`;
+  }
+
+  return 'No ingestion has run yet.';
+}
+
+function stopIngestStatusPolling() {
+  if (ingestStatusPollHandle) {
+    clearInterval(ingestStatusPollHandle);
+    ingestStatusPollHandle = null;
+  }
+}
+
+async function fetchAdminIngestStatus() {
+  const response = await fetch('/api/admin/ingest/status');
+  const payload = await response.json();
+
+  if (!response.ok || !payload.ok) {
+    throw new Error(payload.error || 'Failed to retrieve ingestion status.');
+  }
+
+  return payload.status;
+}
+
+async function syncIngestStatus() {
+  const status = await fetchAdminIngestStatus();
+
+  if (status.inProgress) {
+    setButtonBusy(triggerIngestBtn, true, 'Ingest Running...');
+    setAdminStatus(summarizeIngestionStatus(status), 'info');
+    return status;
+  }
+
+  stopIngestStatusPolling();
+  setButtonBusy(triggerIngestBtn, false);
+
+  if (status.lastError) {
+    setAdminStatus(summarizeIngestionStatus(status), 'error');
+    return status;
+  }
+
+  setAdminStatus(summarizeIngestionStatus(status), 'success');
+  return status;
+}
+
+function startIngestStatusPolling() {
+  stopIngestStatusPolling();
+  ingestStatusPollHandle = setInterval(() => {
+    syncIngestStatus().catch((error) => {
+      stopIngestStatusPolling();
+      setButtonBusy(triggerIngestBtn, false);
+      setAdminStatus(error.message || 'Failed to refresh ingestion status.', 'error');
+    });
+  }, 5000);
+}
+
+async function triggerCapacityIngest() {
+  setButtonBusy(triggerIngestBtn, true, 'Starting Ingest...');
+  setAdminStatus('Starting capacity ingestion...', 'info');
+
+  const body = {
+    regionPreset: regionPresetFilter.value === 'all' || regionPresetFilter.value === 'custom'
+      ? undefined
+      : regionPresetFilter.value
+  };
+
+  try {
+    const response = await fetch('/api/admin/ingest/capacity', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(body)
+    });
+
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      const error = new Error(payload.error || 'Failed to start capacity ingestion.');
+      error.status = response.status;
+      throw error;
+    }
+
+    setButtonBusy(triggerIngestBtn, false);
+    setAdminStatus(summarizeIngestionStatus(payload.status), 'success');
+    await Promise.all([loadSubscriptions(), loadCapacityRows()]);
+  } catch (error) {
+    if (error.status === 409) {
+      setAdminStatus('Capacity ingestion is already running. Polling current status.', 'warn');
+      setButtonBusy(triggerIngestBtn, true, 'Ingest Running...');
+      startIngestStatusPolling();
+      await syncIngestStatus().catch(() => {});
+      return;
+    }
+
+    setButtonBusy(triggerIngestBtn, false);
+    setAdminStatus(error.message || 'Failed to start capacity ingestion.', 'error');
+  }
+}
 
 function activePresetRegions() {
   const preset = regionPresetFilter.value;
@@ -298,7 +434,7 @@ function renderSubscriptionOptions(options) {
   subscriptionSelectionInfo.textContent = `${selectedSubscriptionIds.size} selected`;
 }
 
-async function loadSubscriptions() {
+async function loadSubscriptions(showStatus = false) {
   const query = new URLSearchParams({ limit: '500' });
 
   try {
@@ -309,9 +445,15 @@ async function loadSubscriptions() {
     const payload = await response.json();
     subscriptionOptions = Array.isArray(payload.rows) ? payload.rows : [];
     renderSubscriptionOptions(subscriptionOptions);
+    if (showStatus) {
+      setAdminStatus(`Subscription catalog refreshed. ${subscriptionOptions.length} subscription(s) loaded.`, 'success');
+    }
   } catch (_) {
     subscriptionOptions = [];
     renderSubscriptionOptions(subscriptionOptions);
+    if (showStatus) {
+      setAdminStatus('Subscription refresh failed. Check backend/API health.', 'error');
+    }
   }
 }
 
@@ -371,13 +513,16 @@ function wireButtons() {
   document.getElementById('historyBtn').addEventListener('click', notYet('Capture quota history'));
   document.getElementById('refreshAnalyticsBtn').addEventListener('click', loadAnalytics);
   document.getElementById('simulateBtn').addEventListener('click', notYet('Simulate impact'));
-  document.getElementById('triggerIngestBtn').addEventListener('click', notYet('Trigger capacity ingest'));
+  triggerIngestBtn.addEventListener('click', triggerCapacityIngest);
   document.getElementById('applyBtn').addEventListener('click', () => {
     const ok = confirm('Apply quota movements is a write operation. Continue?');
     if (ok) alert('Apply request queued. Next step: backend orchestration + approval flow.');
   });
 
-  document.getElementById('subscriptionRefreshBtn').addEventListener('click', loadSubscriptions);
+  subscriptionRefreshBtn.addEventListener('click', async () => {
+    setAdminStatus('Refreshing subscription catalog...', 'info');
+    await loadSubscriptions(true);
+  });
   document.getElementById('subscriptionApplyBtn').addEventListener('click', loadCapacityRows);
   document.getElementById('subscriptionClearBtn').addEventListener('click', () => {
     selectedSubscriptionIds.clear();
@@ -414,5 +559,6 @@ wireTabs();
 wireViewTabs();
 wireButtons();
 syncRegionOptions();
+syncIngestStatus().catch(() => {});
 loadSubscriptions();
 loadCapacityRows();

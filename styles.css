@@ -130,6 +130,39 @@ body {
   max-width: 720px;
 }
 
+.admin-status {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.admin-status.info {
+  background: #eef5fc;
+  border-color: #cde1f5;
+  color: #1b4f82;
+}
+
+.admin-status.success {
+  background: #eaf8ef;
+  border-color: #c3ebd2;
+  color: #1f6b3a;
+}
+
+.admin-status.warn {
+  background: #fff6e8;
+  border-color: #f5d7a6;
+  color: #8a5200;
+}
+
+.admin-status.error {
+  background: #ffecee;
+  border-color: #f1b7c0;
+  color: #8a2030;
+}
+
 /* ─── Admin action cards ─────────────────────────────────────── */
 .admin-cards {
   display: grid;

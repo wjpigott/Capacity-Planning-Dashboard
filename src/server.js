@@ -125,6 +125,25 @@ app.get('/api/capacity/families', async (req, res) => {
   }
 });
 
+app.post('/api/admin/ingest/capacity', async (req, res) => {
+  try {
+    const result = await runCapacityIngestion({
+      regionPreset: req.body?.regionPreset,
+      regions: req.body?.regions,
+      subscriptionIds: req.body?.subscriptionIds,
+      familyFilters: req.body?.familyFilters
+    });
+    res.json({ ok: true, result, status: getIngestionStatus() });
+  } catch (err) {
+    const code = err.message === 'Capacity ingestion is already running.' ? 409 : 500;
+    res.status(code).json({ ok: false, error: err.message, status: getIngestionStatus() });
+  }
+});
+
+app.get('/api/admin/ingest/status', (_, res) => {
+  res.json({ ok: true, status: getIngestionStatus() });
+});
+
 app.post('/internal/ingest/capacity', requireIngestKey, async (req, res) => {
   try {
     const result = await runCapacityIngestion({

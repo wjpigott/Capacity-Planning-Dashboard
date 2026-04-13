@@ -86,9 +86,9 @@ Status legend:
 - [x] Subscription search + multi-select filter UX (scales with search/limit)
 - [x] Quota Insights tab tables for subscription summary + trends
 - [x] Chart views for region availability and top SKU available quota
+- [x] Ingestion status widget in UI
 - [ ] Pagination for report grids (prefer server-side paging for large result sets)
 - [ ] Export (CSV/XLSX) actions wired to backend
-- [ ] Ingestion status widget in UI
 
 #### Quota movement orchestration
 
@@ -230,6 +230,11 @@ Internal endpoints:
 - `POST /internal/ingest/capacity` (requires `x-ingest-key` header)
 - `GET /internal/ingest/status` (requires `x-ingest-key` header)
 
+Admin UI endpoints:
+
+- `POST /api/admin/ingest/capacity` (same-origin route used by the Admin portal Run Ingest Now action)
+- `GET /api/admin/ingest/status` (same-origin route used by the Admin portal status banner)
+
 Read APIs for analytics:
 
 - `GET /api/subscriptions?search=<text>&limit=<n>` (subscription catalog for scalable filtering)
@@ -332,10 +337,18 @@ Key query behavior:
 
 #### Data Ingestion (Admin page)
 
-Internal app APIs:
+Admin UI APIs:
+- `POST /api/admin/ingest/capacity`
+- `GET /api/admin/ingest/status`
+
+Protected internal APIs:
 - `POST /internal/ingest/capacity`
 - `GET /internal/ingest/status`
 - `POST /internal/db/ensure-phase3-schema`
+
+Current UI behavior:
+- `Refresh Subscriptions` refreshes the subscription catalog and updates the inline status banner.
+- `Run Ingest Now` starts a live ingestion run through the app server, updates button/status state, and refreshes report data after completion.
 
 External Azure APIs called by ingestion:
 - `GET https://management.azure.com/subscriptions?api-version=2020-01-01`

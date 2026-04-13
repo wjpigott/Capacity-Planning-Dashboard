@@ -30,6 +30,10 @@ const { ensurePhase3Schema, getCapacityScoreSnapshotHistory } = require('./store
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Trust Azure App Service's reverse proxy so req.secure is correct for HTTPS
+// connections. Required for secure session cookies to work on App Service.
+app.set('trust proxy', 1);
+
 app.use(cors());
 app.use(express.json());
 

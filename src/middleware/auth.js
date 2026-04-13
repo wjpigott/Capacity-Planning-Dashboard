@@ -111,18 +111,26 @@ function buildAuthRouter() {
     }
     const state = crypto.randomBytes(16).toString('hex');
     req.session.authState = state;
-    try {
-      const url = await client.getAuthCodeUrl({
-        scopes: ['openid', 'profile', 'email'],
-        redirectUri: getRedirectUri(),
-        state,
-        prompt: 'select_account'
-      });
-      return res.redirect(url);
-    } catch (err) {
-      console.error('[auth] getAuthCodeUrl failed:', err.message);
-      return res.status(500).send('Failed to initiate login. Verify ENTRA_CLIENT_ID and ENTRA_CLIENT_SECRET.');
-    }
+    // Explicitly save session before redirecting to Microsoft to guarantee
+    // the state is persisted before the browser leaves this origin.
+    req.session.save(async (saveErr) => {
+      if (saveErr) {
+        console.error('[auth] session save failed:', saveErr.message);
+        return res.status(500).send('Session error. Please try again.');
+      }
+      try {
+        const url = await client.getAuthCodeUrl({
+          scopes: ['openid', 'profile', 'email'],
+          redirectUri: getRedirectUri(),
+          state,
+          prompt: 'select_account'
+        });
+        return res.redirect(url);
+      } catch (err) {
+        console.error('[auth] getAuthCodeUrl failed:', err.message);
+        return res.status(500).send('Failed to initiate login. Verify ENTRA_CLIENT_ID and ENTRA_CLIENT_SECRET.');
+      }
+    });
   });
 
   // GET /auth/callback  – exchange auth code for tokens
@@ -136,6 +144,7 @@ function buildAuthRouter() {
       return res.status(400).send('Missing authorization code.');
     }
     if (state !== req.session.authState) {
+      console.error('[auth] state mismatch — received:', state, 'session:', req.session.authState, 'sessionID:', req.sessionID);
       return res.status(400).send('State mismatch – please try logging in again.');
     }
     delete req.session.authState;

@@ -50,6 +50,13 @@ function getRedirectUri() {
   return process.env.AUTH_REDIRECT_URI || 'http://localhost:3000/auth/callback';
 }
 
+/** Parses a named value from the raw Cookie request header without cookie-parser. */
+function readCookie(req, name) {
+  const header = req.headers.cookie || '';
+  const match = header.split(';').map(c => c.trim()).find(c => c.startsWith(name + '='));
+  return match ? decodeURIComponent(match.slice(name.length + 1)) : null;
+}
+
 /** Returns the session account object or null if not signed in. */
 function getAccountFromSession(req) {
   return req.session?.account || null;
@@ -110,27 +117,25 @@ function buildAuthRouter() {
       );
     }
     const state = crypto.randomBytes(16).toString('hex');
-    req.session.authState = state;
-    // Explicitly save session before redirecting to Microsoft to guarantee
-    // the state is persisted before the browser leaves this origin.
-    req.session.save(async (saveErr) => {
-      if (saveErr) {
-        console.error('[auth] session save failed:', saveErr.message);
-        return res.status(500).send('Session error. Please try again.');
-      }
-      try {
-        const url = await client.getAuthCodeUrl({
-          scopes: ['openid', 'profile', 'email'],
-          redirectUri: getRedirectUri(),
-          state,
-          prompt: 'select_account'
-        });
-        return res.redirect(url);
-      } catch (err) {
-        console.error('[auth] getAuthCodeUrl failed:', err.message);
-        return res.status(500).send('Failed to initiate login. Verify ENTRA_CLIENT_ID and ENTRA_CLIENT_SECRET.');
-      }
+    // Store state in a short-lived httpOnly cookie instead of the session so it
+    // survives app restarts and multi-instance deployments on Azure App Service.
+    res.cookie('oauth_state', state, {
+      httpOnly: true,
+      sameSite: 'lax',
+      maxAge: 5 * 60 * 1000 // 5 minutes — enough for a login flow
     });
+    try {
+      const url = await client.getAuthCodeUrl({
+        scopes: ['openid', 'profile', 'email'],
+        redirectUri: getRedirectUri(),
+        state,
+        prompt: 'select_account'
+      });
+      return res.redirect(url);
+    } catch (err) {
+      console.error('[auth] getAuthCodeUrl failed:', err.message);
+      return res.status(500).send('Failed to initiate login. Verify ENTRA_CLIENT_ID and ENTRA_CLIENT_SECRET.');
+    }
   });
 
   // GET /auth/callback  – exchange auth code for tokens
@@ -143,11 +148,12 @@ function buildAuthRouter() {
     if (!code) {
       return res.status(400).send('Missing authorization code.');
     }
-    if (state !== req.session.authState) {
-      console.error('[auth] state mismatch on callback — session may have expired or been lost');
+    const expectedState = readCookie(req, 'oauth_state');
+    res.clearCookie('oauth_state');
+    if (!expectedState || state !== expectedState) {
+      console.error('[auth] state mismatch on callback — cookie may have expired or been lost');
       return res.status(400).send('State mismatch – please try logging in again.');
     }
-    delete req.session.authState;
 
     const client = getMsalClient();
     if (!client) return res.status(503).send('Auth not configured.');

@@ -177,7 +177,14 @@ function buildAuthRouter() {
 
       const returnTo = req.session.returnTo || '/';
       delete req.session.returnTo;
-      return res.redirect(returnTo);
+      // Explicitly save session before redirecting to ensure account is persisted
+      req.session.save((saveErr) => {
+        if (saveErr) {
+          console.error('[auth] session save failed:', saveErr.message);
+          return res.status(500).send('Failed to save session. Please try logging in again.');
+        }
+        return res.redirect(returnTo);
+      });
     } catch (err) {
       console.error('[auth] acquireTokenByCode failed:', err.message);
       return res.status(500).send('Failed to complete login. Please try again.');

@@ -1,5 +1,5 @@
 const regionPresets = {
-  USMajor: ['eastus', 'eastus2', 'centralus', 'westus', 'westus2']
+  USMajor: ['eastus', 'eastus2', 'centralus', 'southcentralus', 'northcentralus', 'westus', 'westus2']
 };
 
 function getRegionsForPreset(regionPreset) {

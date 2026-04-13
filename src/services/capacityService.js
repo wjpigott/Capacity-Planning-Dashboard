@@ -285,12 +285,20 @@ function deriveCapacityScoreRows(rows) {
   const bySkuRegion = new Map();
 
   for (const row of rows) {
-    const key = [row.region, row.sku].join('|');
+    const sku = row.sku || row.skuName;
+    const family = row.family || row.skuFamily;
+    const availability = row.availability || row.availabilityState;
+
+    if (!row.region || !sku || !family) {
+      continue;
+    }
+
+    const key = [row.region, sku].join('|');
     if (!bySkuRegion.has(key)) {
       bySkuRegion.set(key, {
         region: row.region,
-        sku: row.sku,
-        family: row.family,
+        sku,
+        family,
         subscriptions: new Set(),
         okRows: 0,
         limitedRows: 0,
@@ -308,9 +316,9 @@ function deriveCapacityScoreRows(rows) {
     entry.quotaLimitTotal += Number(row.quotaLimit || 0);
     entry.quotaCurrentTotal += Number(row.quotaCurrent || 0);
 
-    if (row.availability === 'OK') {
+    if (availability === 'OK') {
       entry.okRows += 1;
-    } else if (row.availability === 'LIMITED') {
+    } else if (availability === 'LIMITED') {
       entry.limitedRows += 1;
     } else {
       entry.constrainedRows += 1;

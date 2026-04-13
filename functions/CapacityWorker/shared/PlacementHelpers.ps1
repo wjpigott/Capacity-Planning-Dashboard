@@ -1,0 +1,159 @@
+function Test-WorkerAuthorized {
+    param(
+        $Request,
+        [string]$SharedSecret
+    )
+
+    if (-not $SharedSecret) {
+        return $true
+    }
+
+    $providedSecret = $Request.Headers.'x-capacity-worker-key'
+    return $providedSecret -and $providedSecret -eq $SharedSecret
+}
+
+function Invoke-WithRetry {
+    param(
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$ScriptBlock,
+
+        [int]$MaxRetries = 3,
+
+        [string]$OperationName = 'API call'
+    )
+
+    $attempt = 0
+    while ($true) {
+        try {
+            return & $ScriptBlock
+        }
+        catch {
+            $attempt++
+            $ex = $_.Exception
+            $statusCode = if ($ex.Response) { $ex.Response.StatusCode.value__ } else { $null }
+            $isRetryable = $statusCode -in 429, 500, 503 -or $ex.Message -match '429|500|503|Too Many Requests|Internal Server Error|Service Unavailable|timed?\s*out|connection.*reset|connection.*refused'
+            if (-not $isRetryable -or $attempt -ge $MaxRetries) {
+                throw
+            }
+
+            Start-Sleep -Seconds ([math]::Min([math]::Pow(2, $attempt), 15))
+        }
+    }
+}
+
+function Ensure-AzureContext {
+    param(
+        [System.Collections.IDictionary]$Caches = @{}
+    )
+
+    if (-not (Get-Command -Name 'Get-AzContext' -ErrorAction SilentlyContinue)) {
+        $Caches.LastPlacementWarning = 'Get-AzContext is not available in this PowerShell host.'
+        return $false
+    }
+
+    try {
+        $currentContext = Get-AzContext -ErrorAction SilentlyContinue
+        if ($currentContext -and $currentContext.Subscription) {
+            return $true
+        }
+    }
+    catch {
+    }
+
+    try {
+        $null = Connect-AzAccount -Identity -ErrorAction Stop
+        $Caches.LoginAttempted = $true
+        $currentContext = Get-AzContext -ErrorAction SilentlyContinue
+        if ($currentContext -and $currentContext.Subscription) {
+            return $true
+        }
+    }
+    catch {
+        $Caches.LoginAttempted = $true
+        $Caches.LastPlacementWarning = "Managed identity sign-in failed: $($_.Exception.Message)"
+        return $false
+    }
+
+    $Caches.LastPlacementWarning = 'Managed identity sign-in did not produce an Azure subscription context.'
+    return $false
+}
+
+function Get-PlacementScores {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'DesiredCount', Justification = 'Used inside Invoke-WithRetry scriptblock closure')]
+    param(
+        [Parameter(Mandatory)]
+        [string[]]$SkuNames,
+
+        [Parameter(Mandatory)]
+        [string[]]$Regions,
+
+        [ValidateRange(1, 1000)]
+        [int]$DesiredCount = 1,
+
+        [switch]$IncludeAvailabilityZone,
+
+        [int]$MaxRetries = 3,
+
+        [System.Collections.IDictionary]$Caches = @{}
+    )
+
+    $scores = @{}
+    $uniqueSkus = @($SkuNames | Where-Object { $_ } | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique | Select-Object -First 5)
+    $uniqueRegions = @($Regions | Where-Object { $_ } | ForEach-Object { $_.Trim().ToLower() } | Where-Object { $_ } | Select-Object -Unique | Select-Object -First 8)
+
+    if ($uniqueSkus.Count -eq 0 -or $uniqueRegions.Count -eq 0) {
+        $Caches.LastPlacementWarning = 'No valid SKU or region values were provided to the live placement lookup.'
+        return $scores
+    }
+
+    if (-not (Get-Command -Name 'Invoke-AzSpotPlacementScore' -ErrorAction SilentlyContinue)) {
+        $Caches.LastPlacementWarning = 'Invoke-AzSpotPlacementScore is not available in this PowerShell host.'
+        return $scores
+    }
+
+    $anchorRegion = $uniqueRegions[0]
+    $desiredSizes = @($uniqueSkus | ForEach-Object {
+        @{ sku = $_ }
+    })
+
+    try {
+        $response = Invoke-WithRetry -MaxRetries $MaxRetries -OperationName 'Spot Placement Score API' -ScriptBlock {
+            Invoke-AzSpotPlacementScore -Location $anchorRegion -DesiredLocation $uniqueRegions -DesiredSize $desiredSizes -DesiredCount $DesiredCount -AvailabilityZone:$IncludeAvailabilityZone.IsPresent -ErrorAction Stop
+        }
+    }
+    catch {
+        $errorText = $_.Exception.Message
+        $Caches.LastPlacementWarning = "Live placement lookup failed: $errorText"
+        return $scores
+    }
+
+    $placementRows = @()
+    foreach ($item in @($response)) {
+        if ($null -eq $item) { continue }
+
+        if ($item.PSObject.Properties.Match('PlacementScore').Count -gt 0 -and $item.PlacementScore) {
+            $placementRows += @($item.PlacementScore)
+            continue
+        }
+
+        $placementRows += @($item)
+    }
+
+    foreach ($row in $placementRows) {
+        if ($null -eq $row) { continue }
+
+        $sku = @($row.Sku, $row.SkuName, $row.VmSize, $row.ArmSkuName) | Where-Object { $_ } | Select-Object -First 1
+        $region = @($row.Region, $row.Location, $row.ArmRegionName) | Where-Object { $_ } | Select-Object -First 1
+        $score = @($row.Score, $row.PlacementScore, $row.AvailabilityScore) | Where-Object { $_ } | Select-Object -First 1
+
+        if (-not $sku -or -not $region) { continue }
+
+        $scores["$sku|$($region.ToString().ToLower())"] = [pscustomobject]@{
+            Score        = if ($score) { $score.ToString() } else { 'N/A' }
+            IsAvailable  = if ($null -ne $row.IsAvailable) { [bool]$row.IsAvailable } elseif ($null -ne $row.IsQuotaAvailable) { [bool]$row.IsQuotaAvailable } else { $null }
+            IsRestricted = if ($null -ne $row.IsRestricted) { [bool]$row.IsRestricted } else { $null }
+        }
+    }
+
+    return $scores
+}

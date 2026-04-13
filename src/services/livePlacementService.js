@@ -1,13 +1,90 @@
+const fs = require('fs');
 const { execFile } = require('child_process');
+const https = require('https');
 const path = require('path');
+const { pipeline } = require('stream/promises');
 const { getCapacityScoreSummary } = require('./capacityService');
+const { getRegionsForPreset } = require('../config/regionPresets');
 
 const DEFAULT_MAX_SKUS_PER_CALL = 5;
 const DEFAULT_MAX_REGIONS_PER_CALL = 8;
+const POWERSHELL_RELEASE_API = 'https://api.github.com/repos/PowerShell/PowerShell/releases/latest';
+const DEFAULT_WORKER_TIMEOUT_MS = 60000;
+
+let portablePowerShellPromise;
+let azModuleBootstrapPromise;
+let portablePowerShellError = null;
+let azModuleBootstrapError = null;
+
+function normalizeSkuName(value) {
+  return String(value || '').trim();
+}
+
+function parseExtraSkus(rawValue) {
+  if (!rawValue) {
+    return [];
+  }
+
+  if (Array.isArray(rawValue)) {
+    return [...new Set(rawValue.map(normalizeSkuName).filter(Boolean))];
+  }
+
+  return [...new Set(String(rawValue)
+    .split(',')
+    .map(normalizeSkuName)
+    .filter(Boolean))];
+}
+
+function deriveFamilyFromSku(skuName) {
+  const match = String(skuName || '').match(/^Standard_([A-Za-z]+)/);
+  if (!match || !match[1]) {
+    return 'Unknown';
+  }
+
+  return match[1].replace(/\d.*$/, '').toUpperCase();
+}
+
+function resolveTargetRegions(filters, currentRows) {
+  const rowRegions = [...new Set((currentRows || []).map((row) => String(row.region || '').trim().toLowerCase()).filter(Boolean))];
+  if (rowRegions.length > 0) {
+    return rowRegions;
+  }
+
+  if (filters.region && filters.region !== 'all') {
+    return [String(filters.region).trim().toLowerCase()];
+  }
+
+  const presetRegions = getRegionsForPreset(filters.regionPreset);
+  if (Array.isArray(presetRegions) && presetRegions.length > 0) {
+    return presetRegions.map((region) => String(region || '').trim().toLowerCase()).filter(Boolean);
+  }
+
+  return [];
+}
 
 function resolvePlacementWrapperPath() {
   return process.env.CAPACITY_PLACEMENT_WRAPPER_PATH
     || path.resolve(__dirname, '..', '..', 'tools', 'Get-LivePlacementScores.ps1');
+}
+
+function resolveWorkerBaseUrl() {
+  return (process.env.CAPACITY_WORKER_BASE_URL || '').trim().replace(/\/$/, '');
+}
+
+function resolveWorkerSharedSecret() {
+  return (process.env.CAPACITY_WORKER_SHARED_SECRET || '').trim();
+}
+
+function useWorkerFirstMode() {
+  return Boolean(resolveWorkerBaseUrl());
+}
+
+function shouldDisableLocalFallback() {
+  return String(process.env.CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK || '').toLowerCase() === 'true';
+}
+
+function resolveProjectRoot() {
+  return path.resolve(__dirname, '..', '..');
 }
 
 function resolvePlacementRepoRoot() {
@@ -15,8 +92,393 @@ function resolvePlacementRepoRoot() {
     || path.resolve(__dirname, '..', '..', '..', 'Get-AzVMAvailability');
 }
 
-function getPowerShellCommand() {
-  return process.env.CAPACITY_PWSH_PATH || 'pwsh';
+function resolveRuntimeRoot() {
+  if (process.env.CAPACITY_RUNTIME_ROOT) {
+    return process.env.CAPACITY_RUNTIME_ROOT;
+  }
+
+  if (process.env.WEBSITE_INSTANCE_ID && process.env.HOME) {
+    return path.join(process.env.HOME, 'data', 'capacity-runtime');
+  }
+
+  if (process.env.TEMP) {
+    return path.join(process.env.TEMP, 'capacity-runtime');
+  }
+
+  if (process.env.TMP) {
+    return path.join(process.env.TMP, 'capacity-runtime');
+  }
+
+  return path.resolve(resolveProjectRoot(), '.runtime');
+}
+
+function resolveModuleRoot() {
+  return path.join(resolveRuntimeRoot(), 'modules');
+}
+
+function resolvePortablePowerShellPath() {
+  return path.join(resolveRuntimeRoot(), 'powershell', 'pwsh.exe');
+}
+
+function findFileRecursive(directoryPath, targetFileName, maxDepth = 4) {
+  if (!directoryPath || maxDepth < 0 || !fileExists(directoryPath)) {
+    return null;
+  }
+
+  const entries = fs.readdirSync(directoryPath, { withFileTypes: true });
+  for (const entry of entries) {
+    const entryPath = path.join(directoryPath, entry.name);
+    if (entry.isFile() && entry.name.toLowerCase() === targetFileName.toLowerCase()) {
+      return entryPath;
+    }
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const match = findFileRecursive(path.join(directoryPath, entry.name), targetFileName, maxDepth - 1);
+    if (match) {
+      return match;
+    }
+  }
+
+  return null;
+}
+
+function locatePortablePowerShellBinary() {
+  const directPath = resolvePortablePowerShellPath();
+  if (fileExists(directPath)) {
+    return directPath;
+  }
+
+  return findFileRecursive(path.dirname(directPath), 'pwsh.exe');
+}
+
+function listDirectoryNames(directoryPath) {
+  try {
+    return fs.readdirSync(directoryPath, { withFileTypes: true }).map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+}
+
+function fileExists(filePath) {
+  try {
+    fs.accessSync(filePath, fs.constants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function execFileAsync(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, options, (error, stdout, stderr) => {
+      if (error) {
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+        return;
+      }
+
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+async function runRemotePlacementLookup({ skus, regions, desiredCount }) {
+  const baseUrl = resolveWorkerBaseUrl();
+  if (!baseUrl) {
+    return null;
+  }
+
+  const controller = new AbortController();
+  const timeoutMs = Math.max(Number(process.env.CAPACITY_WORKER_TIMEOUT_MS || DEFAULT_WORKER_TIMEOUT_MS), 1000);
+  const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(`${baseUrl}/api/live-placement`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(resolveWorkerSharedSecret() ? { 'x-capacity-worker-key': resolveWorkerSharedSecret() } : {})
+      },
+      body: JSON.stringify({
+        skus,
+        regions,
+        desiredCount
+      }),
+      signal: controller.signal
+    });
+
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload?.error || payload?.detail || `Remote worker failed with status ${response.status}.`);
+    }
+
+    return {
+      rows: Array.isArray(payload?.rows) ? payload.rows : [],
+      diagnostics: payload?.diagnostics || {
+        executionMode: 'function-app',
+        workerUrl: baseUrl
+      }
+    };
+  } catch (error) {
+    const prefix = error?.name === 'AbortError'
+      ? `Remote worker timed out after ${timeoutMs}ms`
+      : 'Remote worker call failed';
+    throw new Error(`${prefix}: ${error.message}`);
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
+
+function httpsGetJson(url) {
+  return new Promise((resolve, reject) => {
+    const request = https.get(url, {
+      headers: {
+        'User-Agent': 'capacity-planning-dashboard',
+        Accept: 'application/vnd.github+json'
+      }
+    }, (response) => {
+      if ((response.statusCode || 0) >= 300 && (response.statusCode || 0) < 400 && response.headers.location) {
+        response.resume();
+        httpsGetJson(response.headers.location).then(resolve, reject);
+        return;
+      }
+
+      if ((response.statusCode || 0) >= 400) {
+        reject(new Error(`Runtime bootstrap failed while fetching ${url}: HTTP ${response.statusCode}`));
+        response.resume();
+        return;
+      }
+
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => {
+        body += chunk;
+      });
+      response.on('end', () => {
+        try {
+          resolve(JSON.parse(body));
+        } catch (error) {
+          reject(new Error(`Runtime bootstrap returned invalid JSON from ${url}: ${error.message}`));
+        }
+      });
+    });
+
+    request.on('error', reject);
+  });
+}
+
+function downloadFile(url, destination) {
+  return new Promise((resolve, reject) => {
+    const request = https.get(url, {
+      headers: {
+        'User-Agent': 'capacity-planning-dashboard',
+        Accept: 'application/octet-stream'
+      }
+    }, async (response) => {
+      try {
+        if ((response.statusCode || 0) >= 300 && (response.statusCode || 0) < 400 && response.headers.location) {
+          response.resume();
+          await downloadFile(response.headers.location, destination);
+          resolve();
+          return;
+        }
+
+        if ((response.statusCode || 0) >= 400) {
+          response.resume();
+          reject(new Error(`Runtime bootstrap failed while downloading ${url}: HTTP ${response.statusCode}`));
+          return;
+        }
+
+        await pipeline(response, fs.createWriteStream(destination));
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    });
+
+    request.on('error', reject);
+  });
+}
+
+async function ensureDirectory(directoryPath) {
+  await fs.promises.mkdir(directoryPath, { recursive: true });
+}
+
+async function ensurePortablePowerShell() {
+  const portablePath = locatePortablePowerShellBinary() || resolvePortablePowerShellPath();
+  if (fileExists(portablePath)) {
+    portablePowerShellError = null;
+    return portablePath;
+  }
+
+  if (process.platform !== 'win32') {
+    return null;
+  }
+
+  if (!portablePowerShellPromise) {
+    portablePowerShellPromise = (async () => {
+      const runtimeRoot = resolveRuntimeRoot();
+      const extractRoot = path.dirname(portablePath);
+      const zipPath = path.join(runtimeRoot, 'powershell-win-x64.zip');
+
+      await ensureDirectory(runtimeRoot);
+      await fs.promises.rm(extractRoot, { recursive: true, force: true });
+      await ensureDirectory(extractRoot);
+
+      const release = await httpsGetJson(POWERSHELL_RELEASE_API);
+      const asset = Array.isArray(release.assets)
+        ? release.assets.find((item) => /win-x64\.zip$/i.test(item.name || ''))
+        : null;
+
+      if (!asset?.browser_download_url) {
+        throw new Error('Runtime bootstrap could not find a PowerShell win-x64 zip asset.');
+      }
+
+      await downloadFile(asset.browser_download_url, zipPath);
+      await execFileAsync('powershell.exe', [
+        '-NoLogo',
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        `$zipPath = '${zipPath.replace(/'/g, "''")}'; $extractRoot = '${extractRoot.replace(/'/g, "''")}'; Add-Type -AssemblyName System.IO.Compression.FileSystem; $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath); try { if ($archive.Entries.Count -eq 0) { throw 'Downloaded PowerShell archive contains no entries.' } } finally { $archive.Dispose() }; [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $extractRoot)`
+      ], {
+        cwd: resolveProjectRoot(),
+        maxBuffer: 1024 * 1024
+      });
+
+      const extractedPath = locatePortablePowerShellBinary();
+      if (!extractedPath || !fileExists(extractedPath)) {
+        throw new Error(`Runtime bootstrap completed but pwsh.exe was not found under ${extractRoot}.`);
+      }
+
+      portablePowerShellError = null;
+      return extractedPath;
+    })().catch((error) => {
+      portablePowerShellError = error;
+      portablePowerShellPromise = null;
+      throw error;
+    });
+  }
+
+  return portablePowerShellPromise;
+}
+
+function buildPowerShellModulePath() {
+  const moduleRoot = resolveModuleRoot();
+  const existing = process.env.PSModulePath || '';
+  return existing ? `${moduleRoot}${path.delimiter}${existing}` : moduleRoot;
+}
+
+async function canResolvePlacementCmdlet(command, env) {
+  try {
+    await execFileAsync(command, [
+      '-NoLogo',
+      '-NoProfile',
+      '-Command',
+      'if (Get-Command Invoke-AzSpotPlacementScore -ErrorAction SilentlyContinue) { exit 0 } ; exit 1'
+    ], {
+      cwd: resolveProjectRoot(),
+      env,
+      maxBuffer: 1024 * 1024
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureAzPlacementModules(command) {
+  const moduleRoot = resolveModuleRoot();
+  const env = {
+    ...process.env,
+    PSModulePath: buildPowerShellModulePath()
+  };
+
+  if (await canResolvePlacementCmdlet(command, env)) {
+    azModuleBootstrapError = null;
+    return env;
+  }
+
+  if (!azModuleBootstrapPromise) {
+    azModuleBootstrapPromise = (async () => {
+      await ensureDirectory(moduleRoot);
+      await execFileAsync(command, [
+        '-NoLogo',
+        '-NoProfile',
+        '-Command',
+        `$modulePath = '${moduleRoot.replace(/'/g, "''")}'; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; if (Get-Command Set-PSRepository -ErrorAction SilentlyContinue) { try { Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction Stop } catch { } }; Save-Module -Name Az.Compute -Repository PSGallery -Path $modulePath -Force -ErrorAction Stop`
+      ], {
+        cwd: resolveProjectRoot(),
+        env,
+        maxBuffer: 8 * 1024 * 1024
+      });
+      azModuleBootstrapError = null;
+    })().catch((error) => {
+      azModuleBootstrapError = error;
+      azModuleBootstrapPromise = null;
+      throw error;
+    });
+  }
+
+  await azModuleBootstrapPromise;
+  return env;
+}
+
+async function getPowerShellCommands() {
+  const commands = [];
+  let bootstrapError = null;
+
+  if (process.env.CAPACITY_PWSH_PATH) {
+    commands.push(process.env.CAPACITY_PWSH_PATH);
+  }
+
+  const knownPaths = [
+    locatePortablePowerShellBinary(),
+    path.resolve(resolveProjectRoot(), 'tools', 'pwsh', 'pwsh.exe')
+  ].filter(Boolean);
+
+  for (const candidate of knownPaths) {
+    if (fileExists(candidate) && !commands.includes(candidate)) {
+      commands.push(candidate);
+    }
+  }
+
+  try {
+    const provisioned = await ensurePortablePowerShell();
+    if (provisioned && !commands.includes(provisioned)) {
+      commands.push(provisioned);
+    }
+  } catch (error) {
+    bootstrapError = error;
+  }
+
+  if (process.platform === 'win32') {
+    commands.push('pwsh', 'powershell.exe');
+  } else {
+    commands.push('pwsh', 'powershell');
+  }
+
+  return {
+    commands: [...new Set(commands)],
+    diagnostics: {
+      runtimeRoot: resolveRuntimeRoot(),
+      portablePwshPath: locatePortablePowerShellBinary() || resolvePortablePowerShellPath(),
+      portablePwshExists: Boolean(locatePortablePowerShellBinary()),
+      archivePath: path.join(resolveRuntimeRoot(), 'powershell-win-x64.zip'),
+      archiveExists: fileExists(path.join(resolveRuntimeRoot(), 'powershell-win-x64.zip')),
+      archiveSizeBytes: fileExists(path.join(resolveRuntimeRoot(), 'powershell-win-x64.zip')) ? fs.statSync(path.join(resolveRuntimeRoot(), 'powershell-win-x64.zip')).size : null,
+      extractedEntries: listDirectoryNames(path.join(resolveRuntimeRoot(), 'powershell')).slice(0, 20),
+      bootstrapError: bootstrapError?.message || portablePowerShellError?.message || null,
+      moduleBootstrapError: azModuleBootstrapError?.message || null
+    }
+  };
 }
 
 function chunk(items, size) {
@@ -27,87 +489,241 @@ function chunk(items, size) {
   return output;
 }
 
-function runPlacementLookup({ skus, regions, desiredCount }) {
+async function runPlacementLookupLocal({ skus, regions, desiredCount }) {
   const wrapperPath = resolvePlacementWrapperPath();
   const repoRoot = resolvePlacementRepoRoot();
-  const pwsh = getPowerShellCommand();
+  const powerShellRuntime = await getPowerShellCommands();
+  const commands = powerShellRuntime.commands;
+  const args = [
+    '-NoLogo',
+    '-NoProfile',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-File',
+    wrapperPath,
+    '-RepoRoot',
+    repoRoot,
+    '-SkuNamesJson',
+    JSON.stringify(skus),
+    '-RegionsJson',
+    JSON.stringify(regions),
+    '-DesiredCount',
+    String(desiredCount)
+  ];
+
+  function tryCommand(commandIndex, resolve, reject) {
+    if (commandIndex >= commands.length) {
+      reject(new Error('Live placement lookup failed: no supported PowerShell executable was found.'));
+      return;
+    }
+
+    const command = commands[commandIndex];
+    const envPromise = ensureAzPlacementModules(command).catch(() => ({ ...process.env }));
+
+    envPromise.then((env) => {
+      execFile(
+        command,
+        args,
+        {
+          cwd: resolveProjectRoot(),
+          env,
+          maxBuffer: 1024 * 1024
+        },
+        (error, stdout, stderr) => {
+          if (error) {
+            if (error.code === 'ENOENT') {
+              tryCommand(commandIndex + 1, resolve, reject);
+              return;
+            }
+
+            const detail = stderr?.trim() || stdout?.trim() || error.message;
+            reject(new Error(`Live placement lookup failed: ${detail}`));
+            return;
+          }
+
+          try {
+            const trimmedStdout = (stdout || '').trim();
+            if (!trimmedStdout) {
+              reject(new Error(`Live placement lookup returned no JSON output.${stderr?.trim() ? ` ${stderr.trim()}` : ''}`));
+              return;
+            }
+
+            const parsed = JSON.parse(trimmedStdout);
+            if (Array.isArray(parsed)) {
+              resolve({ rows: parsed, diagnostics: null });
+              return;
+            }
+
+            const diagnostics = parsed?.diagnostics
+              ? {
+                  ...parsed.diagnostics,
+                  executionMode: parsed?.diagnostics?.executionMode || 'local-app-service',
+                  shellCommand: command,
+                  runtimeRoot: powerShellRuntime.diagnostics.runtimeRoot,
+                  portablePwshPath: powerShellRuntime.diagnostics.portablePwshPath,
+                  portablePwshExists: powerShellRuntime.diagnostics.portablePwshExists,
+                  archivePath: powerShellRuntime.diagnostics.archivePath,
+                  archiveExists: powerShellRuntime.diagnostics.archiveExists,
+                  archiveSizeBytes: powerShellRuntime.diagnostics.archiveSizeBytes,
+                  extractedEntries: powerShellRuntime.diagnostics.extractedEntries,
+                  bootstrapError: powerShellRuntime.diagnostics.bootstrapError,
+                  moduleBootstrapError: powerShellRuntime.diagnostics.moduleBootstrapError
+                }
+              : {
+                  executionMode: 'local-app-service',
+                  shellCommand: command,
+                  runtimeRoot: powerShellRuntime.diagnostics.runtimeRoot,
+                  portablePwshPath: powerShellRuntime.diagnostics.portablePwshPath,
+                  portablePwshExists: powerShellRuntime.diagnostics.portablePwshExists,
+                  archivePath: powerShellRuntime.diagnostics.archivePath,
+                  archiveExists: powerShellRuntime.diagnostics.archiveExists,
+                  archiveSizeBytes: powerShellRuntime.diagnostics.archiveSizeBytes,
+                  extractedEntries: powerShellRuntime.diagnostics.extractedEntries,
+                  bootstrapError: powerShellRuntime.diagnostics.bootstrapError,
+                  moduleBootstrapError: powerShellRuntime.diagnostics.moduleBootstrapError
+                };
+
+            resolve({
+              rows: Array.isArray(parsed?.rows) ? parsed.rows : [],
+              diagnostics
+            });
+          } catch (parseError) {
+            reject(new Error(`Live placement lookup returned invalid JSON: ${parseError.message}`));
+          }
+        }
+      );
+    }).catch((error) => {
+      reject(new Error(`Live placement lookup failed during PowerShell bootstrap: ${error.message}`));
+    });
+  }
 
   return new Promise((resolve, reject) => {
-    execFile(
-      pwsh,
-      [
-        '-NoLogo',
-        '-NoProfile',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-File',
-        wrapperPath,
-        '-RepoRoot',
-        repoRoot,
-        '-SkuNamesJson',
-        JSON.stringify(skus),
-        '-RegionsJson',
-        JSON.stringify(regions),
-        '-DesiredCount',
-        String(desiredCount)
-      ],
-      {
-        cwd: path.resolve(__dirname, '..', '..'),
-        maxBuffer: 1024 * 1024
-      },
-      (error, stdout, stderr) => {
-        if (error) {
-          const detail = stderr?.trim() || stdout?.trim() || error.message;
-          reject(new Error(`Live placement lookup failed: ${detail}`));
-          return;
-        }
-
-        try {
-          const parsed = JSON.parse(stdout || '[]');
-          resolve(Array.isArray(parsed) ? parsed : []);
-        } catch (parseError) {
-          reject(new Error(`Live placement lookup returned invalid JSON: ${parseError.message}`));
-        }
-      }
-    );
+    tryCommand(0, resolve, reject);
   });
+}
+
+async function runPlacementLookup({ skus, regions, desiredCount }) {
+  if (useWorkerFirstMode()) {
+    try {
+      const remoteResult = await runRemotePlacementLookup({ skus, regions, desiredCount });
+      if (remoteResult) {
+        return remoteResult;
+      }
+    } catch (error) {
+      if (shouldDisableLocalFallback()) {
+        throw error;
+      }
+
+      const localResult = await runPlacementLookupLocal({ skus, regions, desiredCount });
+      return {
+        ...localResult,
+        diagnostics: localResult.diagnostics
+          ? {
+              ...localResult.diagnostics,
+              executionMode: 'function-app-fallback',
+              workerUrl: resolveWorkerBaseUrl(),
+              fallbackReason: error.message
+            }
+          : {
+              executionMode: 'function-app-fallback',
+              workerUrl: resolveWorkerBaseUrl(),
+              fallbackReason: error.message
+            }
+      };
+    }
+  }
+
+  return runPlacementLookupLocal({ skus, regions, desiredCount });
 }
 
 async function getLivePlacementScoreRows(filters = {}) {
   const currentRows = await getCapacityScoreSummary(filters);
-  if (!Array.isArray(currentRows) || currentRows.length === 0) {
-    return {
-      rows: [],
-      liveCheckedAtUtc: new Date().toISOString(),
-      source: 'Get-AzVMAvailability:Get-PlacementScores',
-      warning: null
-    };
+  const extraSkus = parseExtraSkus(filters.extraSkus);
+  const targetRegions = resolveTargetRegions(filters, currentRows);
+  const requestedDesiredCount = Number(filters.desiredCount || 1);
+  const effectiveDesiredCount = Math.max(1, Math.min(requestedDesiredCount, 1000));
+  const warnings = [];
+  if (requestedDesiredCount > 1000) {
+    warnings.push('Desired Placement Count is capped at 1000 for the live placement API.');
   }
 
-  const desiredCount = Math.max(1, Math.min(Number(filters.desiredCount || 1), 1000));
-  const uniqueSkus = [...new Set(currentRows.map((row) => row.sku).filter(Boolean))];
-  const uniqueRegions = [...new Set(currentRows.map((row) => row.region).filter(Boolean))];
-  const skuChunks = chunk(uniqueSkus, DEFAULT_MAX_SKUS_PER_CALL);
-  const regionChunks = chunk(uniqueRegions, DEFAULT_MAX_REGIONS_PER_CALL);
-  const liveCheckedAtUtc = new Date().toISOString();
-  const liveMap = new Map();
+  let workingRows = Array.isArray(currentRows) ? [...currentRows] : [];
 
-  for (const skuChunk of skuChunks) {
-    for (const regionChunk of regionChunks) {
-      const results = await runPlacementLookup({
-        skus: skuChunk,
-        regions: regionChunk,
-        desiredCount
-      });
+  if (extraSkus.length > 0) {
+    if (targetRegions.length === 0) {
+      warnings.push('Additional SKUs were provided but no target regions were found from current filters.');
+    } else {
+      const existingKeys = new Set(workingRows.map((row) => `${String(row.sku || '').toLowerCase()}|${String(row.region || '').toLowerCase()}`));
 
-      for (const result of results) {
-        liveMap.set(`${result.sku}|${String(result.region || '').toLowerCase()}`, result);
+      for (const sku of extraSkus) {
+        for (const region of targetRegions) {
+          const key = `${sku.toLowerCase()}|${region}`;
+          if (existingKeys.has(key)) {
+            continue;
+          }
+
+          workingRows.push({
+            region,
+            sku,
+            family: deriveFamilyFromSku(sku),
+            score: 'N/A',
+            subscriptionCount: 0,
+            okRows: 0,
+            limitedRows: 0,
+            constrainedRows: 0,
+            totalQuotaAvailable: 0,
+            utilizationPct: 0,
+            reason: 'Additional SKU included for live placement validation.'
+          });
+          existingKeys.add(key);
+        }
       }
     }
   }
 
+  if (!Array.isArray(workingRows) || workingRows.length === 0) {
+    return {
+      rows: [],
+      liveCheckedAtUtc: new Date().toISOString(),
+      source: 'Get-AzVMAvailability:Get-PlacementScores',
+      requestedDesiredCount,
+      effectiveDesiredCount,
+      warning: warnings.length > 0 ? warnings.join(' ') : null
+    };
+  }
+
+  const uniqueSkus = [...new Set(workingRows.map((row) => row.sku).filter(Boolean))];
+  const uniqueRegions = [...new Set(workingRows.map((row) => row.region).filter(Boolean))];
+  const skuChunks = chunk(uniqueSkus, DEFAULT_MAX_SKUS_PER_CALL);
+  const regionChunks = chunk(uniqueRegions, DEFAULT_MAX_REGIONS_PER_CALL);
+  const liveCheckedAtUtc = new Date().toISOString();
+  const liveMap = new Map();
+  const diagnostics = [];
+
+  for (const skuChunk of skuChunks) {
+    for (const regionChunk of regionChunks) {
+      const result = await runPlacementLookup({
+        skus: skuChunk,
+        regions: regionChunk,
+        desiredCount: effectiveDesiredCount
+      });
+
+      if (result.diagnostics) {
+        diagnostics.push(result.diagnostics);
+      }
+
+      for (const row of result.rows) {
+        liveMap.set(`${row.sku}|${String(row.region || '').toLowerCase()}`, row);
+      }
+    }
+  }
+
+  const diagnosticWarning = diagnostics.map((item) => item?.warning).find(Boolean) || null;
+  const primaryDiagnostic = diagnostics.find(Boolean) || null;
+  const combinedWarning = [...warnings, diagnosticWarning].filter(Boolean).join(' ');
+
   return {
-    rows: currentRows.map((row) => {
+    rows: workingRows.map((row) => {
       const live = liveMap.get(`${row.sku}|${String(row.region || '').toLowerCase()}`);
       return {
         ...row,
@@ -119,7 +735,10 @@ async function getLivePlacementScoreRows(filters = {}) {
     }),
     liveCheckedAtUtc,
     source: 'Get-AzVMAvailability:Get-PlacementScores',
-    warning: null
+    requestedDesiredCount,
+    effectiveDesiredCount,
+    warning: combinedWarning || null,
+    diagnostics: primaryDiagnostic
   };
 }
 

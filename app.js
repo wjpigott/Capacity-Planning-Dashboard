@@ -5,8 +5,27 @@ let quotaGroupOptions = [];
 let quotaRunOptions = [];
 const selectedSubscriptionIds = new Set();
 
+const MATRIX_DEFAULT_FAMILIES = [
+  'A', 'B', 'D', 'DC', 'DS', 'E', 'F', 'FX', 'G', 'GS', 'H', 'HB', 'HC', 'HX',
+  'L', 'M', 'N', 'NC', 'NCC', 'ND', 'NG', 'NV'
+];
+
+const PINNED_GPU_HPC_FAMILIES = [
+  { value: 'standardHBv3Family', label: 'HBv3' },
+  { value: 'standardHBv4Family', label: 'HBv4' },
+  { value: 'standardNDH100v5Family', label: 'ND-H100' },
+  { value: 'standardNCA100v4Family', label: 'NC-A100' }
+];
+
+const FAMILY_EXTRA_SKU_MAP = {
+  standardHBv3Family: ['Standard_HB120rs_v3'],
+  standardHBv4Family: ['Standard_HB176rs_v4'],
+  standardNDH100v5Family: ['Standard_ND96isr_H100_v5'],
+  standardNCA100v4Family: ['Standard_NC96ads_A100_v4']
+};
+
 const regionPresets = {
-  USMajor: ['eastus', 'eastus2', 'centralus', 'westus', 'westus2']
+  USMajor: ['eastus', 'eastus2', 'centralus', 'southcentralus', 'northcentralus', 'westus', 'westus2']
 };
 
 const gridBody = document.querySelector('#capacityGrid tbody');
@@ -54,6 +73,17 @@ const ingestSubscriptionsValue = document.querySelector('#ingestSubscriptionsVal
 const ingestRegionsValue = document.querySelector('#ingestRegionsValue');
 const ingestFamiliesValue = document.querySelector('#ingestFamiliesValue');
 const ingestErrorValue = document.querySelector('#ingestErrorValue');
+const topbarReportTitle = document.querySelector('#topbarReportTitle');
+
+const reportViewLabels = {
+  'capacity-grid': 'Capacity Grid',
+  'region-chart': 'By Region',
+  'sku-chart': 'Top SKUs',
+  'capacity-score': 'Capacity Score',
+  'family-summary': 'Family Summary',
+  'region-matrix': 'Region Matrix',
+  trend: 'Trend History'
+};
 
 let ingestStatusPollHandle = null;
 
@@ -313,6 +343,39 @@ function fillSelect(select, values, allLabel = 'All') {
   });
 }
 
+function syncFamilyOptions() {
+  const currentValue = familyFilter.value || 'all';
+  const dataFamilies = unique('family');
+  const dataFamilySet = new Set(dataFamilies.map((value) => String(value).toLowerCase()));
+
+  familyFilter.innerHTML = '';
+  const all = document.createElement('option');
+  all.value = 'all';
+  all.textContent = 'All';
+  familyFilter.appendChild(all);
+
+  PINNED_GPU_HPC_FAMILIES.forEach((entry) => {
+    if (dataFamilySet.has(entry.value.toLowerCase())) {
+      return;
+    }
+
+    const option = document.createElement('option');
+    option.value = entry.value;
+    option.textContent = entry.label;
+    familyFilter.appendChild(option);
+  });
+
+  dataFamilies.forEach((value) => {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = value;
+    familyFilter.appendChild(option);
+  });
+
+  const availableValues = [...familyFilter.options].map((option) => option.value);
+  familyFilter.value = availableValues.includes(currentValue) ? currentValue : 'all';
+}
+
 function utilization(row) {
   if (!row.quotaLimit) return 0;
   return Math.round((row.quotaCurrent / row.quotaLimit) * 100);
@@ -325,6 +388,23 @@ function filteredRows() {
     const byAvailability = availabilityFilter.value === 'all' || r.availability === availabilityFilter.value;
     return byRegion && byFamily && byAvailability;
   });
+}
+
+function reportScopedRows() {
+  return presetScopedRows(rows).filter((r) => {
+    const byRegion = regionFilter.value === 'all' || r.region === regionFilter.value;
+    const byAvailability = availabilityFilter.value === 'all' || r.availability === availabilityFilter.value;
+    return byRegion && byAvailability;
+  });
+}
+
+function setActiveReportTitle(viewKey) {
+  const label = reportViewLabels[viewKey] || 'Capacity Grid';
+  const fullTitle = `Capacity Planning Dashboard - ${label}`;
+  if (topbarReportTitle) {
+    topbarReportTitle.textContent = fullTitle;
+  }
+  document.title = fullTitle;
 }
 
 function syncRegionOptions() {
@@ -351,11 +431,13 @@ function renderSummary(data) {
 
 function renderGrid() {
   const data = filteredRows();
+  const matrixData = reportScopedRows();
   gridBody.innerHTML = '';
   if (data.length === 0) {
     gridBody.innerHTML = '<tr><td colspan="12" style="text-align: center; padding: 20px; color: #5d7085;">No data available. Ensure ingestion is running and subscriptions are in scope.</td></tr>';
     renderSummary([]);
     renderCharts([]);
+    renderRegionMatrix(matrixData);
     return;
   }
   data.forEach((r) => {
@@ -379,6 +461,7 @@ function renderGrid() {
   });
   renderSummary(data);
   renderCharts(data);
+  renderRegionMatrix(matrixData);
 }
 
 function renderSubscriptionSummary(summaryRows) {
@@ -911,6 +994,137 @@ function renderFamilySummary(familyRows) {
   });
 }
 
+function normalizeFamilyLabel(rawFamily) {
+  const value = String(rawFamily || '').trim();
+  if (!value) {
+    return '';
+  }
+
+  let normalized = value
+    .replace(/^standard/i, '')
+    .replace(/family$/i, '')
+    .replace(/[\s_-]/g, '')
+    .toUpperCase();
+
+  normalized = normalized.replace(/V\d+.*$/, '');
+  normalized = normalized.replace(/\d+.*$/, '');
+  return normalized;
+}
+
+function deriveFamilyFromSkuName(skuName) {
+  const match = String(skuName || '').match(/^Standard_([A-Za-z]+)/i);
+  if (!match || !match[1]) {
+    return '';
+  }
+
+  return normalizeFamilyLabel(match[1]);
+}
+
+function resolveMatrixRegions(scopedData) {
+  const selectedRegions = activePresetRegions();
+  if (Array.isArray(selectedRegions) && selectedRegions.length > 0) {
+    return [...new Set(selectedRegions.map((region) => String(region || '').trim().toLowerCase()).filter(Boolean))].sort();
+  }
+
+  if (regionPresetFilter.value === 'custom' && regionFilter.value && regionFilter.value !== 'all') {
+    return [String(regionFilter.value).trim().toLowerCase()];
+  }
+
+  return [...new Set((scopedData || []).map((row) => String(row.region || '').trim().toLowerCase()).filter(Boolean))].sort();
+}
+
+function renderRegionMatrix(data) {
+  const container = document.querySelector('#regionMatrixContainer');
+  const empty = document.querySelector('#regionMatrixEmpty');
+  if (!container) return;
+
+  container.innerHTML = '';
+
+  const scopedData = data && data.length > 0 ? data : filteredRows();
+  const regions = resolveMatrixRegions(scopedData);
+
+  if ((!scopedData || scopedData.length === 0) && regions.length === 0) {
+    if (empty) empty.style.display = 'block';
+    return;
+  }
+  if (empty) empty.style.display = 'none';
+
+  // Status priority: OK > LIMITED > CONSTRAINED > (absent)
+  const priority = { OK: 3, LIMITED: 2, CONSTRAINED: 1 };
+
+  // Build map: family -> region -> best status
+  const familyMap = {};
+
+  scopedData.forEach((r) => {
+    const fam = normalizeFamilyLabel(r.family) || deriveFamilyFromSkuName(r.sku) || '?';
+    if (!familyMap[fam]) familyMap[fam] = {};
+    const region = String(r.region || '').trim().toLowerCase();
+    if (!region) {
+      return;
+    }
+
+    const cur = familyMap[fam][region];
+    const incoming = (r.availability || '').toUpperCase();
+    if (!cur || (priority[incoming] || 0) > (priority[cur] || 0)) {
+      familyMap[fam][region] = incoming || 'CONSTRAINED';
+    }
+  });
+
+  const families = [...new Set([...MATRIX_DEFAULT_FAMILIES, ...Object.keys(familyMap)])].sort();
+
+  // Row-level rollup: best status across all regions for row highlight
+  function rowRollup(regionMap) {
+    const statuses = Object.values(regionMap);
+    if (statuses.includes('OK')) return 'OK';
+    if (statuses.includes('LIMITED')) return 'LIMITED';
+    if (statuses.includes('CONSTRAINED')) return 'CONSTRAINED';
+    return 'NONE';
+  }
+
+  function cellLabel(status) {
+    if (status === 'OK') return '✓ OK';
+    if (status === 'LIMITED') return '⚠ LTD';
+    if (status === 'CONSTRAINED') return '⚠ CON';
+    return '✗';
+  }
+
+  function rowBg(rollup) {
+    if (rollup === 'OK') return 'background:#f0fbf4;';
+    if (rollup === 'LIMITED') return 'background:#fffbf0;';
+    if (rollup === 'CONSTRAINED') return 'background:#fff5f6;';
+    return 'background:#f9fafb;';
+  }
+
+  const table = document.createElement('table');
+  table.className = 'matrix-table';
+
+  // Header row
+  const thead = document.createElement('thead');
+  const headerRow = document.createElement('tr');
+  headerRow.innerHTML = `<th class="family-col">Family</th>` +
+    regions.map((r) => `<th>${r}</th>`).join('');
+  thead.appendChild(headerRow);
+  table.appendChild(thead);
+
+  // Body rows
+  const tbody = document.createElement('tbody');
+  families.forEach((fam) => {
+    const regionMap = familyMap[fam];
+    const rollup = rowRollup(regionMap);
+    const tr = document.createElement('tr');
+    tr.setAttribute('style', rowBg(rollup));
+    let html = `<td class="family-col">${fam}</td>`;
+    regions.forEach((region) => {
+      const status = regionMap[region] || 'NONE';
+      html += `<td class="matrix-cell ${status}" title="${status}">${cellLabel(status)}</td>`;
+    });
+    tr.innerHTML = html;
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  container.appendChild(table);
+}
+
 function renderCapacityScores(scoreRows) {
   if (!capacityScoreGridBody) {
     return;
@@ -933,7 +1147,7 @@ function renderCapacityScores(scoreRows) {
     const scoreClass = String(row.score || '').toUpperCase();
     const liveScoreClass = String(row.livePlacementScore || '').toUpperCase();
     const liveStatus = row.livePlacementAvailable == null
-      ? 'Not checked'
+      ? (row.livePlacementScore === 'N/A' ? 'No live score returned' : 'Not checked')
       : (row.livePlacementAvailable ? 'Available' : (row.livePlacementRestricted ? 'Restricted' : 'Unavailable'));
     const tr = document.createElement('tr');
     tr.innerHTML = `
@@ -954,6 +1168,22 @@ function renderCapacityScores(scoreRows) {
     `;
     capacityScoreGridBody.appendChild(tr);
   });
+}
+
+function normalizeDesiredPlacementCount() {
+  if (!capacityScoreDesiredCount) {
+    return 1;
+  }
+
+  const rawValue = Number(capacityScoreDesiredCount.value || 1);
+  const normalized = Math.max(1, Math.min(Number.isFinite(rawValue) ? rawValue : 1, 1000));
+  capacityScoreDesiredCount.value = String(normalized);
+  return normalized;
+}
+
+function getFamilyExtraSkus(familyValue) {
+  const mapped = FAMILY_EXTRA_SKU_MAP[String(familyValue || '').trim()];
+  return Array.isArray(mapped) ? mapped : [];
 }
 
 function renderCapacityScoreHistory(historyRows) {
@@ -1015,7 +1245,8 @@ async function refreshLivePlacementScores() {
   }
 
   const filters = getQueryFilters();
-  const desiredCount = Math.max(1, Math.min(Number(capacityScoreDesiredCount?.value || 1), 1000));
+  const desiredCount = normalizeDesiredPlacementCount();
+  const extraSkus = getFamilyExtraSkus(filters.family);
   setButtonBusy(refreshLivePlacementBtn, true, 'Refreshing...');
   if (capacityScoreLiveStatus) {
     capacityScoreLiveStatus.textContent = 'Refreshing live placement scores from Get-AzVMAvailability...';
@@ -1029,7 +1260,8 @@ async function refreshLivePlacementScores() {
       },
       body: JSON.stringify({
         ...filters,
-        desiredCount
+        desiredCount,
+        extraSkus
       })
     });
 
@@ -1040,7 +1272,10 @@ async function refreshLivePlacementScores() {
 
     renderCapacityScores(Array.isArray(payload.rows) ? payload.rows : []);
     if (capacityScoreLiveStatus) {
-      capacityScoreLiveStatus.textContent = `Live placement refreshed at ${formatTimestamp(payload.liveCheckedAtUtc)} via ${payload.source}.`;
+      const requestedCount = payload.requestedDesiredCount ?? desiredCount;
+      const effectiveCount = payload.effectiveDesiredCount ?? desiredCount;
+      const warningText = payload.warning ? ` ${payload.warning}` : '';
+      capacityScoreLiveStatus.textContent = `Live placement refreshed at ${formatTimestamp(payload.liveCheckedAtUtc)} via ${payload.source}. Requested ${requestedCount} VM(s); evaluated ${effectiveCount}.${warningText}`;
     }
   } catch (error) {
     if (capacityScoreLiveStatus) {
@@ -1112,6 +1347,7 @@ async function loadAnalytics() {
   const baseFilters = getQueryFilters();
   const base = new URLSearchParams(baseFilters);
   const trendQuery = new URLSearchParams({ ...baseFilters, days: '7' });
+  const familySummaryQuery = new URLSearchParams({ ...baseFilters, family: 'all' });
   const scoreHistoryQuery = new URLSearchParams({
     days: capacityScoreHistoryDays?.value || '30',
     region: baseFilters.region,
@@ -1122,7 +1358,7 @@ async function loadAnalytics() {
     const [subscriptionResponse, trendResponse, familyResponse, scoreResponse, scoreHistoryResponse] = await Promise.all([
       fetch(`/api/capacity/subscriptions?${base.toString()}`),
       fetch(`/api/capacity/trends?${trendQuery.toString()}`),
-      fetch(`/api/capacity/families?${base.toString()}`),
+      fetch(`/api/capacity/families?${familySummaryQuery.toString()}`),
       fetch(`/api/capacity/scores?${base.toString()}`),
       fetch(`/api/capacity/scores/history?${scoreHistoryQuery.toString()}`)
     ]);
@@ -1212,16 +1448,17 @@ async function loadCapacityRows() {
   }
 
   syncRegionOptions();
-  fillSelect(familyFilter, unique('family'));
+  syncFamilyOptions();
   renderGrid();
   loadAnalytics();
 }
 
 function wireTabs() {
-  document.querySelectorAll('.nav-item').forEach((btn) => {
+  // Admin nav items switch top-level pages
+  document.querySelectorAll('.nav-item[data-nav]').forEach((btn) => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.nav-item').forEach((t) => t.classList.remove('active'));
-      // pages use display:contents so we must toggle each individually
+      document.querySelectorAll('.nav-item[data-nav]').forEach((t) => t.classList.remove('active'));
+      document.querySelectorAll('.nav-sub-item[data-report-view]').forEach((t) => t.classList.remove('active'));
       document.querySelectorAll('.page').forEach((p) => p.classList.remove('active'));
       btn.classList.add('active');
       const pageId = btn.dataset.nav + '-page';
@@ -1232,12 +1469,18 @@ function wireTabs() {
 }
 
 function wireViewTabs() {
-  document.querySelectorAll('.view-tab').forEach((btn) => {
+  // Report sub-nav items switch view panels within the reporting page
+  document.querySelectorAll('.nav-sub-item[data-report-view]').forEach((btn) => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.view-tab').forEach((t) => t.classList.remove('active'));
+      document.querySelectorAll('.nav-sub-item[data-report-view]').forEach((t) => t.classList.remove('active'));
       document.querySelectorAll('.view-panel').forEach((p) => p.classList.remove('active'));
       btn.classList.add('active');
-      document.getElementById(`view-${btn.dataset.view}`).classList.add('active');
+      // Always keep reporting page visible
+      document.querySelectorAll('.page').forEach((p) => p.classList.remove('active'));
+      document.querySelector('#reporting-page')?.classList.add('active');
+      const panel = document.getElementById(`view-${btn.dataset.reportView}`);
+      if (panel) panel.classList.add('active');
+      setActiveReportTitle(btn.dataset.reportView);
     });
   });
 }
@@ -1326,6 +1569,7 @@ availabilityFilter.addEventListener('change', () => {
 });
 
 capacityScoreHistoryDays?.addEventListener('change', loadCapacityScoreHistory);
+capacityScoreDesiredCount?.addEventListener('change', normalizeDesiredPlacementCount);
 
 wireTabs();
 wireViewTabs();

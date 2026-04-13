@@ -1,5 +1,6 @@
 const { DefaultAzureCredential } = require('@azure/identity');
 const crypto = require('crypto');
+const https = require('https');
 const { getRegionsForPreset } = require('../config/regionPresets');
 const { deriveCapacityScoreRows } = require('./capacityService');
 const { insertCapacitySnapshots, insertCapacityScoreSnapshots } = require('../store/sql');
@@ -8,6 +9,7 @@ const ARM_SCOPE = 'https://management.azure.com/.default';
 const ARM_BASE = 'https://management.azure.com';
 const DEFAULT_ARM_MAX_RETRIES = 3;
 const DEFAULT_REGION_CONCURRENCY = 4;
+const DEFAULT_ARM_TIMEOUT_MS = 30000;
 
 let schedulerHandle;
 const ingestStatus = {
@@ -188,16 +190,96 @@ function getRetryDelayMs(retryAfterHeader, attempt) {
   return Math.pow(2, attempt + 1) * 1000;
 }
 
+function getHeaderValue(headers, headerName) {
+  const value = headers?.[headerName.toLowerCase()];
+  if (Array.isArray(value)) {
+    return value[0] || null;
+  }
+
+  return value || null;
+}
+
+function formatNetworkError(err) {
+  const parts = [err?.message || 'Network request failed'];
+  if (err?.code) {
+    parts.push(`code=${err.code}`);
+  }
+  if (err?.cause?.code) {
+    parts.push(`cause=${err.cause.code}`);
+  }
+  if (err?.cause?.message) {
+    parts.push(err.cause.message);
+  }
+
+  return parts.join(' | ');
+}
+
+function armGetPage(url, token, { forceIPv4 = false } = {}) {
+  const parsedUrl = new URL(url);
+
+  return new Promise((resolve, reject) => {
+    const request = https.request({
+      protocol: parsedUrl.protocol,
+      hostname: parsedUrl.hostname,
+      port: parsedUrl.port || undefined,
+      path: `${parsedUrl.pathname}${parsedUrl.search}`,
+      method: 'GET',
+      family: forceIPv4 ? 4 : undefined,
+      timeout: DEFAULT_ARM_TIMEOUT_MS,
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    }, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => {
+        body += chunk;
+      });
+      response.on('end', () => {
+        resolve({
+          ok: (response.statusCode || 0) >= 200 && (response.statusCode || 0) < 300,
+          status: response.statusCode || 0,
+          headers: {
+            get: (headerName) => getHeaderValue(response.headers, headerName)
+          },
+          json: async () => JSON.parse(body || '{}'),
+          text: async () => body
+        });
+      });
+    });
+
+    request.on('timeout', () => {
+      request.destroy(Object.assign(new Error(`ARM GET timed out after ${DEFAULT_ARM_TIMEOUT_MS}ms for ${url}`), { code: 'ETIMEDOUT' }));
+    });
+
+    request.on('error', reject);
+    request.end();
+  });
+}
+
 async function armGetPageWithRetry(url, token) {
   const maxRetries = Math.max(Number(process.env.INGEST_ARM_MAX_RETRIES || DEFAULT_ARM_MAX_RETRIES), 1);
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${token}`
+    let response;
+    try {
+      response = await armGetPage(url, token);
+    } catch (primaryError) {
+      try {
+        response = await armGetPage(url, token, { forceIPv4: true });
+      } catch (ipv4Error) {
+        const networkMessage = `ARM GET network failure for ${url}: ${formatNetworkError(ipv4Error.code === primaryError.code ? primaryError : ipv4Error)}`;
+        const retryableNetworkError = attempt < maxRetries - 1;
+        if (retryableNetworkError) {
+          const delayMs = getRetryDelayMs(null, attempt);
+          console.warn(`${networkMessage}. Retrying in ${delayMs}ms...`);
+          await sleep(delayMs);
+          continue;
+        }
+
+        throw new Error(networkMessage);
       }
-    });
+    }
 
     if (response.ok) {
       return response;

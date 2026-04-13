@@ -19,6 +19,8 @@ This repository contains the initial platform scaffold for a native Azure capaci
 
 The current-state diagram reflects what is deployed now: App Service hosting the static UI + Express API, Azure SQL with Entra-only auth, managed identity database access, Key Vault RBAC integration, and App Insights/Log Analytics.
 
+The next execution split is now scaffolded in-repo: a dedicated Azure Functions PowerShell 7 worker host under `functions/CapacityWorker/` for live placement and future quota move/apply orchestration.
+
 Use Draw.io for edits when readability/layout precision matters; keep the Mermaid file for quick text-based diffs and automation-friendly rendering.
 
 ## Implementation Status
@@ -34,10 +36,11 @@ Status legend:
 | Track | Current Status | Notes |
 | --- | --- | --- |
 | Platform and infrastructure | `[x]` | App Service, SQL, Key Vault, App Insights, Log Analytics deployed via Bicep |
+| Worker execution host | `[~]` | Azure Functions PowerShell 7 worker runs on a dedicated App Service plan with managed-identity host storage; live placement worker still needs module restore validation |
 | Security and identity | `[~]` | Entra admin + AAD-only SQL auth, managed identity runtime access, no raw subscription IDs stored in snapshots; Entra RBAC for Admin sections pending |
 | Live ingestion pipeline | `[x]` | Internal ingestion endpoint + scheduler + BS/DS family filtering + SQL snapshot writes |
 | API and analytics | `[~]` | Capacity API, subscription catalog, family summary, masked subscription summary, and trend APIs complete; quota-group APIs still placeholder |
-| UX and dashboard | `[~]` | Capacity grid, filters, tabs, analytics tables, and chart views complete; export/workflow pages still pending |
+| UX and dashboard | `[~]` | Capacity grid, filters, sidebar report navigation, analytics tables, and chart views complete; export/workflow pages still pending |
 | Quota movement orchestration | `[ ]` | Discover/plan/apply backend flow and approvals not implemented yet |
 | Operations and release | `[~]` | Deployment scripts and migration scripts complete; CI/CD pipeline and runbooks still pending |
 
@@ -49,6 +52,7 @@ Status legend:
 - [x] Bicep-based environment deployment script
 - [x] SQL schema for snapshots and latest view
 - [x] Draw.io + Mermaid architecture artifacts in `docs/`
+- [x] Azure Functions worker scaffold and Bicep resources for PowerShell 7 execution
 
 #### Security and identity
 
@@ -89,6 +93,7 @@ Status legend:
 - [x] Derived High/Medium/Low regional SKU capacity score view in reporting
 - [x] Persisted 30-day capacity score history view in reporting
 - [x] On-demand live placement refresh using `Get-AzVMAvailability` placement scores
+- [x] Worker-first live placement routing with local fallback for rollback safety
 - [x] Ingestion status widget in UI
 - [ ] Review whether automated cleanup should trim `CapacityScoreSnapshot` history beyond 30 days
 - [ ] Admin UI setting for scheduled refresh rates (quota discovery, capacity ingestion, and future background refresh jobs)
@@ -107,8 +112,10 @@ Status legend:
 
 - [x] Migration runner script (`scripts/apply-migration.ps1`)
 - [x] Schema + seed scripts for dev initialization
+- [x] Worker packaging/deploy script scaffold
 - [ ] CI/CD pipeline for build/deploy/migrations
 - [ ] Scheduled ingestion monitoring/alerts
+- [ ] Deployment follow-up: investigate why `Compute Recommendations Role` assigned at the management-group scope did not satisfy `Microsoft.Compute/locations/placementScores/generate/action` for the worker managed identity, while the subscription-level assignment did
 - [ ] Release verification checklist + rollback playbook
 
 ## Local run
@@ -130,6 +137,15 @@ npm start
 
 - http://localhost:3000
 
+Optional worker-first settings:
+
+- `CAPACITY_WORKER_BASE_URL`
+- `CAPACITY_WORKER_SHARED_SECRET`
+- `CAPACITY_WORKER_TIMEOUT_MS`
+- `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK`
+
+When `CAPACITY_WORKER_BASE_URL` is set, live placement refresh calls the Azure Function worker first. If the worker is unavailable and `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK` is not `true`, the dashboard falls back to the in-process App Service path to preserve rollback safety.
+
 ## Infrastructure deployment
 
 Use script-based deployment with Central US default:
@@ -148,6 +164,35 @@ Notes:
 
 - SQL is configured with Microsoft Entra admin and AAD-only authentication.
 - `SqlAdminPassword` is optional; when omitted, the script generates a strong random value for server bootstrap.
+- The Bicep template now also provisions a Function App plus storage account for the PowerShell 7 worker host.
+
+## Worker deployment
+
+Package and deploy the worker host separately from the dashboard web app:
+
+```powershell
+./scripts/deploy-worker.ps1 \
+	-ResourceGroupName "<rg-name>" \
+	-FunctionAppName "func-capdash-dev-cap001-appsvc"
+```
+
+After the worker is deployed, point the dashboard at it by setting:
+
+- `CAPACITY_WORKER_BASE_URL=https://<function-app-name>.azurewebsites.net`
+- `CAPACITY_WORKER_SHARED_SECRET=<same secret configured as WORKER_SHARED_SECRET on the function app>`
+
+Hosted worker guidance:
+
+- Configure `AzureWebJobsStorage` with managed identity, not a shared-key connection string.
+- Grant the worker identity storage data-plane access on the host storage account.
+- The default infrastructure path uses a dedicated App Service plan for the worker instead of Flex Consumption.
+- Enable PowerShell managed dependencies in `host.json` so `requirements.psd1` can restore Az modules on the worker.
+- NOTE: live placement also requires Azure RBAC on every subscription the worker will query. The Function App managed identity needs the built-in `Compute Recommendations Role`, or a custom role that includes `Microsoft.Compute/locations/placementScores/generate/action`. This does not need to be assigned on every subscription in the tenant, only on the subscriptions in scope for live placement. If many target subscriptions share a management group, assign it there instead of one-by-one at each subscription.
+
+Current worker endpoints:
+
+- `POST /api/live-placement`
+- `POST /api/quota-move-apply` (placeholder scaffold for future quota move orchestration)
 
 ## Initialize database
 
@@ -228,6 +273,16 @@ Required app settings:
 - `ADMIN_RBAC_MODE` (`off` by default; set to `enforce` after App Service Authentication is enabled)
 - `ADMIN_ROLE_NAME` (`CapacityAdmin` by default)
 - `QUOTA_MANAGEMENT_GROUP_ID` (required for live quota discovery)
+- `CAPACITY_WORKER_BASE_URL` (optional Function App base URL for worker-first live placement execution)
+- `CAPACITY_WORKER_SHARED_SECRET` (optional shared secret header value for worker calls)
+- `CAPACITY_WORKER_TIMEOUT_MS` (optional timeout for worker calls, default `60000`)
+- `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK` (`true` disables App Service fallback when the worker is configured but unavailable)
+
+Runtime note:
+
+- The current Azure App Service host is Windows PowerShell `5.1`, which is sufficient for the Node/Express app itself but not sufficient for PowerShell-dependent Azure helpers that rely on newer Az module support.
+- A dedicated PowerShell `7` Azure Function worker is now scaffolded as the preferred execution host for live placement and future quota group write operations.
+- Until the worker is deployed and configured, the dashboard can still fall back to the local App Service path for rollback safety.
 
 Required database permissions for the app identity:
 
@@ -358,9 +413,17 @@ Data sources:
 Key query behavior:
 - Shared filters: region preset, region, family, availability, subscription IDs.
 - Subscription filter is applied against `ISNULL(subscriptionId, 'legacy-data')`.
+- `SKU Family` options are primarily data-driven from `dbo.CapacityLatest.skuFamily`, with pinned report options for constrained HPC/GPU families (`HBv3`, `HBv4`, `ND-H100`, `NC-A100`) to ensure targeted live-placement checks remain available even when those families are absent from the latest ingestion snapshot.
+- When one of the pinned HPC/GPU family options is selected, `Refresh Live Placement` automatically injects representative SKUs for that family into the live placement request.
 - `GET /api/capacity/scores` remains a derived current-state dashboard score from `dbo.CapacityLatest`.
 - `GET /api/capacity/scores/history` returns persisted score snapshots from `dbo.CapacityScoreSnapshot` so planning can compare how regional SKU health changes over time.
+- `GET /api/capacity/families` in the reporting UX is intentionally requested with `family=all` so the Family Summary report remains populated even when the grid is currently scoped to a specific family.
 - The High/Medium/Low dashboard score is intentionally separate from the live Azure Placement Score API used by `Get-AzVMAvailability`.
+- `Desired Placement Count` in the `Capacity Score` view only affects the on-demand `Refresh Live Placement` action.
+- The value is passed through to `Get-AzVMAvailability` as `DesiredCount`, which tells Azure placement scoring how many VMs you want to place at once. Example: `1` asks "can I likely place one VM here?" while `5` asks for the likelihood of placing five VMs together.
+- The live placement UI clamps `Desired Placement Count` to `1000`. If a larger number is entered, the refresh status line reports the requested value and the effective value sent to the live placement API.
+- Increasing `Desired Placement Count` raises the bar for a `High` live placement result, because the placement API is evaluating a larger simultaneous allocation request.
+- `Desired Placement Count` does not change the persisted dashboard score history in `dbo.CapacityScoreSnapshot`; it only changes the transient live placement enrichment shown after a manual refresh.
 
 #### Data Ingestion (Admin page)
 
@@ -411,6 +474,9 @@ Current API state:
 - `GET /api/quota/plan` powers `Build Move Plan` as a read-only workflow sourced from the selected captured candidate run in SQL.
 - `POST /api/quota/simulate` powers `Simulate Impact` as a read-only projection over the selected captured run and proposed plan.
 - `Apply Movements` is still a frontend placeholder; backend write routes are not yet implemented.
+
+Execution prerequisite:
+- When quota group move/apply execution is implemented, do not assume the App Service default shell is enough. The runtime will need PowerShell `7` and the relevant Az/Quota modules or API-capable helper tooling available on the executing host.
 
 Planned data/API direction:
 - Execute quota apply/simulate workflows.

@@ -8,16 +8,40 @@
 </head>
 <body>
   <header class="topbar">
-    <h1>Capacity Planning Dashboard</h1>
+    <h1 id="topbarReportTitle">Capacity Planning Dashboard - Capacity Grid</h1>
     <p>Native Azure MVP for capacity, quota, and planning workflows</p>
   </header>
 
   <div class="app-shell">
     <nav class="sidebar">
       <div class="nav-group-label">Reporting</div>
-      <button class="nav-item active" data-nav="reporting">
+      <button class="nav-sub-item active" data-report-view="capacity-grid">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="1" y="10" width="14" height="1.5"/><rect x="1" y="6.5" width="14" height="1.5"/><rect x="1" y="3" width="14" height="1.5"/></svg>
+        Capacity Grid
+      </button>
+      <button class="nav-sub-item" data-report-view="region-chart">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="1" y="9" width="3" height="6"/><rect x="6" y="5" width="3" height="10"/><rect x="11" y="1" width="3" height="14"/></svg>
-        Capacity Reports
+        By Region
+      </button>
+      <button class="nav-sub-item" data-report-view="sku-chart">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="1" y="4" width="3" height="11"/><rect x="6" y="7" width="3" height="8"/><rect x="11" y="2" width="3" height="13"/></svg>
+        Top SKUs
+      </button>
+      <button class="nav-sub-item" data-report-view="capacity-score">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 5v3.5l2 2" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+        Capacity Score
+      </button>
+      <button class="nav-sub-item" data-report-view="family-summary">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="1" y="2" width="14" height="2" rx="1"/><rect x="1" y="7" width="10" height="2" rx="1"/><rect x="1" y="12" width="12" height="2" rx="1"/></svg>
+        Family Summary
+      </button>
+      <button class="nav-sub-item" data-report-view="region-matrix">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="1" y="1" width="6" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="9" y="1" width="6" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="1" y="9" width="6" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="9" y="9" width="6" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+        Region Matrix
+      </button>
+      <button class="nav-sub-item" data-report-view="trend">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><polyline points="1,12 5,7 9,9 15,3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Trend History
       </button>
 
       <div class="nav-group-label" style="margin-top: 16px;">Admin</div>
@@ -37,6 +61,7 @@
 
     <main class="main-content">
       <section class="page active" id="reporting-page">
+
         <div class="surface">
           <div class="filter-section-label">Filters</div>
           <div class="filters">
@@ -76,17 +101,6 @@
         </div>
 
         <section class="summary" id="summaryCards"></section>
-
-        <div class="view-tabs-bar">
-          <div class="view-tabs" role="tablist" aria-label="Report Views">
-            <button class="view-tab active" data-view="capacity-grid">Capacity Grid</button>
-            <button class="view-tab" data-view="region-chart">By Region</button>
-            <button class="view-tab" data-view="sku-chart">Top SKUs</button>
-            <button class="view-tab" data-view="capacity-score">Capacity Score</button>
-            <button class="view-tab" data-view="family-summary">Family Summary</button>
-            <button class="view-tab" data-view="trend">Trend History</button>
-          </div>
-        </div>
 
         <div class="view-panel active" id="view-capacity-grid">
           <div class="surface overflow-auto">
@@ -147,6 +161,11 @@
                 Review 30-day score retention before adding automated cleanup
               </label>
             </div>
+            <div class="score-explainer">
+              <strong>Derived score</strong> comes from persisted quota and capacity data in SQL.
+              <strong>Live placement score</strong> is only populated when you press <span>Refresh Live Placement</span>.
+              Desired Placement Count is capped at <strong>1000 VMs</strong> per live lookup.
+            </div>
             <p id="capacityScoreLiveStatus" class="inline-note" style="margin: 0 0 8px;">Live placement has not been refreshed in this session.</p>
             <table id="capacityScoreGrid">
               <thead>
@@ -154,8 +173,8 @@
                   <th>Region</th>
                   <th>SKU</th>
                   <th>Family</th>
-                  <th>Score</th>
-                  <th>Live Placement</th>
+                  <th>Derived Score</th>
+                  <th>Live Placement Score</th>
                   <th>Placement Status</th>
                   <th>Last Live Check</th>
                   <th>Subscriptions</th>
@@ -212,6 +231,34 @@
               <tbody></tbody>
             </table>
             <p id="familySummaryEmpty" class="inline-note" style="display:none; margin-top:8px;">No quota data available</p>
+          </div>
+        </div>
+
+        <div class="view-panel" id="view-region-matrix">
+          <div class="surface overflow-auto">
+            <h3>Multi-Region Capacity Matrix</h3>
+            <p class="inline-note" style="margin: 0 0 10px;">Best-case availability for each VM family per region. Shows whether <em>any</em> SKU in the family is available — not all SKUs. Use the Capacity Grid for per-SKU detail.</p>
+
+            <div class="matrix-legend">
+              <div class="matrix-legend-section">
+                <strong>Row Color</strong>
+                <span class="matrix-legend-item matrix-legend-green">Green — at least one SKU in this family is fully available</span>
+                <span class="matrix-legend-item matrix-legend-yellow">Yellow — some SKUs may work, but there are constraints</span>
+                <span class="matrix-legend-item matrix-legend-gray">Gray — no SKUs from this family available in scanned regions</span>
+              </div>
+              <div class="matrix-legend-section">
+                <strong>Cell Status</strong>
+                <span class="matrix-legend-item"><span class="badge OK">✓ OK</span> Ready to deploy. No restrictions.</span>
+                <span class="matrix-legend-item"><span class="badge CONSTRAINED">⚠ CONSTRAINED</span> Azure is low on hardware. Try a different zone or wait.</span>
+                <span class="matrix-legend-item"><span class="badge LIMITED">⚠ LIMITED</span> Your subscription can't use this. Request access via support ticket.</span>
+                <span class="matrix-legend-item"><span class="badge LIMITED">⚡ PARTIAL</span> Some zones work, others are blocked. No zone redundancy.</span>
+                <span class="matrix-legend-item"><span class="badge CONSTRAINED">✗ BLOCKED</span> Cannot deploy. Pick a different region or SKU.</span>
+              </div>
+              <p class="inline-note" style="margin: 6px 0 0;"><strong>NOTE:</strong> 'OK' means SOME SKUs work, not ALL. Check the Capacity Grid for specific SKU availability.</p>
+            </div>
+
+            <div id="regionMatrixContainer" style="margin-top: 12px;"></div>
+            <p id="regionMatrixEmpty" class="inline-note" style="display:none; margin-top:8px;">No capacity data available for the current filter scope.</p>
           </div>
         </div>
 

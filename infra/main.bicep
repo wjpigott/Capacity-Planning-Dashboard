@@ -29,8 +29,15 @@ param sqlEntraAdminLogin string
 @description('Microsoft Entra administrator object ID for Azure SQL')
 param sqlEntraAdminObjectId string
 
+@secure()
+@description('Optional shared secret used between the dashboard web app and the worker function app')
+param workerSharedSecret string = ''
+
 var appServicePlanName = 'asp-capdash-${environment}-${workloadSuffix}'
+var workerPlanName = 'asp-capdash-worker-${environment}-${workloadSuffix}'
 var webAppName = 'app-capdash-${environment}-${workloadSuffix}'
+var functionAppName = 'func-capdash-${environment}-${workloadSuffix}-appsvc'
+var functionStorageName = 'stcap${environment}${uniqueString(resourceGroup().id, workloadSuffix, 'worker')}'
 var appInsightsName = 'appi-capdash-${environment}-${workloadSuffix}'
 var logAnalyticsName = 'log-capdash-${environment}-${workloadSuffix}'
 var keyVaultName = 'kv-capdash-${environment}-${workloadSuffix}'
@@ -58,6 +65,22 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   }
 }
 
+resource functionStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+  name: functionStorageName
+  location: location
+  sku: {
+    name: 'Standard_LRS'
+  }
+  kind: 'StorageV2'
+  properties: {
+    minimumTlsVersion: 'TLS1_2'
+    supportsHttpsTrafficOnly: true
+    allowBlobPublicAccess: false
+    allowSharedKeyAccess: false
+    accessTier: 'Hot'
+  }
+}
+
 resource plan 'Microsoft.Web/serverfarms@2023-12-01' = {
   name: appServicePlanName
   location: location
@@ -65,6 +88,20 @@ resource plan 'Microsoft.Web/serverfarms@2023-12-01' = {
     name: 'P1v3'
     tier: 'PremiumV3'
     size: 'P1v3'
+    capacity: 1
+  }
+  properties: {
+    reserved: false
+  }
+}
+
+resource workerPlan 'Microsoft.Web/serverfarms@2023-12-01' = {
+  name: workerPlanName
+  location: location
+  sku: {
+    name: 'B1'
+    tier: 'Basic'
+    size: 'B1'
     capacity: 1
   }
   properties: {
@@ -105,6 +142,64 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'SQL_AUTH_MODE'
           value: 'managed-identity'
+        }
+        {
+          name: 'CAPACITY_WORKER_BASE_URL'
+          value: 'https://${functionApp.properties.defaultHostName}'
+        }
+        {
+          name: 'CAPACITY_WORKER_SHARED_SECRET'
+          value: workerSharedSecret
+        }
+      ]
+    }
+  }
+}
+
+resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
+  name: functionAppName
+  location: location
+  kind: 'functionapp'
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    serverFarmId: workerPlan.id
+    httpsOnly: true
+    siteConfig: {
+      ftpsState: 'Disabled'
+      minTlsVersion: '1.2'
+      http20Enabled: true
+      alwaysOn: true
+      powerShellVersion: '7.4'
+      appSettings: [
+        {
+          name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+          value: appInsights.properties.ConnectionString
+        }
+        {
+          name: 'AzureWebJobsStorage__accountName'
+          value: functionStorage.name
+        }
+        {
+          name: 'AzureWebJobsStorage__credential'
+          value: 'managedidentity'
+        }
+        {
+          name: 'FUNCTIONS_EXTENSION_VERSION'
+          value: '~4'
+        }
+        {
+          name: 'FUNCTIONS_WORKER_RUNTIME'
+          value: 'powershell'
+        }
+        {
+          name: 'WEBSITE_RUN_FROM_PACKAGE'
+          value: '1'
+        }
+        {
+          name: 'WORKER_SHARED_SECRET'
+          value: workerSharedSecret
         }
       ]
     }
@@ -169,9 +264,52 @@ resource webToKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
+resource workerToKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(kv.id, functionApp.id, 'KeyVaultSecretsUser')
+  scope: kv
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+    principalId: functionApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource workerToFunctionStorageBlobRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(functionStorage.id, functionApp.id, 'StorageBlobDataOwner')
+  scope: functionStorage
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b')
+    principalId: functionApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource workerToFunctionStorageQueueRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(functionStorage.id, functionApp.id, 'StorageQueueDataContributor')
+  scope: functionStorage
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '974c5e8b-45b9-4653-ba55-5f855dd0fb88')
+    principalId: functionApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource workerToFunctionStorageTableRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(functionStorage.id, functionApp.id, 'StorageTableDataContributor')
+  scope: functionStorage
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3')
+    principalId: functionApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 output webAppName string = webApp.name
 output webAppUrl string = 'https://${webApp.properties.defaultHostName}'
 output managedIdentityPrincipalId string = webApp.identity.principalId
+output functionAppName string = functionApp.name
+output functionAppUrl string = 'https://${functionApp.properties.defaultHostName}'
+output functionManagedIdentityPrincipalId string = functionApp.identity.principalId
 output sqlServerFqdn string = '${sqlServer.name}${az.environment().suffixes.sqlServerHostname}'
 output sqlServerName string = sqlServer.name
 output sqlDatabaseName string = sqlDatabase.name

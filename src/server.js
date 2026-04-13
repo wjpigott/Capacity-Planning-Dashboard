@@ -343,7 +343,8 @@ app.post('/api/capacity/scores/live', async (req, res) => {
       region: req.body?.region,
       family: req.body?.family,
       availability: req.body?.availability,
-      desiredCount: req.body?.desiredCount
+      desiredCount: req.body?.desiredCount,
+      extraSkus: req.body?.extraSkus
     });
     res.json(result);
   } catch (err) {

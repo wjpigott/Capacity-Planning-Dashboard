@@ -144,7 +144,7 @@ function buildAuthRouter() {
       return res.status(400).send('Missing authorization code.');
     }
     if (state !== req.session.authState) {
-      console.error('[auth] state mismatch — received:', state, 'session:', req.session.authState, 'sessionID:', req.sessionID);
+      console.error('[auth] state mismatch on callback — session may have expired or been lost');
       return res.status(400).send('State mismatch – please try logging in again.');
     }
     delete req.session.authState;

@@ -44,12 +44,8 @@ const familySummaryGridBody = document.querySelector('#familySummaryGrid tbody')
 const familySummaryEmpty = document.querySelector('#familySummaryEmpty');
 const capacityScoreGridBody = document.querySelector('#capacityScoreGrid tbody');
 const capacityScoreEmpty = document.querySelector('#capacityScoreEmpty');
-const capacityScoreHistoryGridBody = document.querySelector('#capacityScoreHistoryGrid tbody');
-const capacityScoreHistoryEmpty = document.querySelector('#capacityScoreHistoryEmpty');
-const capacityScoreHistoryDays = document.querySelector('#capacityScoreHistoryDays');
 const capacityScoreDesiredCount = document.querySelector('#capacityScoreDesiredCount');
 const refreshLivePlacementBtn = document.querySelector('#refreshLivePlacementBtn');
-const refreshScoreHistoryBtn = document.querySelector('#refreshScoreHistoryBtn');
 const capacityScoreLiveStatus = document.querySelector('#capacityScoreLiveStatus');
 const regionChart = document.querySelector('#regionChart');
 const skuChart = document.querySelector('#skuChart');
@@ -1313,55 +1309,6 @@ function getFamilyExtraSkus(familyValue) {
   return Array.isArray(mapped) ? mapped : [];
 }
 
-function renderCapacityScoreHistory(historyRows) {
-  if (!capacityScoreHistoryGridBody) {
-    return;
-  }
-
-  capacityScoreHistoryGridBody.innerHTML = '';
-  if (!historyRows || historyRows.length === 0) {
-    if (capacityScoreHistoryEmpty) {
-      capacityScoreHistoryEmpty.style.display = 'block';
-    }
-    capacityScoreHistoryGridBody.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 20px; color: #5d7085;">No persisted capacity score history is available for this filter window.</td></tr>';
-    return;
-  }
-
-  if (capacityScoreHistoryEmpty) {
-    capacityScoreHistoryEmpty.style.display = 'none';
-  }
-
-  historyRows.forEach((row) => {
-    const scoreClass = String(row.score || '').toUpperCase();
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${formatTimestamp(row.capturedAtUtc)}</td>
-      <td>${row.region || 'n/a'}</td>
-      <td>${row.sku || 'n/a'}</td>
-      <td><span class="badge ${scoreClass}">${row.score || 'n/a'}</span></td>
-      <td>${row.reason || 'n/a'}</td>
-    `;
-    capacityScoreHistoryGridBody.appendChild(tr);
-  });
-}
-
-async function loadCapacityScoreHistory() {
-  const baseFilters = getQueryFilters();
-  const query = new URLSearchParams({
-    days: capacityScoreHistoryDays?.value || '30',
-    region: baseFilters.region,
-    family: baseFilters.family
-  });
-
-  try {
-    const response = await fetch(`/api/capacity/scores/history?${query.toString()}`);
-    const payload = response.ok ? await response.json() : { rows: [] };
-    renderCapacityScoreHistory(Array.isArray(payload.rows) ? payload.rows : []);
-  } catch (_) {
-    renderCapacityScoreHistory([]);
-  }
-}
-
 async function refreshLivePlacementScores() {
   if (!refreshLivePlacementBtn) {
     return;
@@ -1648,7 +1595,6 @@ function wireButtons() {
   document.getElementById('simulateBtn').addEventListener('click', simulateQuotaImpact);
   triggerIngestBtn.addEventListener('click', triggerCapacityIngest);
   refreshLivePlacementBtn?.addEventListener('click', refreshLivePlacementScores);
-  refreshScoreHistoryBtn?.addEventListener('click', loadCapacityScoreHistory);
   document.getElementById('applyBtn').addEventListener('click', () => {
     const ok = confirm('Apply quota movements is a write operation. Continue?');
     if (ok) alert('Apply request queued. Next step: backend orchestration + approval flow.');
@@ -1719,7 +1665,6 @@ availabilityFilter.addEventListener('change', () => {
   loadAnalytics();
 });
 
-capacityScoreHistoryDays?.addEventListener('change', loadCapacityScoreHistory);
 capacityScoreDesiredCount?.addEventListener('change', normalizeDesiredPlacementCount);
 
 wireTabs();

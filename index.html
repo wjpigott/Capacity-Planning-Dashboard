@@ -144,22 +144,10 @@
           <div class="surface overflow-auto">
             <h3>Regional SKU Capacity Score</h3>
             <div class="filters toolbar-inline" style="margin-bottom: 10px; align-items: end;">
-              <label>History Window
-                <select id="capacityScoreHistoryDays">
-                  <option value="7">Last 7 days</option>
-                  <option value="14">Last 14 days</option>
-                  <option value="30" selected>Last 30 days</option>
-                </select>
-              </label>
               <label>Desired Placement Count
                 <input id="capacityScoreDesiredCount" type="number" min="1" max="1000" value="1" />
               </label>
               <button id="refreshLivePlacementBtn" type="button">Refresh Live Placement</button>
-              <button id="refreshScoreHistoryBtn" type="button">Refresh Score History</button>
-              <label class="checkbox-inline checkbox-inline--muted">
-                <input id="capacityScoreRetentionReview" type="checkbox" />
-                Review 30-day score retention before adding automated cleanup
-              </label>
             </div>
             <div class="score-explainer">
               <strong>Derived score</strong> comes from persisted quota and capacity data in SQL.
@@ -190,22 +178,7 @@
             </table>
             <p id="capacityScoreEmpty" class="inline-note" style="display:none; margin-top:8px;">No capacity score data available</p>
 
-            <div class="history-section">
-              <h4>Score History</h4>
-              <table id="capacityScoreHistoryGrid">
-                <thead>
-                  <tr>
-                    <th>Captured</th>
-                    <th>Region</th>
-                    <th>SKU</th>
-                    <th>Score</th>
-                    <th>Reason</th>
-                  </tr>
-                </thead>
-                <tbody></tbody>
-              </table>
-              <p id="capacityScoreHistoryEmpty" class="inline-note" style="display:none; margin-top:8px;">No persisted capacity score history is available for the selected window.</p>
-            </div>
+
           </div>
         </div>
 

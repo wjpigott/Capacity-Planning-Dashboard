@@ -265,7 +265,7 @@ Required app settings:
 
 - `INGEST_API_KEY` (required to call internal ingestion routes)
 - `INGEST_REGION_PRESET` (default `USMajor`)
-- `INGEST_QUOTA_FAMILY_FILTERS` (default `standard_BS,standard_DS`)
+- `INGEST_QUOTA_FAMILY_FILTERS` (optional; comma-separated VM family names to restrict ingestion, e.g. `standard_BS,standard_DS`; omit or leave empty to ingest all families)
 - `INGEST_SUBSCRIPTION_HASH_SALT` (optional salt for masked subscription key hashing)
 - `INGEST_SUBSCRIPTION_IDS` (optional comma-separated list; if omitted, enabled subscriptions are auto-discovered)
 - `INGEST_ON_STARTUP` (`true`/`false`)

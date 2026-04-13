@@ -27,9 +27,10 @@ function normalize(value) {
 }
 
 function getFamilyFilters(explicitFilters) {
+  // When no explicit filters are passed and the env var is absent/empty, return [] to mean "all families".
   const source = explicitFilters && explicitFilters.length > 0
     ? explicitFilters.join(',')
-    : (process.env.INGEST_QUOTA_FAMILY_FILTERS || 'standard_BS,standard_DS');
+    : (process.env.INGEST_QUOTA_FAMILY_FILTERS || '');
 
   return source
     .split(',')
@@ -38,6 +39,10 @@ function getFamilyFilters(explicitFilters) {
 }
 
 function familyMatches(familyName, normalizedFilters) {
+  // Empty filter list means no restriction — match every family.
+  if (!normalizedFilters || normalizedFilters.length === 0) {
+    return true;
+  }
   const candidate = normalize(familyName);
   return normalizedFilters.some((filterValue) => candidate.includes(filterValue) || filterValue.includes(candidate));
 }

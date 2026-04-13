@@ -175,7 +175,12 @@ function buildAuthRouter() {
         groups: Array.isArray(claims.groups) ? claims.groups : []
       };
 
-      const returnTo = req.session.returnTo || '/';
+      let returnTo = req.session.returnTo || '/';
+      // Don't redirect to API endpoints — this prevents accidental 401 responses
+      // from being displayed as pages. Always go to home if returnTo looks suspicious.
+      if (returnTo.startsWith('/api/') || returnTo.startsWith('/internal/')) {
+        returnTo = '/';
+      }
       delete req.session.returnTo;
       // Explicitly save session before redirecting to ensure account is persisted
       req.session.save((saveErr) => {

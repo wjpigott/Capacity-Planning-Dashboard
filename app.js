@@ -22,6 +22,16 @@ const subscriptionSelectionInfo = document.querySelector('#subscriptionSelection
 const adminStatus = document.querySelector('#adminStatus');
 const triggerIngestBtn = document.querySelector('#triggerIngestBtn');
 const subscriptionRefreshBtn = document.querySelector('#subscriptionRefreshBtn');
+const adminNavItems = document.querySelectorAll('[data-admin-only="true"]');
+const ingestStateValue = document.querySelector('#ingestStateValue');
+const ingestLastRunValue = document.querySelector('#ingestLastRunValue');
+const ingestLastSuccessValue = document.querySelector('#ingestLastSuccessValue');
+const ingestDurationValue = document.querySelector('#ingestDurationValue');
+const ingestRowsValue = document.querySelector('#ingestRowsValue');
+const ingestSubscriptionsValue = document.querySelector('#ingestSubscriptionsValue');
+const ingestRegionsValue = document.querySelector('#ingestRegionsValue');
+const ingestFamiliesValue = document.querySelector('#ingestFamiliesValue');
+const ingestErrorValue = document.querySelector('#ingestErrorValue');
 
 let ingestStatusPollHandle = null;
 
@@ -29,6 +39,74 @@ function setAdminStatus(message, tone = 'info') {
   if (!adminStatus) return;
   adminStatus.className = `admin-status ${tone}`;
   adminStatus.textContent = message;
+}
+
+function formatTimestamp(value) {
+  return value ? new Date(value).toLocaleString() : 'Never';
+}
+
+function formatDuration(ms) {
+  if (!ms) {
+    return 'n/a';
+  }
+
+  if (ms < 1000) {
+    return `${ms} ms`;
+  }
+
+  return `${(ms / 1000).toFixed(1)} s`;
+}
+
+function renderIngestionStatusCard(status) {
+  if (!ingestStateValue) {
+    return;
+  }
+
+  const summary = status?.lastSummary || {};
+  const regions = Array.isArray(summary.regions) && summary.regions.length > 0 ? summary.regions.join(', ') : 'n/a';
+  const families = Array.isArray(summary.familyFilters) && summary.familyFilters.length > 0 ? summary.familyFilters.join(', ') : 'n/a';
+
+  ingestStateValue.textContent = status?.inProgress ? 'Running' : (status?.lastError ? 'Failed' : (status?.lastSuccessUtc ? 'Healthy' : 'Idle'));
+  ingestLastRunValue.textContent = formatTimestamp(status?.lastRunUtc);
+  ingestLastSuccessValue.textContent = formatTimestamp(status?.lastSuccessUtc);
+  ingestDurationValue.textContent = formatDuration(status?.lastDurationMs);
+  ingestRowsValue.textContent = Number(status?.lastInsertedRows || 0).toLocaleString();
+  ingestSubscriptionsValue.textContent = Number(summary.subscriptionCount || 0).toLocaleString();
+  ingestRegionsValue.textContent = regions;
+  ingestFamiliesValue.textContent = families;
+  ingestErrorValue.textContent = status?.lastError || 'None';
+}
+
+function applyAdminAccess(auth) {
+  const enforce = auth?.mode === 'enforce';
+  const canAccessAdmin = auth?.canAccessAdmin !== false;
+
+  adminNavItems.forEach((item) => {
+    item.classList.toggle('hidden', enforce && !canAccessAdmin);
+  });
+
+  if (enforce && !canAccessAdmin) {
+    document.querySelectorAll('.nav-item').forEach((item) => item.classList.remove('active'));
+    document.querySelectorAll('.page').forEach((page) => page.classList.remove('active'));
+    document.querySelector('[data-nav="reporting"]')?.classList.add('active');
+    document.getElementById('reporting-page')?.classList.add('active');
+  }
+}
+
+async function loadViewerAuth() {
+  try {
+    const response = await fetch('/api/auth/me');
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || 'Failed to load auth context.');
+    }
+
+    applyAdminAccess(payload.auth);
+    return payload.auth;
+  } catch {
+    applyAdminAccess({ mode: 'off', canAccessAdmin: true });
+    return null;
+  }
 }
 
 function setButtonBusy(button, isBusy, busyLabel) {
@@ -83,6 +161,7 @@ async function fetchAdminIngestStatus() {
 
 async function syncIngestStatus() {
   const status = await fetchAdminIngestStatus();
+  renderIngestionStatusCard(status);
 
   if (status.inProgress) {
     setButtonBusy(triggerIngestBtn, true, 'Ingest Running...');
@@ -559,6 +638,7 @@ wireTabs();
 wireViewTabs();
 wireButtons();
 syncRegionOptions();
+loadViewerAuth();
 syncIngestStatus().catch(() => {});
 loadSubscriptions();
 loadCapacityRows();

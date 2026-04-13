@@ -83,6 +83,10 @@ body {
   font-weight: 600;
 }
 
+.nav-item.hidden {
+  display: none;
+}
+
 .nav-icon {
   width: 16px;
   height: 16px;
@@ -161,6 +165,46 @@ body {
   background: #ffecee;
   border-color: #f1b7c0;
   color: #8a2030;
+}
+
+.admin-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin: 0 0 16px;
+}
+
+.admin-status-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.admin-status-card--wide {
+  grid-column: span 2;
+}
+
+.admin-status-card--full {
+  grid-column: 1 / -1;
+}
+
+.admin-status-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.admin-status-card strong {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--ink);
+  line-height: 1.4;
 }
 
 /* ─── Admin action cards ─────────────────────────────────────── */
@@ -474,4 +518,9 @@ th {
 
 @media (max-width: 768px) {
   .topbar h1 { font-size: 22px; }
+
+  .admin-status-card--wide,
+  .admin-status-card--full {
+    grid-column: auto;
+  }
 }

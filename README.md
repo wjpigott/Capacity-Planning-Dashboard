@@ -57,7 +57,7 @@ Status legend:
 - [x] App identity granted SQL read/write roles for ingestion and read APIs
 - [x] Internal ingestion endpoints protected by `INGEST_API_KEY`
 - [x] Subscription identities masked (`subscriptionKey`) in stored analytics rows
-- [ ] Entra ID RBAC — gate Admin sidebar sections (Data Ingestion, Quota Discovery, Quota Movements) behind an app role (e.g. `CapacityAdmin`) assigned in the App Registration; read-only Reporting available to all authenticated users
+- [ ] Entra ID RBAC — code support is in place via App Service auth headers and `/api/auth/me`, but platform enablement is still pending: enable App Service Authentication, register/assign the `CapacityAdmin` app role, and set `ADMIN_RBAC_MODE=enforce`
 
 #### Live ingestion pipeline
 
@@ -219,6 +219,8 @@ Required app settings:
 - `INGEST_SUBSCRIPTION_IDS` (optional comma-separated list; if omitted, enabled subscriptions are auto-discovered)
 - `INGEST_ON_STARTUP` (`true`/`false`)
 - `INGEST_INTERVAL_MINUTES` (`0` disables scheduling)
+- `ADMIN_RBAC_MODE` (`off` by default; set to `enforce` after App Service Authentication is enabled)
+- `ADMIN_ROLE_NAME` (`CapacityAdmin` by default)
 
 Required database permissions for the app identity:
 
@@ -234,6 +236,7 @@ Admin UI endpoints:
 
 - `POST /api/admin/ingest/capacity` (same-origin route used by the Admin portal Run Ingest Now action)
 - `GET /api/admin/ingest/status` (same-origin route used by the Admin portal status banner)
+- `GET /api/auth/me` (returns App Service auth context and resolved Admin access state)
 
 Read APIs for analytics:
 
@@ -387,6 +390,7 @@ Planned data/API direction:
 - Required RBAC for each ingested subscription:
 	- At minimum, permission to read `Microsoft.Compute/locations/usages` and SKU metadata (Reader role at subscription scope is sufficient for current read APIs).
 - Internal ingestion APIs are gated by `INGEST_API_KEY`.
+- Admin UI RBAC support reads App Service Authentication headers (`x-ms-client-principal`) when present. Enforce it only after Easy Auth is enabled and the `CapacityAdmin` app role is assigned.
 
 ## SQL migration
 

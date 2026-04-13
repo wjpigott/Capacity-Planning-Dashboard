@@ -19,10 +19,76 @@ const { ensurePhase3Schema } = require('./store/sql');
 
 const app = express();
 const port = process.env.PORT || 3000;
+const adminRoleName = process.env.ADMIN_ROLE_NAME || 'CapacityAdmin';
+const adminRbacMode = (process.env.ADMIN_RBAC_MODE || 'off').toLowerCase();
 
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.resolve(__dirname, '..')));
+
+function parseClientPrincipal(req) {
+  const encoded = req.header('x-ms-client-principal');
+  if (!encoded) {
+    return {
+      isAuthenticated: false,
+      name: null,
+      userId: null,
+      roles: []
+    };
+  }
+
+  try {
+    const decoded = Buffer.from(encoded, 'base64').toString('utf8');
+    const principal = JSON.parse(decoded);
+    const claims = Array.isArray(principal.claims) ? principal.claims : [];
+    const roleType = (principal.role_typ || '').toLowerCase();
+    const roleValues = claims
+      .filter((claim) => {
+        const claimType = (claim.typ || '').toLowerCase();
+        return claimType === roleType || claimType.endsWith('/claims/role') || claimType === 'roles';
+      })
+      .map((claim) => claim.val)
+      .filter(Boolean);
+
+    return {
+      isAuthenticated: true,
+      name: principal.name || claims.find((claim) => claim.typ === principal.name_typ)?.val || null,
+      userId: principal.userId || claims.find((claim) => claim.typ === 'http://schemas.microsoft.com/identity/claims/objectidentifier')?.val || null,
+      roles: [...new Set([...(principal.userRoles || []), ...roleValues])]
+    };
+  } catch {
+    return {
+      isAuthenticated: false,
+      name: null,
+      userId: null,
+      roles: []
+    };
+  }
+}
+
+function isAdminPrincipal(principal) {
+  return principal.roles.some((role) => String(role).toLowerCase() === adminRoleName.toLowerCase());
+}
+
+function requireAdminRole(req, res, next) {
+  if (adminRbacMode !== 'enforce') {
+    next();
+    return;
+  }
+
+  const principal = parseClientPrincipal(req);
+  if (!principal.isAuthenticated) {
+    res.status(401).json({ ok: false, error: 'Authentication is required for Admin access.' });
+    return;
+  }
+
+  if (!isAdminPrincipal(principal)) {
+    res.status(403).json({ ok: false, error: `Admin role '${adminRoleName}' is required.` });
+    return;
+  }
+
+  next();
+}
 
 function requireIngestKey(req, res, next) {
   const expected = process.env.INGEST_API_KEY;
@@ -42,6 +108,25 @@ function requireIngestKey(req, res, next) {
 
 app.get('/healthz', (_, res) => {
   res.json({ status: 'ok', service: 'capacity-dashboard-api' });
+});
+
+app.get('/api/auth/me', (req, res) => {
+  const principal = parseClientPrincipal(req);
+  const isAdmin = isAdminPrincipal(principal);
+
+  res.json({
+    ok: true,
+    auth: {
+      mode: adminRbacMode,
+      adminRoleName,
+      isAuthenticated: principal.isAuthenticated,
+      principalName: principal.name,
+      userId: principal.userId,
+      roles: principal.roles,
+      isAdmin,
+      canAccessAdmin: adminRbacMode === 'enforce' ? isAdmin : true
+    }
+  });
 });
 
 app.get('/api/capacity', async (req, res) => {
@@ -125,7 +210,7 @@ app.get('/api/capacity/families', async (req, res) => {
   }
 });
 
-app.post('/api/admin/ingest/capacity', async (req, res) => {
+app.post('/api/admin/ingest/capacity', requireAdminRole, async (req, res) => {
   try {
     const result = await runCapacityIngestion({
       regionPreset: req.body?.regionPreset,
@@ -140,7 +225,7 @@ app.post('/api/admin/ingest/capacity', async (req, res) => {
   }
 });
 
-app.get('/api/admin/ingest/status', (_, res) => {
+app.get('/api/admin/ingest/status', requireAdminRole, (_, res) => {
   res.json({ ok: true, status: getIngestionStatus() });
 });
 

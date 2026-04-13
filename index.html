@@ -21,15 +21,15 @@
       </button>
 
       <div class="nav-group-label" style="margin-top: 16px;">Admin</div>
-      <button class="nav-item" data-nav="admin">
+      <button class="nav-item" data-nav="admin" data-admin-only="true">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 1a6 6 0 110 12A6 6 0 018 2zm-.5 3v3.22l-2.14 2.14.71.71L8.5 8.78V5h-1z"/></svg>
         Data Ingestion
       </button>
-      <button class="nav-item" data-nav="quota-discovery">
+      <button class="nav-item" data-nav="quota-discovery" data-admin-only="true">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="6.5" cy="6.5" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="9.5" y1="9.5" x2="14" y2="14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
         Quota Discovery
       </button>
-      <button class="nav-item" data-nav="quota-movement">
+      <button class="nav-item" data-nav="quota-movement" data-admin-only="true">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1 8l4-4v2.5h6V4l4 4-4 4v-2.5H5V12z"/></svg>
         Quota Movements
       </button>
@@ -168,6 +168,45 @@
         <div class="admin-page-label">Data Ingestion</div>
         <p class="page-description">Trigger live ingestion from Azure ARM APIs and manage the subscription catalog stored in SQL. These operations write to the database.</p>
         <div id="adminStatus" class="admin-status info">No admin action submitted yet.</div>
+
+        <div class="admin-status-grid">
+          <div class="admin-status-card">
+            <span class="admin-status-label">Current State</span>
+            <strong id="ingestStateValue">Unknown</strong>
+          </div>
+          <div class="admin-status-card">
+            <span class="admin-status-label">Last Run</span>
+            <strong id="ingestLastRunValue">Never</strong>
+          </div>
+          <div class="admin-status-card">
+            <span class="admin-status-label">Last Success</span>
+            <strong id="ingestLastSuccessValue">Never</strong>
+          </div>
+          <div class="admin-status-card">
+            <span class="admin-status-label">Duration</span>
+            <strong id="ingestDurationValue">n/a</strong>
+          </div>
+          <div class="admin-status-card">
+            <span class="admin-status-label">Inserted Rows</span>
+            <strong id="ingestRowsValue">0</strong>
+          </div>
+          <div class="admin-status-card">
+            <span class="admin-status-label">Subscriptions</span>
+            <strong id="ingestSubscriptionsValue">0</strong>
+          </div>
+          <div class="admin-status-card admin-status-card--wide">
+            <span class="admin-status-label">Regions</span>
+            <strong id="ingestRegionsValue">n/a</strong>
+          </div>
+          <div class="admin-status-card admin-status-card--wide">
+            <span class="admin-status-label">Family Filters</span>
+            <strong id="ingestFamiliesValue">n/a</strong>
+          </div>
+          <div class="admin-status-card admin-status-card--full">
+            <span class="admin-status-label">Last Error</span>
+            <strong id="ingestErrorValue">None</strong>
+          </div>
+        </div>
 
         <div class="admin-cards">
           <div class="admin-card">

@@ -32,6 +32,7 @@ const gridBody = document.querySelector('#capacityGrid tbody');
 const regionPresetFilter = document.querySelector('#regionPresetFilter');
 const regionFilter = document.querySelector('#regionFilter');
 const familyFilter = document.querySelector('#familyFilter');
+const familySearch = document.querySelector('#familySearch');
 const resourceTypeFilter = document.querySelector('#resourceTypeFilter');
 const availabilityFilter = document.querySelector('#availabilityFilter');
 const summaryCards = document.querySelector('#summaryCards');
@@ -347,6 +348,23 @@ function formatFamilyLabel(family) {
     .replace(/^(Standard|Basic|Premium)([A-Z])/i, '$1_$2');
 }
 
+function applyFamilySearch() {
+  const term = (familySearch?.value || '').toLowerCase().trim();
+  let firstVisible = null;
+  [...familyFilter.options].forEach((opt) => {
+    const match = !term || opt.textContent.toLowerCase().includes(term) || opt.value.toLowerCase().includes(term) || opt.value === 'all';
+    opt.hidden = !match;
+    if (match && firstVisible === null && opt.value !== 'all') firstVisible = opt.value;
+  });
+  // If current selection is now hidden, fall back to 'all'
+  const selected = familyFilter.options[familyFilter.selectedIndex];
+  if (selected?.hidden) {
+    familyFilter.value = 'all';
+    renderGrid();
+    loadAnalytics();
+  }
+}
+
 function syncFamilyOptions() {
   const currentValue = familyFilter.value || 'all';
   const dataFamilies = unique('family');
@@ -368,6 +386,9 @@ function syncFamilyOptions() {
     option.textContent = formatFamilyLabel(value);
     familyFilter.appendChild(option);
   });
+
+  // Re-apply any existing search text after rebuilding options
+  applyFamilySearch();
 
   const availableValues = [...familyFilter.options].map((option) => option.value);
   familyFilter.value = availableValues.includes(currentValue) ? currentValue : 'all';
@@ -1660,9 +1681,14 @@ regionFilter.addEventListener('change', () => {
 
 resourceTypeFilter?.addEventListener('change', () => {
   familyFilter.value = 'all';
+  if (familySearch) familySearch.value = '';
   syncFamilyOptions();
   renderGrid();
   loadAnalytics();
+});
+
+familySearch?.addEventListener('input', () => {
+  applyFamilySearch();
 });
 
 familyFilter.addEventListener('change', () => {

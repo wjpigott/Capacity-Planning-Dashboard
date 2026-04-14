@@ -13,8 +13,8 @@
  * groups claim contains that Object ID they are treated as an administrator.
  * Leave ADMIN_GROUP_ID empty to disable admin gating (everyone is admin).
  *
- * Multi-tenant: authority uses 'common' so any Azure AD org account can sign in.
- * The groups claim in the ID token contains groups from the user's home tenant.
+ * Tenant-scoped: authority uses ENTRA_TENANT_ID so only users in the configured
+ * tenant directory (members + guests) can sign in.
  *
  * NOTE: If a user is a member of > 200 groups, Azure AD omits the inline groups
  * claim and provides an overage endpoint instead. In that rare case this middleware
@@ -27,6 +27,7 @@ const crypto = require('crypto');
 
 const AUTH_ENABLED = (process.env.AUTH_ENABLED || 'false').toLowerCase() === 'true';
 const ADMIN_GROUP_ID = (process.env.ADMIN_GROUP_ID || '').trim();
+const ENTRA_TENANT_ID = (process.env.ENTRA_TENANT_ID || '').trim();
 
 let _msalClient = null;
 
@@ -34,12 +35,11 @@ function getMsalClient() {
   if (_msalClient) return _msalClient;
   const clientId = process.env.ENTRA_CLIENT_ID;
   const clientSecret = process.env.ENTRA_CLIENT_SECRET;
-  if (!clientId || !clientSecret) return null;
+  if (!clientId || !clientSecret || !ENTRA_TENANT_ID) return null;
   _msalClient = new ConfidentialClientApplication({
     auth: {
       clientId,
-      // 'common' allows any Azure AD organisational account (multi-tenant)
-      authority: 'https://login.microsoftonline.com/common',
+      authority: `https://login.microsoftonline.com/${ENTRA_TENANT_ID}`,
       clientSecret
     }
   });
@@ -186,7 +186,7 @@ function buildAuthRouter() {
     if (!client) {
       return res.status(503).send(
         'Entra auth is not configured. ' +
-        'Set ENTRA_CLIENT_ID and ENTRA_CLIENT_SECRET in your environment, ' +
+        'Set ENTRA_CLIENT_ID, ENTRA_TENANT_ID, and ENTRA_CLIENT_SECRET in your environment, ' +
         'or set AUTH_ENABLED=false to disable auth.'
       );
     }
@@ -310,8 +310,9 @@ function buildAuthRouter() {
     req.session.destroy(() => {
       if (AUTH_ENABLED) {
         const post = encodeURIComponent(getRedirectUri().replace('/auth/callback', '/'));
+        const tenant = ENTRA_TENANT_ID || 'common';
         return res.redirect(
-          `https://login.microsoftonline.com/common/oauth2/v2.0/logout?post_logout_redirect_uri=${post}`
+          `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/logout?post_logout_redirect_uri=${post}`
         );
       }
       return res.redirect('/');

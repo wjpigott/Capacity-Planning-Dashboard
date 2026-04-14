@@ -90,7 +90,7 @@ const reportViewLabels = {
 
 const capacityPaging = {
   pageNumber: 1,
-  pageSize: 100,
+  pageSize: 50,
   total: 0,
   pageCount: 1,
   hasNext: false,
@@ -470,7 +470,7 @@ function resetCapacityPaging() {
 
 function renderCapacityPaging() {
   const total = Number(capacityPaging.total || 0);
-  const pageSize = Number(capacityPaging.pageSize || 100);
+  const pageSize = Number(capacityPaging.pageSize || 50);
   const pageNumber = Number(capacityPaging.pageNumber || 1);
   const pageCount = Math.max(1, Number(capacityPaging.pageCount || 1));
   const start = total === 0 ? 0 : ((pageNumber - 1) * pageSize) + 1;
@@ -1627,7 +1627,7 @@ async function loadCapacityRows() {
     const paging = payload.pagination || {};
     capacityPaging.total = Number(paging.total || 0);
     capacityPaging.pageNumber = Number(paging.pageNumber || capacityPaging.pageNumber || 1);
-    capacityPaging.pageSize = Number(paging.pageSize || capacityPaging.pageSize || 100);
+    capacityPaging.pageSize = Number(paging.pageSize || capacityPaging.pageSize || 50);
     capacityPaging.pageCount = Math.max(1, Number(paging.pageCount || 1));
     capacityPaging.hasNext = Boolean(paging.hasNext);
     capacityPaging.hasPrev = Boolean(paging.hasPrev);
@@ -1718,7 +1718,7 @@ function wireButtons() {
   });
 
   capacityPageSize?.addEventListener('change', () => {
-    const nextPageSize = Math.max(10, Math.min(Number(capacityPageSize.value || 100), 500));
+    const nextPageSize = Math.max(10, Math.min(Number(capacityPageSize.value || 50), 500));
     capacityPaging.pageSize = nextPageSize;
     resetCapacityPaging();
     loadCapacityRows();
@@ -1804,7 +1804,7 @@ wireTabs();
 wireViewTabs();
 wireButtons();
 if (capacityPageSize) {
-  capacityPaging.pageSize = Math.max(10, Math.min(Number(capacityPageSize.value || 100), 500));
+  capacityPaging.pageSize = Math.max(10, Math.min(Number(capacityPageSize.value || 50), 500));
 }
 renderCapacityPaging();
 syncRegionOptions();

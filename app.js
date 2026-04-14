@@ -197,14 +197,14 @@ async function loadViewerAuth() {
     const auth = payload.auth;
     if (auth.authEnabled && !auth.isAuthenticated) {
       window.location.href = '/auth/login';
-      return null;
+      return false; // navigating away — callers should not proceed
     }
     updateTopbarUser(auth);
     applyAdminAccess(auth);
-    return auth;
+    return true;
   } catch {
     applyAdminAccess({ canAccessAdmin: true });
-    return null;
+    return true; // network error — proceed and let individual calls fail gracefully
   }
 }
 
@@ -1498,7 +1498,8 @@ function getQueryFilters() {
   const family = familyFilter.value || 'all';
   const availability = availabilityFilter.value || 'all';
   const subscriptionIds = selectedSubscriptionCsv();
-  return { regionPreset, region, family, availability, subscriptionIds };
+  const resourceType = resourceTypeFilter?.value || 'all';
+  return { regionPreset, region, family, availability, subscriptionIds, resourceType };
 }
 
 async function loadAnalytics() {
@@ -1591,6 +1592,10 @@ async function loadSubscriptions(showStatus = false) {
 
   try {
     const response = await fetch(`/api/subscriptions?${query.toString()}`);
+    if (response.status === 401) {
+      window.location.href = '/auth/login';
+      return;
+    }
     if (!response.ok) {
       throw new Error('Failed to load subscriptions');
     }
@@ -1620,6 +1625,10 @@ async function loadCapacityRows() {
 
   try {
     const response = await fetch(`/api/capacity/paged?${query.toString()}`);
+    if (response.status === 401) {
+      window.location.href = '/auth/login';
+      return;
+    }
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
@@ -1810,7 +1819,9 @@ if (capacityPageSize) {
 }
 renderCapacityPaging();
 syncRegionOptions();
-loadViewerAuth();
-loadManagementGroups();
-syncIngestStatus().catch(() => {});
-loadSubscriptions().then(() => loadCapacityRows()).then(() => loadAnalytics());
+loadViewerAuth().then((proceed) => {
+  if (!proceed) return; // not authenticated — navigating to /auth/login
+  loadManagementGroups();
+  syncIngestStatus().catch(() => {});
+  loadSubscriptions().then(() => loadCapacityRows()).then(() => loadAnalytics());
+});

@@ -89,6 +89,16 @@ function appendCommonSqlFilters(filters, request) {
     where += ` AND ISNULL(subscriptionId, 'legacy-data') IN (${subParams.join(',')})`;
   }
 
+  if (filters.resourceType && filters.resourceType !== 'all') {
+    if (filters.resourceType === 'Compute') {
+      where += ` AND LOWER(skuFamily) LIKE '%family%'`;
+    } else if (filters.resourceType === 'Disk') {
+      where += ` AND LOWER(skuFamily) LIKE '%disk%'`;
+    } else if (filters.resourceType === 'Other') {
+      where += ` AND LOWER(skuFamily) NOT LIKE '%family%' AND LOWER(skuFamily) NOT LIKE '%disk%'`;
+    }
+  }
+
   return where;
 }
 

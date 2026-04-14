@@ -36,6 +36,17 @@ const port = process.env.PORT || 3000;
 // connections. Required for secure session cookies to work on App Service.
 app.set('trust proxy', 1);
 
+// Enforce HTTPS in production so Secure auth/session cookies are never dropped
+// when a user accidentally opens the HTTP endpoint.
+app.use((req, res, next) => {
+  if (process.env.NODE_ENV !== 'production') return next();
+  const forwardedProto = req.headers['x-forwarded-proto'];
+  if (typeof forwardedProto === 'string' && forwardedProto.toLowerCase() !== 'https') {
+    return res.redirect(301, `https://${req.headers.host}${req.originalUrl}`);
+  }
+  return next();
+});
+
 app.use(cors());
 app.use(express.json());
 

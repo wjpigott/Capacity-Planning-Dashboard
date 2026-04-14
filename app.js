@@ -1126,10 +1126,12 @@ function renderFamilySummary(familyRows) {
 
   familyRows.forEach((row) => {
     const tr = document.createElement('tr');
+    const skuCount = Number(row.skus || 0);
+    const okSkuCount = Number(row.ok || 0);
     tr.innerHTML = `
       <td>${formatFamilyLabel(row.family)}</td>
-      <td>${row.skus}</td>
-      <td>${row.ok}</td>
+      <td>${skuCount} SKU${skuCount === 1 ? '' : 's'}</td>
+      <td>${okSkuCount} SKU${okSkuCount === 1 ? '' : 's'}</td>
       <td>${row.largest}</td>
       <td>${row.zones}</td>
       <td>${row.status}</td>

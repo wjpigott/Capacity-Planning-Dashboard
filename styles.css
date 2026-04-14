@@ -554,6 +554,22 @@ th {
   color: #274868;
 }
 
+#familySummaryGrid th,
+#familySummaryGrid td {
+  font-size: 15px;
+}
+
+#familySummaryGrid td {
+  color: #10263d;
+  font-weight: 600;
+}
+
+.family-summary-note {
+  margin: 4px 0 10px;
+  color: #2a4159;
+  font-size: 14px;
+}
+
 .grid-pagination {
   display: flex;
   justify-content: center;

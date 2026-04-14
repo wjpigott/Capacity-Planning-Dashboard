@@ -72,6 +72,11 @@ const ingestRegionsValue = document.querySelector('#ingestRegionsValue');
 const ingestFamiliesValue = document.querySelector('#ingestFamiliesValue');
 const ingestErrorValue = document.querySelector('#ingestErrorValue');
 const topbarReportTitle = document.querySelector('#topbarReportTitle');
+const capacityPageInfo = document.querySelector('#capacityPageInfo');
+const capacityPageSize = document.querySelector('#capacityPageSize');
+const capacityPrevPage = document.querySelector('#capacityPrevPage');
+const capacityNextPage = document.querySelector('#capacityNextPage');
+const capacityPageLabel = document.querySelector('#capacityPageLabel');
 
 const reportViewLabels = {
   'capacity-grid': 'Capacity Grid',
@@ -81,6 +86,15 @@ const reportViewLabels = {
   'family-summary': 'Family Summary',
   'region-matrix': 'Region Matrix',
   trend: 'Trend History'
+};
+
+const capacityPaging = {
+  pageNumber: 1,
+  pageSize: 100,
+  total: 0,
+  pageCount: 1,
+  hasNext: false,
+  hasPrev: false
 };
 
 let ingestStatusPollHandle = null;
@@ -450,14 +464,45 @@ function syncRegionOptions() {
   regionFilter.disabled = regionPresetFilter.value !== 'custom';
 }
 
+function resetCapacityPaging() {
+  capacityPaging.pageNumber = 1;
+}
+
+function renderCapacityPaging() {
+  const total = Number(capacityPaging.total || 0);
+  const pageSize = Number(capacityPaging.pageSize || 100);
+  const pageNumber = Number(capacityPaging.pageNumber || 1);
+  const pageCount = Math.max(1, Number(capacityPaging.pageCount || 1));
+  const start = total === 0 ? 0 : ((pageNumber - 1) * pageSize) + 1;
+  const end = total === 0 ? 0 : Math.min(pageNumber * pageSize, total);
+
+  if (capacityPageInfo) {
+    capacityPageInfo.textContent = `Showing ${start}-${end} of ${total}`;
+  }
+  if (capacityPageLabel) {
+    capacityPageLabel.textContent = `Page ${pageNumber} of ${pageCount}`;
+  }
+  if (capacityPrevPage) {
+    capacityPrevPage.disabled = !capacityPaging.hasPrev;
+  }
+  if (capacityNextPage) {
+    capacityNextPage.disabled = !capacityPaging.hasNext;
+  }
+  if (capacityPageSize) {
+    capacityPageSize.value = String(pageSize);
+  }
+}
+
 function renderSummary(data) {
-  const total = data.length;
+  const total = Number(capacityPaging.total || data.length || 0);
+  const rowsShown = Number(data.length || 0);
+  const rowsLabel = total > rowsShown ? `${rowsShown} of ${total}` : `${total}`;
   const constrained = data.filter((r) => r.availability === 'CONSTRAINED').length;
   const totalAvailQuota = data.reduce((acc, r) => acc + (r.quotaLimit - r.quotaCurrent), 0);
   const monthly = data.reduce((acc, r) => acc + (r.monthlyCost || 0), 0);
 
   summaryCards.innerHTML = `
-    <div class="card"><h3>Rows</h3><p>${total}</p></div>
+    <div class="card"><h3>Rows</h3><p>${rowsLabel}</p></div>
     <div class="card"><h3>Constrained Rows</h3><p>${constrained}</p></div>
     <div class="card"><h3>Available Quota</h3><p>${totalAvailQuota}</p></div>
     <div class="card"><h3>Monthly Cost</h3><p>$${monthly.toLocaleString()}</p></div>
@@ -533,6 +578,7 @@ function renderGrid() {
   gridBody.innerHTML = '';
   if (data.length === 0) {
     gridBody.innerHTML = '<tr><td colspan="12" style="text-align: center; padding: 20px; color: #5d7085;">No data available. Ensure ingestion is running and subscriptions are in scope.</td></tr>';
+    renderCapacityPaging();
     renderSummaryForActiveView([], matrixData);
     renderCharts([]);
     renderRegionMatrix(matrixData);
@@ -557,6 +603,7 @@ function renderGrid() {
     `;
     gridBody.appendChild(tr);
   });
+  renderCapacityPaging();
   renderSummaryForActiveView(data, matrixData);
   renderCharts(data);
   renderRegionMatrix(matrixData);
@@ -1562,17 +1609,33 @@ async function loadSubscriptions(showStatus = false) {
 
 async function loadCapacityRows() {
   const filters = getQueryFilters();
-  const query = new URLSearchParams(filters);
+  const query = new URLSearchParams({
+    ...filters,
+    pageNumber: String(capacityPaging.pageNumber),
+    pageSize: String(capacityPaging.pageSize)
+  });
 
   try {
-    const response = await fetch(`/api/capacity?${query.toString()}`);
+    const response = await fetch(`/api/capacity/paged?${query.toString()}`);
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
     const payload = await response.json();
-    rows = Array.isArray(payload.rows) ? payload.rows : [];
+    rows = Array.isArray(payload.data) ? payload.data : [];
+
+    const paging = payload.pagination || {};
+    capacityPaging.total = Number(paging.total || 0);
+    capacityPaging.pageNumber = Number(paging.pageNumber || capacityPaging.pageNumber || 1);
+    capacityPaging.pageSize = Number(paging.pageSize || capacityPaging.pageSize || 100);
+    capacityPaging.pageCount = Math.max(1, Number(paging.pageCount || 1));
+    capacityPaging.hasNext = Boolean(paging.hasNext);
+    capacityPaging.hasPrev = Boolean(paging.hasPrev);
   } catch (_) {
     rows = [];
+    capacityPaging.total = 0;
+    capacityPaging.pageCount = 1;
+    capacityPaging.hasNext = false;
+    capacityPaging.hasPrev = false;
   }
 
   syncRegionOptions();
@@ -1643,10 +1706,33 @@ function wireButtons() {
     setAdminStatus('Refreshing subscription catalog...', 'info');
     await loadSubscriptions(true);
   });
-  document.getElementById('subscriptionApplyBtn').addEventListener('click', loadCapacityRows);
+  document.getElementById('subscriptionApplyBtn').addEventListener('click', () => {
+    resetCapacityPaging();
+    loadCapacityRows();
+  });
   document.getElementById('subscriptionClearBtn').addEventListener('click', () => {
     selectedSubscriptionIds.clear();
     renderSubscriptionOptions(subscriptionOptions);
+    resetCapacityPaging();
+    loadCapacityRows();
+  });
+
+  capacityPageSize?.addEventListener('change', () => {
+    const nextPageSize = Math.max(10, Math.min(Number(capacityPageSize.value || 100), 500));
+    capacityPaging.pageSize = nextPageSize;
+    resetCapacityPaging();
+    loadCapacityRows();
+  });
+
+  capacityPrevPage?.addEventListener('click', () => {
+    if (!capacityPaging.hasPrev) return;
+    capacityPaging.pageNumber = Math.max(1, capacityPaging.pageNumber - 1);
+    loadCapacityRows();
+  });
+
+  capacityNextPage?.addEventListener('click', () => {
+    if (!capacityPaging.hasNext) return;
+    capacityPaging.pageNumber = capacityPaging.pageNumber + 1;
     loadCapacityRows();
   });
 }
@@ -1682,16 +1768,13 @@ quotaRunFilter?.addEventListener('change', () => {
 
 regionPresetFilter.addEventListener('change', () => {
   syncRegionOptions();
+  resetCapacityPaging();
   loadCapacityRows();
 });
 
 regionFilter.addEventListener('change', () => {
-  if (regionPresetFilter.value === 'custom') {
-    loadCapacityRows();
-    return;
-  }
-  renderGrid();
-  loadAnalytics();
+  resetCapacityPaging();
+  loadCapacityRows();
 });
 
 resourceTypeFilter?.addEventListener('change', () => {
@@ -1707,13 +1790,13 @@ familySearch?.addEventListener('input', () => {
 });
 
 familyFilter.addEventListener('change', () => {
-  renderGrid();
-  loadAnalytics();
+  resetCapacityPaging();
+  loadCapacityRows();
 });
 
 availabilityFilter.addEventListener('change', () => {
-  renderGrid();
-  loadAnalytics();
+  resetCapacityPaging();
+  loadCapacityRows();
 });
 
 capacityScoreDesiredCount?.addEventListener('change', normalizeDesiredPlacementCount);
@@ -1721,6 +1804,10 @@ capacityScoreDesiredCount?.addEventListener('change', normalizeDesiredPlacementC
 wireTabs();
 wireViewTabs();
 wireButtons();
+if (capacityPageSize) {
+  capacityPaging.pageSize = Math.max(10, Math.min(Number(capacityPageSize.value || 100), 500));
+}
+renderCapacityPaging();
 syncRegionOptions();
 loadViewerAuth();
 loadManagementGroups();

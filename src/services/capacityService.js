@@ -1,7 +1,7 @@
 const { getSqlPool } = require('../store/sql');
 const { mockRows } = require('../store/mockCapacity');
 const { getRegionsForPreset } = require('../config/regionPresets');
-const { CapacityListDTO, CapacityDetailDTO, SubscriptionSummaryDTO, FamilySummaryDTO, TrendDTO, PaginationDTO } = require('../models/dtos');
+const { CapacityDetailDTO, SubscriptionSummaryDTO, FamilySummaryDTO, TrendDTO, PaginationDTO } = require('../models/dtos');
 
 function applyRegionPreset(rows, regionPreset) {
   if (!regionPreset || regionPreset === 'all' || regionPreset === 'custom') {
@@ -129,9 +129,8 @@ async function getCapacityRows(filters) {
 }
 
 /**
- * Get paginated capacity data with DTO projection
- * Significantly reduces payload size for large datasets
- * E.g., ~65% smaller payloads using CapacityListDTO vs full data
+ * Get paginated capacity data for the primary grid
+ * Uses server-side paging to keep first load fast with large datasets.
  */
 async function getCapacityRowsPaginated(filters) {
   const { pageSize, pageNumber, offset } = parsePaginationParams(filters);
@@ -141,9 +140,9 @@ async function getCapacityRowsPaginated(filters) {
     const allRows = applyFilters(applyRegionPreset(mockRows, filters.regionPreset), filters);
     const total = allRows.length;
     const pagedRows = allRows.slice(offset, offset + pageSize);
-    
+
     return {
-      data: pagedRows.map((r) => new CapacityListDTO(r)),
+      data: pagedRows.map((r) => new CapacityDetailDTO(r)),
       pagination: new PaginationDTO(total, pageSize, pageNumber)
     };
   }
@@ -160,17 +159,24 @@ async function getCapacityRowsPaginated(filters) {
   const countResult = await request.query(countQuery);
   const total = countResult.recordset[0]?.total || 0;
 
-  // Then get paginated data with minimal columns (DTO projection)
+  // Then get paginated rows for the capacity grid.
   const pageRequest = pool.request();
   let query = `
     SELECT 
-      region, 
-      skuName AS sku, 
-      skuFamily AS family, 
+      capturedAtUtc,
+      subscriptionKey,
+      ISNULL(subscriptionId, 'legacy-data') AS subscriptionId,
+      ISNULL(subscriptionName, 'Legacy data') AS subscriptionName,
+      region,
+      skuName AS sku,
+      skuFamily AS family,
       availabilityState AS availability,
-      quotaCurrent, 
-      quotaLimit, 
-      subscriptionKey
+      quotaCurrent,
+      quotaLimit,
+      monthlyCostEstimate AS monthlyCost,
+      vCpu,
+      memoryGB,
+      zonesCsv
     FROM dbo.CapacityLatest
     WHERE 1 = 1
   `;
@@ -186,8 +192,8 @@ async function getCapacityRowsPaginated(filters) {
   pageRequest.input('pageSize', pageSize);
 
   const result = await pageRequest.query(query);
-  
-  const data = result.recordset.map((r) => new CapacityListDTO(r));
+
+  const data = result.recordset.map((r) => new CapacityDetailDTO(r));
   const pagination = new PaginationDTO(total, pageSize, pageNumber);
 
   return {

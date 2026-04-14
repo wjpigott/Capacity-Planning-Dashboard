@@ -554,6 +554,38 @@ th {
   color: #274868;
 }
 
+.grid-pagination {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.grid-pagination-info {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.grid-pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.grid-pagination-controls select {
+  margin-top: 0;
+}
+
+.grid-pagination-controls button {
+  margin-top: 0;
+  padding: 6px 10px;
+}
+
 .badge {
   border-radius: 999px;
   padding: 3px 8px;
@@ -740,5 +772,14 @@ th {
   .admin-status-card--wide,
   .admin-status-card--full {
     grid-column: auto;
+  }
+
+  .grid-pagination {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .grid-pagination-controls {
+    flex-wrap: wrap;
   }
 }

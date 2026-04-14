@@ -75,6 +75,7 @@ Status legend:
 #### API and analytics
 
 - [x] `GET /api/capacity`
+- [x] `GET /api/capacity/paged` (server-side pagination for primary grid)
 - [x] `GET /api/subscriptions` (subscription search/paging source for multi-select UX)
 - [x] `GET /api/capacity/families` (quota-style family summary)
 - [x] `GET /api/capacity/subscriptions` (masked subscription summary)
@@ -100,7 +101,7 @@ Status legend:
 - [x] Ingestion status widget in UI
 - [ ] Admin UI setting for scheduled refresh rates (quota discovery, capacity ingestion, and future background refresh jobs)
 - [ ] Admin UI setting for quota discovery scope selection (management group and, if needed, quota group picker/default)
-- [ ] Pagination for report grids (prefer server-side paging for large result sets)
+- [x] Pagination for report grids (prefer server-side paging for large result sets)
 - [ ] Export (CSV/XLSX) actions wired to backend
 
 #### Quota movement orchestration

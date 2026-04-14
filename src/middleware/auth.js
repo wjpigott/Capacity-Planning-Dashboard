@@ -50,6 +50,80 @@ function getRedirectUri() {
   return process.env.AUTH_REDIRECT_URI || 'http://localhost:3000/auth/callback';
 }
 
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function renderAuthPage(res, statusCode, title, message, detail) {
+  const safeTitle = escapeHtml(title);
+  const safeMessage = escapeHtml(message);
+  const safeDetail = detail ? escapeHtml(detail) : '';
+  return res.status(statusCode).type('html').send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${safeTitle}</title>
+  <style>
+    body { margin: 0; font-family: Segoe UI, Arial, sans-serif; background: #f4f7fb; color: #16324f; }
+    .wrap { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    .card { max-width: 640px; background: #fff; border: 1px solid #d7e1ea; border-radius: 12px; padding: 32px; box-shadow: 0 10px 30px rgba(0, 44, 88, 0.08); }
+    h1 { margin: 0 0 12px; font-size: 28px; }
+    p { margin: 0 0 12px; line-height: 1.5; }
+    .detail { color: #52667a; font-size: 14px; }
+    a { color: #005a9c; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>${safeTitle}</h1>
+      <p>${safeMessage}</p>
+      ${safeDetail ? `<p class="detail">${safeDetail}</p>` : ''}
+      <p><a href="/">Return to dashboard</a></p>
+    </div>
+  </div>
+</body>
+</html>`);
+}
+
+function renderAccessDenied(res, detail) {
+  return renderAuthPage(
+    res,
+    403,
+    'You do not have access',
+    'Your account is not permitted to sign in to this dashboard. Contact the dashboard owner if you believe you should have access.',
+    detail
+  );
+}
+
+function renderExpiredLogin(res) {
+  return renderAuthPage(
+    res,
+    400,
+    'Sign-in expired',
+    'Your sign-in attempt expired or could not be verified. Please start the sign-in process again.',
+    null
+  );
+}
+
+function isAccessDeniedError(errorCode, errorDescription) {
+  const text = `${errorCode || ''} ${errorDescription || ''}`.toLowerCase();
+  return text.includes('access_denied') ||
+    text.includes('not assigned') ||
+    text.includes('not authorized') ||
+    text.includes('isn\'t assigned to') ||
+    text.includes('needs to be assigned') ||
+    text.includes('not found in the directory') ||
+    text.includes('user account from identity provider');
+}
+
 /** Parses a named value from the raw Cookie request header without cookie-parser. */
 function readCookie(req, name) {
   const header = req.headers.cookie || '';
@@ -143,20 +217,43 @@ function buildAuthRouter() {
     const { code, state, error, error_description } = req.query;
     if (error) {
       console.error('[auth] callback error:', error, error_description);
-      return res.status(401).send(`Login failed: ${error_description || error}`);
+      if (isAccessDeniedError(error, error_description)) {
+        return renderAccessDenied(res, error_description || error);
+      }
+      return renderAuthPage(
+        res,
+        401,
+        'Sign-in failed',
+        'The dashboard could not complete your sign-in request.',
+        error_description || error
+      );
     }
     if (!code) {
-      return res.status(400).send('Missing authorization code.');
+      return renderAuthPage(
+        res,
+        400,
+        'Sign-in failed',
+        'The identity provider did not return an authorization code.',
+        null
+      );
     }
     const expectedState = readCookie(req, 'oauth_state');
     res.clearCookie('oauth_state');
     if (!expectedState || state !== expectedState) {
       console.error('[auth] state mismatch on callback — cookie may have expired or been lost');
-      return res.status(400).send('State mismatch – please try logging in again.');
+      return renderExpiredLogin(res);
     }
 
     const client = getMsalClient();
-    if (!client) return res.status(503).send('Auth not configured.');
+    if (!client) {
+      return renderAuthPage(
+        res,
+        503,
+        'Sign-in unavailable',
+        'Authentication is not configured for this dashboard right now.',
+        null
+      );
+    }
 
     try {
       const result = await client.acquireTokenByCode({
@@ -186,13 +283,25 @@ function buildAuthRouter() {
       req.session.save((saveErr) => {
         if (saveErr) {
           console.error('[auth] session save failed:', saveErr.message);
-          return res.status(500).send('Failed to save session. Please try logging in again.');
+          return renderAuthPage(
+            res,
+            500,
+            'Sign-in failed',
+            'The dashboard could not save your sign-in session. Please try again.',
+            null
+          );
         }
         return res.redirect(returnTo);
       });
     } catch (err) {
       console.error('[auth] acquireTokenByCode failed:', err.message);
-      return res.status(500).send('Failed to complete login. Please try again.');
+      return renderAuthPage(
+        res,
+        500,
+        'Sign-in failed',
+        'The dashboard could not complete your sign-in request. Please try again.',
+        err.message
+      );
     }
   });
 

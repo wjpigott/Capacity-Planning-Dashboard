@@ -1812,5 +1812,4 @@ syncRegionOptions();
 loadViewerAuth();
 loadManagementGroups();
 syncIngestStatus().catch(() => {});
-loadSubscriptions();
-loadCapacityRows();
+loadSubscriptions().then(() => loadCapacityRows());

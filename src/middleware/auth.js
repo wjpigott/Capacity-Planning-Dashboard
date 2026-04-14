@@ -195,6 +195,7 @@ function buildAuthRouter() {
     // survives app restarts and multi-instance deployments on Azure App Service.
     res.cookie('oauth_state', state, {
       httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
       maxAge: 5 * 60 * 1000 // 5 minutes — enough for a login flow
     });

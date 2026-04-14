@@ -2,7 +2,6 @@ const { getSqlPool } = require('../store/sql');
 const { mockRows } = require('../store/mockCapacity');
 const { getRegionsForPreset } = require('../config/regionPresets');
 const { CapacityListDTO, CapacityDetailDTO, SubscriptionSummaryDTO, FamilySummaryDTO, TrendDTO, PaginationDTO } = require('../models/dtos');
-const { filterRowsByUserSubscriptions } = require('./subscriptionAccessService');
 
 function applyRegionPreset(rows, regionPreset) {
   if (!regionPreset || regionPreset === 'all' || regionPreset === 'custom') {
@@ -39,29 +38,6 @@ function parseSubscriptionIds(filterValue) {
     .split(',')
     .map((v) => v.trim())
     .filter(Boolean);
-}
-
-/**
- * Get capacity rows filtered by user's accessible subscriptions
- * Only returns data from subscriptions the user can access
- * Pass null for userAllowedSubscriptions to show all data (backward compatible)
- */
-async function getCapacityRowsFiltered(filters, userAllowedSubscriptions = null) {
-  const rows = await getCapacityRows(filters);
-  
-  if (userAllowedSubscriptions && userAllowedSubscriptions.length > 0) {
-    // Filter to only subscriptions user can access
-    const allowedSet = new Set(userAllowedSubscriptions);
-    return rows.filter(row => {
-      // Legacy data (no subscription) is always shown
-      if (!row.subscriptionId || row.subscriptionId === 'legacy-data') {
-        return true;
-      }
-      return allowedSet.has(row.subscriptionId);
-    });
-  }
-  
-  return rows; // Show all if no subscription filter provided
 }
 
 /**
@@ -540,7 +516,6 @@ async function getCapacityScoreSummary(filters) {
 
 module.exports = {
   getCapacityRows,
-  getCapacityRowsFiltered,
   getCapacityRowsPaginated,
   getSubscriptions,
   getSubscriptionSummary,

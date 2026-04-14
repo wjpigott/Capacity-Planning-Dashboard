@@ -10,7 +10,6 @@ const { AUTH_ENABLED, buildAuthRouter, requireAuth, requireAdmin, getAccountFrom
 
 const {
   getCapacityRows,
-  getCapacityRowsFiltered,
   getCapacityRowsPaginated,
   getSubscriptions,
   getSubscriptionSummary,

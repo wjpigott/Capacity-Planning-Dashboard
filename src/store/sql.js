@@ -92,11 +92,108 @@ async function insertCapacitySnapshots(rows) {
     }
 
     await transaction.commit();
+
+    // Upsert distinct subscriptions from this batch (best-effort; non-transactional)
+    await upsertSubscriptions(rows).catch(() => {/* silently skip if table doesn't exist yet */});
+
     return rows.length;
   } catch (err) {
     await transaction.rollback();
     throw err;
   }
+}
+
+async function upsertSubscriptions(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return 0;
+  }
+
+  const pool = await getSqlPool();
+  if (!pool) {
+    return 0;
+  }
+
+  // Collect distinct (subscriptionId, subscriptionName) pairs from the batch
+  const seen = new Map();
+  for (const row of rows) {
+    const id = row.subscriptionId;
+    const name = row.subscriptionName;
+    if (id && id !== 'legacy-data' && !seen.has(id)) {
+      seen.set(id, name || id);
+    }
+  }
+  if (seen.size === 0) {
+    return 0;
+  }
+
+  const now = new Date();
+  let upserted = 0;
+
+  for (const [subscriptionId, subscriptionName] of seen) {
+    const request = pool.request();
+    request.input('subscriptionId', sql.NVarChar(64), subscriptionId);
+    request.input('subscriptionName', sql.NVarChar(256), subscriptionName);
+    request.input('updatedAtUtc', sql.DateTime2, now);
+
+    await request.query(`
+      IF OBJECT_ID('dbo.Subscriptions', 'U') IS NOT NULL
+      BEGIN
+        MERGE dbo.Subscriptions AS tgt
+        USING (SELECT @subscriptionId AS subscriptionId, @subscriptionName AS subscriptionName, @updatedAtUtc AS updatedAtUtc) AS src
+        ON tgt.subscriptionId = src.subscriptionId
+        WHEN MATCHED THEN
+          UPDATE SET subscriptionName = src.subscriptionName, updatedAtUtc = src.updatedAtUtc
+        WHEN NOT MATCHED THEN
+          INSERT (subscriptionId, subscriptionName, updatedAtUtc) VALUES (src.subscriptionId, src.subscriptionName, src.updatedAtUtc);
+      END
+    `);
+
+    upserted++;
+  }
+
+  return upserted;
+}
+
+async function getSubscriptionsFromTable({ search, limit } = {}) {
+  const pool = await getSqlPool();
+  if (!pool) {
+    return [{ subscriptionId: 'legacy-data', subscriptionName: 'Legacy data' }];
+  }
+
+  // If the Subscriptions table doesn't exist yet (pre-migration), fall back to
+  // deriving the list from CapacityLatest (the old behaviour).
+  const tableCheck = await pool.request().query(
+    `SELECT 1 AS hasTable WHERE OBJECT_ID('dbo.Subscriptions', 'U') IS NOT NULL`
+  );
+  if (!tableCheck.recordset || tableCheck.recordset.length === 0) {
+    return null; // caller falls back to CapacityLatest GROUP BY
+  }
+
+  const maxLimit = Math.max(10, Math.min(Number(limit || 500), 1000));
+  const request = pool.request();
+  request.input('limitRows', sql.Int, maxLimit);
+
+  let query = `
+    SELECT TOP (@limitRows)
+      subscriptionId,
+      subscriptionName,
+      updatedAtUtc
+    FROM dbo.Subscriptions
+    WHERE 1 = 1
+  `;
+
+  if (search && search.trim()) {
+    request.input('search', sql.NVarChar(256), `%${search.trim()}%`);
+    query += ` AND (subscriptionId LIKE @search OR subscriptionName LIKE @search)`;
+  }
+
+  query += ` ORDER BY subscriptionName ASC`;
+
+  const result = await request.query(query);
+  return (result.recordset || []).map((r) => ({
+    subscriptionId: r.subscriptionId,
+    subscriptionName: r.subscriptionName
+  }));
 }
 
 async function ensureCapacityScoreSnapshotSchema(pool) {
@@ -586,6 +683,8 @@ async function ensurePhase3Schema() {
 module.exports = {
   getSqlPool,
   insertCapacitySnapshots,
+  upsertSubscriptions,
+  getSubscriptionsFromTable,
   insertCapacityScoreSnapshots,
   insertQuotaCandidateSnapshots,
   getCapacityScoreSnapshotHistory,

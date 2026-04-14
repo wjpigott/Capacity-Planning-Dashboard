@@ -4,6 +4,9 @@ let managementGroupOptions = [];
 let quotaGroupOptions = [];
 let quotaRunOptions = [];
 const selectedSubscriptionIds = new Set();
+// Track which report views have had their data loaded at least once.
+// Views not in this set will trigger a data fetch on first activation.
+const loadedViews = new Set();
 
 const MATRIX_DEFAULT_FAMILIES = [
   'A', 'B', 'D', 'DC', 'DS', 'E', 'F', 'FX', 'G', 'GS', 'H', 'HB', 'HC', 'HX',
@@ -1502,11 +1505,9 @@ function getQueryFilters() {
   return { regionPreset, region, family, availability, subscriptionIds, resourceType };
 }
 
-async function loadAnalytics() {
+async function loadCapacityScoreView() {
   const baseFilters = getQueryFilters();
   const base = new URLSearchParams(baseFilters);
-  const trendQuery = new URLSearchParams({ ...baseFilters, days: '7' });
-  const familySummaryQuery = new URLSearchParams({ ...baseFilters, family: 'all' });
   const scoreHistoryQuery = new URLSearchParams({
     days: capacityScoreHistoryDays?.value || '30',
     region: baseFilters.region,
@@ -1514,24 +1515,17 @@ async function loadAnalytics() {
   });
 
   try {
-    const [subscriptionResponse, trendResponse, familyResponse, scoreResponse, scoreHistoryResponse] = await Promise.all([
+    const [subscriptionResponse, scoreResponse, scoreHistoryResponse] = await Promise.all([
       fetch(`/api/capacity/subscriptions?${base.toString()}`),
-      fetch(`/api/capacity/trends?${trendQuery.toString()}`),
-      fetch(`/api/capacity/families?${familySummaryQuery.toString()}`),
       fetch(`/api/capacity/scores?${base.toString()}`),
       fetch(`/api/capacity/scores/history?${scoreHistoryQuery.toString()}`)
     ]);
 
     const subscriptionPayload = subscriptionResponse.ok ? await subscriptionResponse.json() : { rows: [] };
-    const trendPayload = trendResponse.ok ? await trendResponse.json() : { rows: [] };
-    const familyPayload = familyResponse.ok ? await familyResponse.json() : { rows: [] };
     const scorePayload = scoreResponse.ok ? await scoreResponse.json() : { rows: [] };
     const scoreHistoryPayload = scoreHistoryResponse.ok ? await scoreHistoryResponse.json() : { rows: [] };
 
     renderSubscriptionSummary(Array.isArray(subscriptionPayload.rows) ? subscriptionPayload.rows : []);
-    renderTrends(Array.isArray(trendPayload.rows) ? trendPayload.rows : []);
-    const familyRows = Array.isArray(familyPayload.rows) ? familyPayload.rows : [];
-    renderFamilySummary(familyRows.length > 0 ? familyRows : deriveFamilySummaryFromRows(reportScopedRows()));
     renderCapacityScores(Array.isArray(scorePayload.rows) ? scorePayload.rows : []);
     renderCapacityScoreHistory(Array.isArray(scoreHistoryPayload.rows) ? scoreHistoryPayload.rows : []);
     if (capacityScoreLiveStatus) {
@@ -1539,11 +1533,60 @@ async function loadAnalytics() {
     }
   } catch (_) {
     renderSubscriptionSummary([]);
-    renderTrends([]);
-    renderFamilySummary([]);
     renderCapacityScores([]);
     renderCapacityScoreHistory([]);
   }
+
+  loadedViews.add('capacity-score');
+}
+
+async function loadTrendView() {
+  const baseFilters = getQueryFilters();
+  const trendQuery = new URLSearchParams({ ...baseFilters, days: '7' });
+
+  try {
+    const trendResponse = await fetch(`/api/capacity/trends?${trendQuery.toString()}`);
+    const trendPayload = trendResponse.ok ? await trendResponse.json() : { rows: [] };
+    renderTrends(Array.isArray(trendPayload.rows) ? trendPayload.rows : []);
+  } catch (_) {
+    renderTrends([]);
+  }
+
+  loadedViews.add('trend');
+}
+
+async function loadFamilySummaryView() {
+  const baseFilters = getQueryFilters();
+  const familySummaryQuery = new URLSearchParams({ ...baseFilters, family: 'all' });
+
+  try {
+    const familyResponse = await fetch(`/api/capacity/families?${familySummaryQuery.toString()}`);
+    const familyPayload = familyResponse.ok ? await familyResponse.json() : { rows: [] };
+    const familyRows = Array.isArray(familyPayload.rows) ? familyPayload.rows : [];
+    renderFamilySummary(familyRows.length > 0 ? familyRows : deriveFamilySummaryFromRows(reportScopedRows()));
+  } catch (_) {
+    renderFamilySummary(deriveFamilySummaryFromRows(reportScopedRows()));
+  }
+
+  loadedViews.add('family-summary');
+}
+
+function refreshActiveAnalyticsView() {
+  const view = getActiveReportViewKey();
+  // Remove from loaded set so the tab handler re-fetches fresh data
+  loadedViews.delete(view);
+  if (view === 'capacity-score') return loadCapacityScoreView();
+  if (view === 'trend') return loadTrendView();
+  if (view === 'family-summary') return loadFamilySummaryView();
+  // Charts and matrix derive from already-loaded rows; just re-render
+  if (view === 'region-chart' || view === 'sku-chart') return renderCharts(filteredRows());
+  if (view === 'region-matrix') return renderRegionMatrix(reportScopedRows());
+}
+
+// Keep loadAnalytics as a convenience for refreshing all views at once
+// (e.g., after a new ingest). Not called on startup.
+async function loadAnalytics() {
+  await Promise.all([loadCapacityScoreView(), loadTrendView(), loadFamilySummaryView()]);
 }
 
 function renderSubscriptionOptions(options) {
@@ -1686,11 +1729,18 @@ function wireViewTabs() {
 
       renderSummaryForActiveView(filteredRows(), reportScopedRows());
 
-      if (btn.dataset.reportView === 'region-matrix') {
+      const view = btn.dataset.reportView;
+
+      if (view === 'region-matrix') {
         renderRegionMatrix(reportScopedRows());
-      }
-      if (btn.dataset.reportView === 'family-summary' && familySummaryGridBody && familySummaryGridBody.children.length === 0) {
-        renderFamilySummary(deriveFamilySummaryFromRows(reportScopedRows()));
+      } else if (view === 'region-chart' || view === 'sku-chart') {
+        renderCharts(filteredRows());
+      } else if (view === 'capacity-score' && !loadedViews.has('capacity-score')) {
+        loadCapacityScoreView();
+      } else if (view === 'family-summary' && !loadedViews.has('family-summary')) {
+        loadFamilySummaryView();
+      } else if (view === 'trend' && !loadedViews.has('trend')) {
+        loadTrendView();
       }
     });
   });
@@ -1704,7 +1754,7 @@ function wireButtons() {
   document.getElementById('planBtn').addEventListener('click', loadQuotaMovePlan);
   document.getElementById('candidateBtn').addEventListener('click', loadQuotaCandidates);
   document.getElementById('historyBtn').addEventListener('click', captureQuotaCandidateHistory);
-  document.getElementById('refreshAnalyticsBtn').addEventListener('click', loadAnalytics);
+  document.getElementById('refreshAnalyticsBtn').addEventListener('click', refreshActiveAnalyticsView);
   document.getElementById('simulateBtn').addEventListener('click', simulateQuotaImpact);
   triggerIngestBtn.addEventListener('click', triggerCapacityIngest);
   refreshLivePlacementBtn?.addEventListener('click', refreshLivePlacementScores);
@@ -1823,5 +1873,7 @@ loadViewerAuth().then((proceed) => {
   if (!proceed) return; // not authenticated — navigating to /auth/login
   loadManagementGroups();
   syncIngestStatus().catch(() => {});
-  loadSubscriptions().then(() => loadCapacityRows()).then(() => loadAnalytics());
+  // Load subscriptions (fast — queries dbo.Subscriptions table), then load
+  // the default capacity-grid view. All other report views load on first click.
+  loadSubscriptions().then(() => loadCapacityRows());
 });

@@ -1,4 +1,4 @@
-const { getSqlPool } = require('../store/sql');
+const { getSqlPool, getSubscriptionsFromTable } = require('../store/sql');
 const { mockRows } = require('../store/mockCapacity');
 const { getRegionsForPreset } = require('../config/regionPresets');
 const { CapacityDetailDTO, SubscriptionSummaryDTO, FamilySummaryDTO, TrendDTO, PaginationDTO } = require('../models/dtos');
@@ -212,21 +212,27 @@ async function getCapacityRowsPaginated(filters) {
   };
 }
 
-async function getSubscriptions({ search, limit }) {
+async function getSubscriptions({ search, limit } = {}) {
   const pool = await getSqlPool();
   if (!pool) {
     return [{ subscriptionId: 'legacy-data', subscriptionName: 'Legacy data' }];
   }
 
-  const maxLimit = Math.max(10, Math.min(Number(limit || 100), 500));
+  // Fast path: query dedicated Subscriptions table (populated on ingest)
+  const fromTable = await getSubscriptionsFromTable({ search, limit });
+  if (fromTable !== null) {
+    return fromTable;
+  }
+
+  // Fallback (pre-migration): derive subscription list from CapacityLatest
+  const maxLimit = Math.max(10, Math.min(Number(limit || 500), 1000));
   const request = pool.request();
   request.input('limitRows', maxLimit);
 
   let query = `
     SELECT TOP (@limitRows)
       ISNULL(subscriptionId, 'legacy-data') AS subscriptionId,
-      ISNULL(subscriptionName, 'Legacy data') AS subscriptionName,
-      COUNT(1) AS [rowCount]
+      ISNULL(subscriptionName, 'Legacy data') AS subscriptionName
     FROM dbo.CapacityLatest
     WHERE 1 = 1
   `;
@@ -241,14 +247,13 @@ async function getSubscriptions({ search, limit }) {
 
   query += `
     GROUP BY ISNULL(subscriptionId, 'legacy-data'), ISNULL(subscriptionName, 'Legacy data')
-    ORDER BY COUNT(1) DESC, ISNULL(subscriptionName, 'Legacy data') ASC
+    ORDER BY ISNULL(subscriptionName, 'Legacy data') ASC
   `;
 
   const result = await request.query(query);
   return result.recordset.map((r) => ({
     subscriptionId: r.subscriptionId,
-    subscriptionName: r.subscriptionName,
-    rowCount: Number(r.rowCount || 0)
+    subscriptionName: r.subscriptionName
   }));
 }
 

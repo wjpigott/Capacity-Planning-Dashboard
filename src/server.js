@@ -27,6 +27,7 @@ const {
 } = require('./services/azureIngestionService');
 const { listManagementGroups, listQuotaGroups } = require('./services/quotaDiscoveryService');
 const { ensurePhase3Schema, getCapacityScoreSnapshotHistory } = require('./store/sql');
+const { applyIndexes } = require('./maintenance/applyPerformanceIndexes');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -397,5 +398,19 @@ app.get('*', (_, res) => {
 
 app.listen(port, () => {
   startIngestionScheduler();
+  
+  // Apply performance indexes on startup (idempotent - safe to run multiple times)
+  if (process.env.SQL_SERVER) {
+    applyIndexes().then(success => {
+      if (success) {
+        console.log('✓ Performance indexes verified/created');
+      } else {
+        console.warn('⚠ Could not apply performance indexes - will retry on next startup');
+      }
+    }).catch(err => {
+      console.warn('⚠ Performance index setup failed (non-blocking):', err.message);
+    });
+  }
+  
   console.log(`Capacity dashboard listening on port ${port}`);
 });

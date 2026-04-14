@@ -389,8 +389,8 @@ function applyFamilySearch() {
   const selected = familyFilter.options[familyFilter.selectedIndex];
   if (selected?.hidden) {
     familyFilter.value = 'all';
-    renderGrid();
-    loadAnalytics();
+    resetCapacityPaging();
+    loadCapacityRows();
   }
 }
 
@@ -1608,6 +1608,7 @@ async function loadSubscriptions(showStatus = false) {
 }
 
 async function loadCapacityRows() {
+  gridBody.innerHTML = '<tr><td colspan="12" style="text-align:center;padding:24px;color:#5d7085;">Loading…</td></tr>';
   const filters = getQueryFilters();
   const query = new URLSearchParams({
     ...filters,
@@ -1641,7 +1642,6 @@ async function loadCapacityRows() {
   syncRegionOptions();
   syncFamilyOptions();
   renderGrid();
-  loadAnalytics();
 }
 
 function wireTabs() {
@@ -1780,9 +1780,8 @@ regionFilter.addEventListener('change', () => {
 resourceTypeFilter?.addEventListener('change', () => {
   familyFilter.value = 'all';
   if (familySearch) familySearch.value = '';
-  syncFamilyOptions();
-  renderGrid();
-  loadAnalytics();
+  resetCapacityPaging();
+  loadCapacityRows();
 });
 
 familySearch?.addEventListener('input', () => {
@@ -1812,4 +1811,4 @@ syncRegionOptions();
 loadViewerAuth();
 loadManagementGroups();
 syncIngestStatus().catch(() => {});
-loadSubscriptions().then(() => loadCapacityRows());
+loadSubscriptions().then(() => loadCapacityRows()).then(() => loadAnalytics());

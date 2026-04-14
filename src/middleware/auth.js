@@ -28,6 +28,8 @@ const crypto = require('crypto');
 const AUTH_ENABLED = (process.env.AUTH_ENABLED || 'false').toLowerCase() === 'true';
 const ADMIN_GROUP_ID = (process.env.ADMIN_GROUP_ID || '').trim();
 const ENTRA_TENANT_ID = (process.env.ENTRA_TENANT_ID || '').trim();
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+const OAUTH_STATE_MAX_PENDING = 5;
 
 let _msalClient = null;
 
@@ -131,6 +133,36 @@ function readCookie(req, name) {
   return match ? decodeURIComponent(match.slice(name.length + 1)) : null;
 }
 
+function getOAuthStateCookieBaseOptions() {
+  return {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    path: '/'
+  };
+}
+
+function parseOAuthStateList(rawValue) {
+  if (!rawValue) return [];
+  return String(rawValue)
+    .split(',')
+    .map((v) => v.trim().toLowerCase())
+    .filter((v) => /^[a-f0-9]{32}$/.test(v))
+    .slice(-OAUTH_STATE_MAX_PENDING);
+}
+
+function writeOAuthStateList(res, states) {
+  const sanitized = parseOAuthStateList((states || []).join(','));
+  if (sanitized.length === 0) {
+    res.clearCookie('oauth_state', getOAuthStateCookieBaseOptions());
+    return;
+  }
+  res.cookie('oauth_state', sanitized.join(','), {
+    ...getOAuthStateCookieBaseOptions(),
+    maxAge: OAUTH_STATE_TTL_MS
+  });
+}
+
 /** Returns the session account object or null if not signed in. */
 function getAccountFromSession(req) {
   return req.session?.account || null;
@@ -191,14 +223,14 @@ function buildAuthRouter() {
       );
     }
     const state = crypto.randomBytes(16).toString('hex');
-    // Store state in a short-lived httpOnly cookie instead of the session so it
-    // survives app restarts and multi-instance deployments on Azure App Service.
-    res.cookie('oauth_state', state, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 5 * 60 * 1000 // 5 minutes — enough for a login flow
-    });
+    // Keep a short rolling list of pending states to tolerate users opening
+    // multiple login tabs or retrying quickly without causing false mismatches.
+    const pendingStates = parseOAuthStateList(readCookie(req, 'oauth_state'));
+    const nextStates = pendingStates
+      .filter((s) => s !== state)
+      .concat(state)
+      .slice(-OAUTH_STATE_MAX_PENDING);
+    writeOAuthStateList(res, nextStates);
     try {
       const url = await client.getAuthCodeUrl({
         scopes: ['openid', 'profile', 'email'],
@@ -238,12 +270,13 @@ function buildAuthRouter() {
         null
       );
     }
-    const expectedState = readCookie(req, 'oauth_state');
-    res.clearCookie('oauth_state');
-    if (!expectedState || state !== expectedState) {
+    const callbackState = String(state || '').trim().toLowerCase();
+    const pendingStates = parseOAuthStateList(readCookie(req, 'oauth_state'));
+    if (!callbackState || pendingStates.length === 0 || !pendingStates.includes(callbackState)) {
       console.error('[auth] state mismatch on callback — cookie may have expired or been lost');
       return renderExpiredLogin(res);
     }
+    writeOAuthStateList(res, pendingStates.filter((s) => s !== callbackState));
 
     const client = getMsalClient();
     if (!client) {

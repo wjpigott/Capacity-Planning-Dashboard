@@ -6,6 +6,7 @@ require('dotenv').config();
 require('dotenv').config({ path: path.resolve(__dirname, '..', '.env.local'), override: true });
 
 const session = require('express-session');
+const MSSQLStore = require('connect-mssql-v2');
 const { AUTH_ENABLED, buildAuthRouter, requireAuth, requireAdmin, getAccountFromSession, isAdmin } = require('./middleware/auth');
 
 const {
@@ -50,8 +51,37 @@ app.use((req, res, next) => {
 app.use(cors());
 app.use(express.json());
 
-// Session — required for MSAL auth code flow state and account storage
+// Session — required for MSAL auth code flow state and account storage.
+// In production, use a SQL-backed store so sessions survive app restarts and
+// zero-downtime slot swaps on Azure App Service. Falls back to in-memory store
+// for local dev (no SQL connection config needed).
+function buildSessionStore() {
+  const sqlServer = process.env.SQL_SERVER;
+  const sqlDatabase = process.env.SQL_DATABASE;
+  if (!sqlServer || !sqlDatabase || process.env.NODE_ENV !== 'production') {
+    return undefined; // express-session uses MemoryStore by default
+  }
+  try {
+    const sqlConfig = {
+      server: sqlServer,
+      database: sqlDatabase,
+      options: { encrypt: true, trustServerCertificate: false },
+      authentication: {
+        type: process.env.SQL_AUTH_MODE === 'managed-identity' ? 'azure-active-directory-default' : 'default',
+        options: process.env.SQL_AUTH_MODE === 'managed-identity'
+          ? {}
+          : { userName: process.env.SQL_USER, password: process.env.SQL_PASSWORD }
+      }
+    };
+    return new MSSQLStore(sqlConfig, { autoRemoveExpired: true, autoRemoveInterval: 1 });
+  } catch (e) {
+    console.warn('[session] SQL store init failed, falling back to MemoryStore:', e.message);
+    return undefined;
+  }
+}
+
 app.use(session({
+  store: buildSessionStore(),
   secret: process.env.SESSION_SECRET || 'dev-session-secret-change-in-production',
   resave: false,
   saveUninitialized: false,
@@ -66,10 +96,14 @@ app.use(session({
 // Auth routes (/auth/login, /auth/callback, /auth/logout) — always accessible
 app.use('/auth', buildAuthRouter());
 
-// Protect all API routes; /api/auth/me is always open (used to check auth state)
+// Protect all API routes with inline check — always returns 401 JSON (never
+// redirects) because every path here is an API call. /api/auth/me is open so
+// the frontend can check auth state before initiating a login redirect itself.
 app.use('/api', (req, res, next) => {
   if (req.path === '/auth/me') return next();
-  requireAuth(req, res, next);
+  if (!AUTH_ENABLED) return next();
+  if (getAccountFromSession(req)) return next();
+  return res.status(401).json({ ok: false, error: 'Authentication required.' });
 });
 
 app.use(express.static(path.resolve(__dirname, '..')));

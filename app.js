@@ -1016,8 +1016,8 @@ function renderSummary(data, summaryOverride = null) {
     : data.reduce((acc, r) => acc + (r.monthlyCost || 0), 0);
 
   summaryCards.innerHTML = `
-    <div class="card"><h3>Rows</h3><p>${rowsLabel}</p></div>
-    <div class="card"><h3>Constrained Rows</h3><p>${constrained.toLocaleString()}</p></div>
+    <div class="card"><h3>SKU Observations</h3><p>${rowsLabel}</p></div>
+    <div class="card"><h3>Constrained Observations</h3><p>${constrained.toLocaleString()}</p></div>
     <div class="card"><h3>Available Quota</h3><p>${totalAvailQuota.toLocaleString()}</p></div>
     <div class="card"><h3>Reference SKU $/Mo Sum</h3><p>$${monthly.toLocaleString()}</p></div>
   `;

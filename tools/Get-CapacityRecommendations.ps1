@@ -91,7 +91,21 @@ if (-not $RepoRoot) {
 
 $repoPath = Resolve-Path -Path $RepoRoot -ErrorAction SilentlyContinue
 if (-not $repoPath) {
-    throw "Recommendation repo root not found: $RepoRoot"
+    # Repo not found at default path. Check if env var provides alternate location.
+    $altRoot = [System.Environment]::GetEnvironmentVariable('GET_AZ_VM_AVAILABILITY_ROOT')
+    if ($altRoot) {
+        $repoPath = Resolve-Path -Path $altRoot -ErrorAction SilentlyContinue
+    }
+}
+
+if (-not $repoPath) {
+    $errorMsg = @"
+Recommendation repo root not found. Tried:
+  - Default: $RepoRoot
+  - Environment: GET_AZ_VM_AVAILABILITY_ROOT (not set)
+Please set GET_AZ_VM_AVAILABILITY_ROOT environment variable or ensure Get-AzVMAvailability is in expected location.
+"@
+    throw $errorMsg
 }
 
 $scriptPath = Join-Path $repoPath.Path 'Get-AzVMAvailability.ps1'

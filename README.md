@@ -158,6 +158,10 @@ Optional worker-first settings:
 
 When `CAPACITY_WORKER_BASE_URL` is set, live placement refresh calls the Azure Function worker first. If the worker is unavailable and `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK` is not `true`, the dashboard falls back to the in-process App Service path to preserve rollback safety.
 
+Capacity Recommender settings:
+
+- `GET_AZ_VM_AVAILABILITY_ROOT` — Path to the `Get-AzVMAvailability` repository root (optional in local dev; required in App Service production if recommender feature is used). Default: `../../Get-AzVMAvailability` relative to the `tools/` folder. If the external repository is not available at this location, set this environment variable to the correct path, or the Capacity Recommender will fail with "repo root not found."
+
 ## Dashboard web app deployment
 
 Use zip/web package deploy for the dashboard App Service.
@@ -213,6 +217,19 @@ Expected behavior:
 - Deployment should complete in roughly seconds to a small number of minutes, not stall on a huge upload.
 - The clean package should stay small; the last known good package was about 456 KB.
 - If deployment is slow or fails during extraction, inspect the zip contents first before retrying.
+
+**Capacity Recommender configuration:**
+
+If you plan to use the Capacity Recommender feature (which requires the `Get-AzVMAvailability` PowerShell script), you must configure the following environment variable on the App Service:
+
+```powershell
+az webapp config appsettings set \
+	--resource-group CapacityDashboard \
+	--name app-capdash-dev-cap001 \
+	--settings GET_AZ_VM_AVAILABILITY_ROOT="/path/to/Get-AzVMAvailability"
+```
+
+The `GET_AZ_VM_AVAILABILITY_ROOT` environment variable tells the recommender wrapper where to find the external `Get-AzVMAvailability` PowerShell repository. Without this setting, the Capacity Recommender will return an error indicating the repository root was not found.
 
 ## Infrastructure deployment
 
@@ -345,6 +362,7 @@ Required app settings:
 - `CAPACITY_WORKER_SHARED_SECRET` (optional shared secret header value for worker calls)
 - `CAPACITY_WORKER_TIMEOUT_MS` (optional timeout for worker calls, default `60000`)
 - `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK` (`true` disables App Service fallback when the worker is configured but unavailable)
+- `GET_AZ_VM_AVAILABILITY_ROOT` (optional path to Get-AzVMAvailability repository; required in production if Capacity Recommender feature is used; default is relative path `../../Get-AzVMAvailability` from `tools/` folder)
 - `LIVE_PLACEMENT_REFRESH_ON_STARTUP` (`true`/`false`, fallback default when SQL schedule settings are not present)
 - `LIVE_PLACEMENT_REFRESH_INTERVAL_MINUTES` (`0` disables scheduling; `1440` gives a daily refresh; fallback default when SQL schedule settings are not present)
 - `LIVE_PLACEMENT_REFRESH_REGION_PRESET` (default `USMajor`)

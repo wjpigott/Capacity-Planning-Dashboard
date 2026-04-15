@@ -944,6 +944,142 @@ async function listDashboardOperations(options = {}) {
   }));
 }
 
+async function ensureLivePlacementSnapshotSchema(pool) {
+  const createScript = `
+    IF OBJECT_ID('dbo.LivePlacementSnapshot', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.LivePlacementSnapshot (
+        livePlacementSnapshotId BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        capturedAtUtc DATETIME2 NOT NULL,
+        desiredCount INT NOT NULL,
+        region NVARCHAR(64) NOT NULL,
+        skuName NVARCHAR(128) NOT NULL,
+        livePlacementScore NVARCHAR(64) NOT NULL,
+        livePlacementAvailable BIT NULL,
+        livePlacementRestricted BIT NULL,
+        warningMessage NVARCHAR(512) NULL
+      )
+    END;
+  `;
+
+  const createIndexScript = `
+    IF NOT EXISTS (
+      SELECT 1
+      FROM sys.indexes
+      WHERE name = 'IX_LivePlacementSnapshot_DesiredCapturedRegionSku'
+        AND object_id = OBJECT_ID('dbo.LivePlacementSnapshot')
+    )
+    BEGIN
+      CREATE INDEX IX_LivePlacementSnapshot_DesiredCapturedRegionSku
+        ON dbo.LivePlacementSnapshot (desiredCount, capturedAtUtc DESC, region, skuName);
+    END;
+  `;
+
+  await pool.request().query(createScript);
+  await pool.request().query(createIndexScript);
+}
+
+async function saveLivePlacementSnapshots(rows = []) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return 0;
+  }
+
+  const pool = await getSqlPool();
+  if (!pool) {
+    return 0;
+  }
+
+  await ensureLivePlacementSnapshotSchema(pool);
+
+  const transaction = new sql.Transaction(pool);
+  await transaction.begin();
+
+  try {
+    for (const row of rows) {
+      const request = new sql.Request(transaction);
+      request.input('capturedAtUtc', sql.DateTime2, row.capturedAtUtc || new Date());
+      request.input('desiredCount', sql.Int, Math.max(Number(row.desiredCount || 1), 1));
+      request.input('region', sql.NVarChar(64), row.region);
+      request.input('skuName', sql.NVarChar(128), row.sku);
+      request.input('livePlacementScore', sql.NVarChar(64), row.livePlacementScore || 'N/A');
+      request.input('livePlacementAvailable', sql.Bit, typeof row.livePlacementAvailable === 'boolean' ? row.livePlacementAvailable : null);
+      request.input('livePlacementRestricted', sql.Bit, typeof row.livePlacementRestricted === 'boolean' ? row.livePlacementRestricted : null);
+      request.input('warningMessage', sql.NVarChar(512), row.warning || null);
+
+      await request.query(`
+        INSERT INTO dbo.LivePlacementSnapshot
+        (capturedAtUtc, desiredCount, region, skuName, livePlacementScore, livePlacementAvailable, livePlacementRestricted, warningMessage)
+        VALUES
+        (@capturedAtUtc, @desiredCount, @region, @skuName, @livePlacementScore, @livePlacementAvailable, @livePlacementRestricted, @warningMessage)
+      `);
+    }
+
+    await transaction.commit();
+    return rows.length;
+  } catch (err) {
+    await transaction.rollback();
+    console.error('Failed to save live placement snapshots:', err.message);
+    return 0;
+  }
+}
+
+async function getLatestLivePlacementSnapshots(desiredCount = 1, maxAgeHours = 168) {
+  const pool = await getSqlPool();
+  if (!pool) {
+    return [];
+  }
+
+  await ensureLivePlacementSnapshotSchema(pool);
+
+  const normalizedDesiredCount = Math.max(1, Math.min(Number(desiredCount || 1), 1000));
+  const normalizedMaxAge = Math.max(1, Math.min(Number(maxAgeHours || 168), 24 * 365));
+
+  const request = pool.request();
+  request.input('desiredCount', sql.Int, normalizedDesiredCount);
+  request.input('maxAgeHours', sql.Int, normalizedMaxAge);
+
+  const result = await request.query(`
+    WITH RankedSnapshots AS (
+      SELECT
+        capturedAtUtc,
+        desiredCount,
+        region,
+        skuName,
+        livePlacementScore,
+        livePlacementAvailable,
+        livePlacementRestricted,
+        warningMessage,
+        ROW_NUMBER() OVER (
+          PARTITION BY region, skuName
+          ORDER BY capturedAtUtc DESC, livePlacementSnapshotId DESC
+        ) AS rn
+      FROM dbo.LivePlacementSnapshot
+      WHERE desiredCount = @desiredCount
+        AND capturedAtUtc >= DATEADD(hour, -@maxAgeHours, SYSUTCDATETIME())
+    )
+    SELECT
+      capturedAtUtc,
+      region,
+      skuName,
+      livePlacementScore,
+      livePlacementAvailable,
+      livePlacementRestricted,
+      warningMessage
+    FROM RankedSnapshots
+    WHERE rn = 1
+  `);
+
+  return (result.recordset || []).map((row) => ({
+    capturedAtUtc: row.capturedAtUtc,
+    region: row.region,
+    sku: row.skuName,
+    livePlacementScore: row.livePlacementScore,
+    livePlacementAvailable: typeof row.livePlacementAvailable === 'boolean' ? row.livePlacementAvailable : null,
+    livePlacementRestricted: typeof row.livePlacementRestricted === 'boolean' ? row.livePlacementRestricted : null,
+    warning: row.warningMessage
+  }));
+}
+
 async function ensurePhase3Schema() {
   const pool = await getSqlPool();
   if (!pool) {
@@ -952,6 +1088,7 @@ async function ensurePhase3Schema() {
 
   await ensureSubscriptionsTableSchema(pool);
   await ensureCapacityScoreSnapshotSchema(pool);
+  await ensureLivePlacementSnapshotSchema(pool);
   await ensureDashboardErrorLogSchema(pool);
   await ensureDashboardOperationLogSchema(pool);
 
@@ -1023,6 +1160,9 @@ module.exports = {
   getCapacityScoreSnapshotHistory,
   getQuotaCandidateSnapshots,
   listQuotaCandidateRuns,
+  ensureLivePlacementSnapshotSchema,
+  saveLivePlacementSnapshots,
+  getLatestLivePlacementSnapshots,
   ensureDashboardErrorLogSchema,
   insertDashboardErrorLog,
   listDashboardErrorLogs,

@@ -5,6 +5,7 @@ const path = require('path');
 const { pipeline } = require('stream/promises');
 const { getCapacityScoreSummary } = require('./capacityService');
 const { getRegionsForPreset } = require('../config/regionPresets');
+const { saveLivePlacementSnapshots } = require('../store/sql');
 
 const DEFAULT_MAX_SKUS_PER_CALL = 5;
 const DEFAULT_MAX_REGIONS_PER_CALL = 8;
@@ -722,17 +723,42 @@ async function getLivePlacementScoreRows(filters = {}) {
   const primaryDiagnostic = diagnostics.find(Boolean) || null;
   const combinedWarning = [...warnings, diagnosticWarning].filter(Boolean).join(' ');
 
+  const enrichedRows = workingRows.map((row) => {
+    const live = liveMap.get(`${row.sku}|${String(row.region || '').toLowerCase()}`);
+    return {
+      ...row,
+      livePlacementScore: live?.score || 'N/A',
+      livePlacementAvailable: typeof live?.isAvailable === 'boolean' ? live.isAvailable : null,
+      livePlacementRestricted: typeof live?.isRestricted === 'boolean' ? live.isRestricted : null,
+      liveCheckedAtUtc
+    };
+  });
+
+  // Save snapshots for persistence across sessions
+  if (effectiveDesiredCount === 1) {
+    const snapshotsToSave = enrichedRows
+      .filter((row) => row.livePlacementScore && row.livePlacementScore !== 'N/A')
+      .map((row) => ({
+        capturedAtUtc: liveCheckedAtUtc,
+        desiredCount: effectiveDesiredCount,
+        region: row.region,
+        sku: row.sku,
+        livePlacementScore: row.livePlacementScore,
+        livePlacementAvailable: row.livePlacementAvailable,
+        livePlacementRestricted: row.livePlacementRestricted,
+        warning: null
+      }));
+
+    if (snapshotsToSave.length > 0) {
+      saveLivePlacementSnapshots(snapshotsToSave).catch((saveErr) => {
+        console.warn('Failed to persist live placement snapshots:', saveErr.message);
+        // Silently fail — don't break the response
+      });
+    }
+  }
+
   return {
-    rows: workingRows.map((row) => {
-      const live = liveMap.get(`${row.sku}|${String(row.region || '').toLowerCase()}`);
-      return {
-        ...row,
-        livePlacementScore: live?.score || 'N/A',
-        livePlacementAvailable: typeof live?.isAvailable === 'boolean' ? live.isAvailable : null,
-        livePlacementRestricted: typeof live?.isRestricted === 'boolean' ? live.isRestricted : null,
-        liveCheckedAtUtc
-      };
-    }),
+    rows: enrichedRows,
     liveCheckedAtUtc,
     source: 'Get-AzVMAvailability:Get-PlacementScores',
     requestedDesiredCount,

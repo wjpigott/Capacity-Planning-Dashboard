@@ -1,4 +1,4 @@
-const { getSqlPool, getSubscriptionsFromTable } = require('../store/sql');
+const { getSqlPool, getSubscriptionsFromTable, getLatestLivePlacementSnapshots } = require('../store/sql');
 const { mockRows } = require('../store/mockCapacity');
 const { getRegionsForPreset } = require('../config/regionPresets');
 const { CapacityDetailDTO, SubscriptionSummaryDTO, FamilySummaryDTO, TrendDTO, PaginationDTO } = require('../models/dtos');
@@ -647,7 +647,35 @@ async function getFamilySummary(filters) {
 
 async function getCapacityScoreSummary(filters) {
   const rows = await getCapacityRows(filters);
-  return deriveCapacityScoreRows(rows);
+  const scoreRows = deriveCapacityScoreRows(rows);
+
+  // Merge in saved live placement snapshots from the last refresh at desired count = 1
+  // so users see their previously-refreshed placement scores across sessions
+  try {
+    const livePlacementSnapshots = await getLatestLivePlacementSnapshots(1, 168);
+    if (Array.isArray(livePlacementSnapshots) && livePlacementSnapshots.length > 0) {
+      const snapshotMap = new Map();
+      livePlacementSnapshots.forEach((snap) => {
+        snapshotMap.set(`${String(snap.sku || '').toLowerCase()}|${String(snap.region || '').toLowerCase()}`, snap);
+      });
+
+      scoreRows.forEach((scoreRow) => {
+        const key = `${String(scoreRow.sku || '').toLowerCase()}|${String(scoreRow.region || '').toLowerCase()}`;
+        const snapshot = snapshotMap.get(key);
+        if (snapshot) {
+          scoreRow.livePlacementScore = snapshot.livePlacementScore || scoreRow.livePlacementScore || 'N/A';
+          scoreRow.livePlacementAvailable = typeof snapshot.livePlacementAvailable === 'boolean' ? snapshot.livePlacementAvailable : scoreRow.livePlacementAvailable;
+          scoreRow.livePlacementRestricted = typeof snapshot.livePlacementRestricted === 'boolean' ? snapshot.livePlacementRestricted : scoreRow.livePlacementRestricted;
+          scoreRow.liveCheckedAtUtc = snapshot.capturedAtUtc || scoreRow.liveCheckedAtUtc;
+        }
+      });
+    }
+  } catch (err) {
+    console.warn('Failed to merge live placement snapshots into Capacity Score summary:', err.message);
+    // Silently fail — continue with just derived scores
+  }
+
+  return scoreRows;
 }
 
 module.exports = {

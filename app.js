@@ -2258,6 +2258,31 @@ function setRecommendStatus(message, tone = 'info') {
   recommendStatus.textContent = message;
 }
 
+function buildRecommendationErrorMessage(payload) {
+  const base = payload?.detail || payload?.error || 'Recommendation request failed.';
+  const diagnostics = payload?.diagnostics;
+  if (!diagnostics || typeof diagnostics !== 'object') {
+    return base;
+  }
+
+  const parts = [];
+  if (diagnostics.wrapperExists === false) {
+    parts.push('wrapper script not found');
+  }
+  if (diagnostics.scriptExists === false) {
+    parts.push('Get-AzVMAvailability.ps1 not found');
+  }
+  if (diagnostics.repoExists === false) {
+    parts.push('repo root not found');
+  }
+
+  if (parts.length === 0) {
+    return base;
+  }
+
+  return `${base} (${parts.join('; ')})`;
+}
+
 function renderRecommendations(payload) {
   if (!recommendGridBody) {
     return;
@@ -2349,9 +2374,9 @@ async function loadRecommendationView() {
       })
     });
 
-    const payload = await response.json();
+    const payload = await response.json().catch(() => ({}));
     if (!response.ok || !payload.ok) {
-      throw new Error(payload.detail || payload.error || 'Recommendation request failed.');
+      throw new Error(buildRecommendationErrorMessage(payload));
     }
 
     renderRecommendations(payload.result || {});

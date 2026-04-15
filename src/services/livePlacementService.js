@@ -688,6 +688,7 @@ async function runPlacementLookup({ skus, regions, desiredCount }) {
 async function runRecommendationLookupLocal({ targetSku, regions, topN, minScore, showPricing, showSpot }) {
   const wrapperPath = resolveRecommendationWrapperPath();
   const repoRoot = resolvePlacementRepoRoot();
+  const scriptPath = path.join(repoRoot, 'Get-AzVMAvailability.ps1');
   const powerShellRuntime = await getPowerShellCommands();
   const commands = powerShellRuntime.commands;
   const args = [
@@ -735,14 +736,37 @@ async function runRecommendationLookupLocal({ targetSku, regions, topN, minScore
           maxBuffer: 2 * 1024 * 1024
         },
         (error, stdout, stderr) => {
+          const stdoutText = String(stdout || '').trim();
+          const stderrText = String(stderr || '').trim();
+          const outputContext = {
+            command,
+            cwd: resolveProjectRoot(),
+            wrapperPath,
+            wrapperExists: fileExists(wrapperPath),
+            repoRoot,
+            repoExists: fileExists(repoRoot),
+            scriptPath,
+            scriptExists: fileExists(scriptPath),
+            targetSku,
+            regions,
+            topN,
+            minScore,
+            showPricing,
+            showSpot,
+            stdoutLength: stdoutText.length,
+            stderrLength: stderrText.length,
+            stdoutSnippet: stdoutText.slice(0, 500),
+            stderrSnippet: stderrText.slice(0, 500)
+          };
+
           if (error) {
             if (error.code === 'ENOENT') {
               tryCommand(commandIndex + 1, resolve, reject);
               return;
             }
 
-            const detail = stderr?.trim() || stdout?.trim() || error.message;
-            reject(new Error(`Capacity recommendation failed: ${detail}`));
+            const detail = stderrText || stdoutText || error.message;
+            reject(new Error(`Capacity recommendation failed: ${detail} | Context: ${JSON.stringify(outputContext)}`));
             return;
           }
 
@@ -752,7 +776,7 @@ async function runRecommendationLookupLocal({ targetSku, regions, topN, minScore
             return;
           }
 
-          const combinedOutput = [String(stdout || '').trim(), String(stderr || '').trim()]
+          const combinedOutput = [stdoutText, stderrText]
             .filter(Boolean)
             .join('\n');
           const parsedCombined = parseJsonFromMixedOutput(combinedOutput);
@@ -762,7 +786,7 @@ async function runRecommendationLookupLocal({ targetSku, regions, topN, minScore
           }
 
           const detail = combinedOutput || 'No output was returned by the recommendation wrapper.';
-          reject(new Error(`Capacity recommendation returned no JSON output. ${detail}`));
+          reject(new Error(`Capacity recommendation returned no JSON output. ${detail} | Context: ${JSON.stringify(outputContext)}`));
         }
       );
     }).catch((bootstrapError) => {

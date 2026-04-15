@@ -27,7 +27,7 @@ const {
   startIngestionScheduler
 } = require('./services/azureIngestionService');
 const { listManagementGroups, listQuotaGroups } = require('./services/quotaDiscoveryService');
-const { getSqlPool, ensurePhase3Schema, ensureSubscriptionsTableSchema, getCapacityScoreSnapshotHistory } = require('./store/sql');
+const { getSqlPool, ensurePhase3Schema, ensureSubscriptionsTableSchema, getCapacityScoreSnapshotHistory, insertDashboardErrorLog, listDashboardErrorLogs, logDashboardOperation, listDashboardOperations } = require('./store/sql');
 const { applyIndexes } = require('./maintenance/applyPerformanceIndexes');
 
 const app = express();
@@ -462,6 +462,89 @@ app.post('/api/admin/ingest/capacity', requireAdmin, async (req, res) => {
 
 app.get('/api/admin/ingest/status', requireAdmin, (_, res) => {
   res.json({ ok: true, status: getIngestionStatus() });
+});
+
+app.post('/api/admin/errors/log', async (req, res) => {
+  try {
+    const entry = {
+      source: req.body?.source || 'unknown',
+      type: req.body?.type || 'UnknownError',
+      message: req.body?.message || 'No error message',
+      stack: req.body?.stack || null,
+      severity: req.body?.severity || 'error',
+      context: req.body?.context || null,
+      region: req.body?.region || null,
+      sku: req.body?.sku || null,
+      desiredCount: req.body?.desiredCount || null,
+      occurredAtUtc: new Date()
+    };
+
+    const result = await insertDashboardErrorLog(entry);
+    res.json({ ok: true, logged: result > 0 });
+  } catch (err) {
+    // Log to console but return success so client doesn't break
+    console.error('Failed to log error entry:', err.message);
+    res.json({ ok: false, logged: false, error: err.message });
+  }
+});
+
+app.get('/api/admin/errors', requireAdmin, async (req, res) => {
+  try {
+    const options = {
+      limit: req.query.limit ? Math.min(Number(req.query.limit), 200) : 50,
+      onlyUnresolved: req.query.unresolved === 'true',
+      source: req.query.source || null,
+      severity: req.query.severity || null,
+      hoursBack: req.query.hoursBack ? Math.min(Number(req.query.hoursBack), 24 * 365) : 168
+    };
+
+    const logs = await listDashboardErrorLogs(options);
+    res.json({ ok: true, rows: logs });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/admin/operations/log', async (req, res) => {
+  try {
+    const entry = {
+      type: req.body?.type || 'unknown',
+      name: req.body?.name || req.body?.type || 'Unknown',
+      status: req.body?.status || 'success',
+      triggerSource: req.body?.triggerSource || 'manual',
+      startedAtUtc: req.body?.startedAtUtc || new Date(),
+      completedAtUtc: req.body?.completedAtUtc || new Date(),
+      durationMs: req.body?.durationMs || null,
+      rowsAffected: req.body?.rowsAffected || null,
+      subscriptionCount: req.body?.subscriptionCount || null,
+      requestedDesiredCount: req.body?.requestedDesiredCount || null,
+      effectiveDesiredCount: req.body?.effectiveDesiredCount || null,
+      regionPreset: req.body?.regionPreset || null,
+      note: req.body?.note || null,
+      errorMessage: req.body?.errorMessage || null
+    };
+
+    const result = await logDashboardOperation(entry);
+    res.json({ ok: true, logged: result > 0 });
+  } catch (err) {
+    console.error('Failed to log operation:', err.message);
+    res.json({ ok: false, logged: false, error: err.message });
+  }
+});
+
+app.get('/api/admin/operations', requireAdmin, async (req, res) => {
+  try {
+    const options = {
+      limit: req.query.limit ? Math.min(Number(req.query.limit), 100) : 25,
+      operationType: req.query.type || null,
+      onlyFailed: req.query.failed === 'true'
+    };
+
+    const logs = await listDashboardOperations(options);
+    res.json({ ok: true, rows: logs });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 app.post('/internal/ingest/capacity', requireIngestKey, async (req, res) => {

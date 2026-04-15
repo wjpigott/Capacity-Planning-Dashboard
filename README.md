@@ -116,6 +116,9 @@ Status legend:
 - [x] Migration runner script (`scripts/apply-migration.ps1`)
 - [x] Schema + seed scripts for dev initialization
 - [x] Worker packaging/deploy script scaffold
+- [x] Database error log table for support visibility (`dbo.DashboardErrorLog`)
+- [x] Live placement error display on reports (compact error badges visible in grid)
+- [ ] Admin error log viewer/dashboard for support triage
 - [ ] CI/CD pipeline for build/deploy/migrations
 - [ ] Scheduled ingestion monitoring/alerts
 - [ ] Deployment follow-up: investigate why `Compute Recommendations Role` assigned at the management-group scope did not satisfy `Microsoft.Compute/locations/placementScores/generate/action` for the worker managed identity, while the subscription-level assignment did

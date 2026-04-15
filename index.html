@@ -19,48 +19,54 @@
 
   <div class="app-shell">
     <nav class="sidebar">
+      <div class="sidebar-header">
+        <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-expanded="true" title="Collapse navigation">
+          <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M10.5 3.5L6 8l4.5 4.5-1 1L4 8l5.5-5.5z"/></svg>
+          <span class="nav-label">Collapse</span>
+        </button>
+      </div>
       <div class="nav-group-label">Reporting</div>
       <button class="nav-sub-item active" data-report-view="capacity-grid">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="1" y="10" width="14" height="1.5"/><rect x="1" y="6.5" width="14" height="1.5"/><rect x="1" y="3" width="14" height="1.5"/></svg>
-        Capacity Grid
+        <span class="nav-label">Capacity Grid</span>
       </button>
       <button class="nav-sub-item" data-report-view="region-chart">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="1" y="9" width="3" height="6"/><rect x="6" y="5" width="3" height="10"/><rect x="11" y="1" width="3" height="14"/></svg>
-        By Region
+        <span class="nav-label">By Region</span>
       </button>
       <button class="nav-sub-item" data-report-view="sku-chart">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="1" y="4" width="3" height="11"/><rect x="6" y="7" width="3" height="8"/><rect x="11" y="2" width="3" height="13"/></svg>
-        Top SKUs
+        <span class="nav-label">Top SKUs</span>
       </button>
       <button class="nav-sub-item" data-report-view="capacity-score">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 5v3.5l2 2" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
-        Capacity Score
+        <span class="nav-label">Capacity Score</span>
       </button>
       <button class="nav-sub-item" data-report-view="family-summary">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="1" y="2" width="14" height="2" rx="1"/><rect x="1" y="7" width="10" height="2" rx="1"/><rect x="1" y="12" width="12" height="2" rx="1"/></svg>
-        Family Summary
+        <span class="nav-label">Family Summary</span>
       </button>
       <button class="nav-sub-item" data-report-view="region-matrix">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="1" y="1" width="6" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="9" y="1" width="6" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="1" y="9" width="6" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="9" y="9" width="6" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
-        Region Matrix
+        <span class="nav-label">Region Matrix</span>
       </button>
       <button class="nav-sub-item" data-report-view="trend">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><polyline points="1,12 5,7 9,9 15,3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        Trend History
+        <span class="nav-label">Trend History</span>
       </button>
 
       <div class="nav-group-label" style="margin-top: 16px;">Admin</div>
       <button class="nav-item" data-nav="admin" data-admin-only="true">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 1a6 6 0 110 12A6 6 0 018 2zm-.5 3v3.22l-2.14 2.14.71.71L8.5 8.78V5h-1z"/></svg>
-        Data Ingestion
+        <span class="nav-label">Data Ingestion</span>
       </button>
       <button class="nav-item" data-nav="quota-discovery" data-admin-only="true">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="6.5" cy="6.5" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="9.5" y1="9.5" x2="14" y2="14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-        Quota Discovery
+        <span class="nav-label">Quota Discovery</span>
       </button>
       <button class="nav-item" data-nav="quota-movement" data-admin-only="true">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1 8l4-4v2.5h6V4l4 4-4 4v-2.5H5V12z"/></svg>
-        Quota Movements
+        <span class="nav-label">Quota Movements</span>
       </button>
     </nav>
 
@@ -207,28 +213,37 @@
               <strong>Live placement score</strong> is only populated when you press <span>Refresh Live Placement</span>.
               Desired Placement Count is capped at <strong>1000 VMs</strong> per live lookup.
             </div>
+            <div class="score-legend" aria-label="Capacity score legend">
+              <span class="score-legend-item"><span class="status-pill status-pill--ok">AVL</span> Available</span>
+              <span class="score-legend-item"><span class="status-pill status-pill--warn">RST</span> Restricted</span>
+              <span class="score-legend-item"><span class="status-pill status-pill--off">UNA</span> Unavailable</span>
+              <span class="score-legend-item"><span class="status-pill status-pill--muted">PND</span> Not checked yet</span>
+              <span class="score-legend-item"><span class="status-pill status-pill--muted">NS</span> No live score returned</span>
+            </div>
             <p id="capacityScoreLiveStatus" class="inline-note" style="margin: 0 0 8px;">Live placement has not been refreshed in this session.</p>
-            <table id="capacityScoreGrid">
-              <thead>
-                <tr>
-                  <th>Region</th>
-                  <th>SKU</th>
-                  <th>Family</th>
-                  <th>Derived Score</th>
-                  <th>Live Placement Score</th>
-                  <th>Placement Status</th>
-                  <th>Last Live Check</th>
-                  <th>Subscriptions</th>
-                  <th>OK Rows</th>
-                  <th>Limited Rows</th>
-                  <th>Constrained Rows</th>
-                  <th>Total Quota Available</th>
-                  <th>Utilization %</th>
-                  <th>Reason</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
+            <div class="score-grid-wrap">
+              <table id="capacityScoreGrid">
+                <thead>
+                  <tr>
+                    <th class="score-col-region">Region</th>
+                    <th class="score-col-sku">SKU</th>
+                    <th class="score-col-family">Family</th>
+                    <th class="score-col-score" title="Derived Score"><abbr title="Derived Score">Score</abbr></th>
+                    <th class="score-col-live-score" title="Live Placement Score"><abbr title="Live Placement Score">Live Score</abbr></th>
+                    <th class="score-col-status" title="Placement Status"><abbr title="Placement Status">State</abbr></th>
+                    <th class="score-col-live-check" title="Last Live Check"><abbr title="Last Live Check">Checked</abbr></th>
+                    <th class="score-col-metric" title="Subscriptions"><abbr title="Subscriptions">Subs</abbr></th>
+                    <th class="score-col-metric" title="OK Rows"><abbr title="OK Rows">OK</abbr></th>
+                    <th class="score-col-metric" title="Limited Rows"><abbr title="Limited Rows">Ltd</abbr></th>
+                    <th class="score-col-metric" title="Constrained Rows"><abbr title="Constrained Rows">Cstr</abbr></th>
+                    <th class="score-col-quota" title="Total Quota Available"><abbr title="Total Quota Available">Total Avail</abbr></th>
+                    <th class="score-col-utilization" title="Utilization Percentage"><abbr title="Utilization Percentage">Util %</abbr></th>
+                    <th class="score-col-reason">Reason</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
             <p id="capacityScoreEmpty" class="inline-note" style="display:none; margin-top:8px;">No capacity score data available</p>
 
 
@@ -387,6 +402,28 @@
               <p>Pull fresh Compute usage and SKU data from Azure ARM for all tracked subscriptions and write snapshots to SQL.</p>
               <button id="triggerIngestBtn">Run Ingest Now</button>
             </div>
+          </div>
+        </div>
+
+        <div class="admin-section">
+          <h3>Recent Operations</h3>
+          <p class="admin-section-desc">Latest updates from ingest, live placement refresh, and other dashboard operations.</p>
+          <div id="operationHistoryContainer" class="operation-history-table-wrap">
+            <table class="operation-history-table">
+              <thead>
+                <tr>
+                  <th class="col-time">Time</th>
+                  <th class="col-operation">Operation</th>
+                  <th class="col-status">Status</th>
+                  <th class="col-duration">Duration</th>
+                  <th class="col-rows">Rows</th>
+                  <th class="col-note">Note</th>
+                </tr>
+              </thead>
+              <tbody id="operationHistoryBody">
+                <tr><td colspan="6" style="text-align: center; padding: 20px; color: #5d7085;">Loading...</td></tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </section>

@@ -130,6 +130,7 @@ const capacityScoreHistoryDays = document.querySelector('#capacityScoreHistoryDa
 const capacityScoreDesiredCount = document.querySelector('#capacityScoreDesiredCount');
 const refreshLivePlacementBtn = document.querySelector('#refreshLivePlacementBtn');
 const capacityScoreLiveStatus = document.querySelector('#capacityScoreLiveStatus');
+const sidebarToggle = document.querySelector('#sidebarToggle');
 const regionChart = document.querySelector('#regionChart');
 const skuChart = document.querySelector('#skuChart');
 const subscriptionSelectionInfo = document.querySelector('#subscriptionSelectionInfo');
@@ -152,6 +153,8 @@ const ingestSubscriptionsValue = document.querySelector('#ingestSubscriptionsVal
 const ingestRegionsValue = document.querySelector('#ingestRegionsValue');
 const ingestFamiliesValue = document.querySelector('#ingestFamiliesValue');
 const ingestErrorValue = document.querySelector('#ingestErrorValue');
+const operationHistoryBody = document.querySelector('#operationHistoryBody');
+const operationHistoryContainer = document.querySelector('#operationHistoryContainer');
 const topbarReportTitle = document.querySelector('#topbarReportTitle');
 const capacityPageInfo = document.querySelector('#capacityPageInfo');
 const capacityPageSize = document.querySelector('#capacityPageSize');
@@ -179,6 +182,7 @@ const capacityPaging = {
 };
 
 let ingestStatusPollHandle = null;
+let operationHistoryPollHandle = null;
 
 function setAdminStatus(message, tone = 'info') {
   if (!adminStatus) return;
@@ -217,6 +221,149 @@ function formatDuration(ms) {
   }
 
   return `${(ms / 1000).toFixed(1)} s`;
+}
+
+function formatCompactTimestamp(value) {
+  if (!value) {
+    return '--';
+  }
+
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) {
+    return '--';
+  }
+
+  return timestamp.toLocaleString([], {
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  });
+}
+
+function getCompactLiveStatus(row) {
+  if (row.livePlacementAvailable == null) {
+    if (row.livePlacementScore === 'N/A') {
+      return { short: 'NS', full: 'No live score returned', className: 'status-pill--muted' };
+    }
+
+    return { short: 'PND', full: 'Not checked yet', className: 'status-pill--muted' };
+  }
+
+  if (row.livePlacementAvailable) {
+    return { short: 'AVL', full: 'Available', className: 'status-pill--ok' };
+  }
+
+  if (row.livePlacementRestricted) {
+    return { short: 'RST', full: 'Restricted', className: 'status-pill--warn' };
+  }
+
+  return { short: 'UNA', full: 'Unavailable', className: 'status-pill--off' };
+}
+
+function getCompactLiveScore(value) {
+  const rawValue = String(value || 'N/A').trim();
+  const normalized = rawValue.toLowerCase();
+
+  // Detect error conditions first
+  if (normalized.includes('error') || normalized.includes('failed') || normalized.includes('exception') || normalized.includes('unauthorized') || normalized.includes('denied')) {
+    return { 
+      short: '⚠ Err', 
+      full: rawValue, 
+      className: 'ERROR',
+      isError: true,
+      errorMessage: rawValue
+    };
+  }
+
+  if (normalized === 'high') {
+    return { short: 'High', full: rawValue, className: 'HIGH' };
+  }
+
+  if (normalized === 'medium') {
+    return { short: 'Med', full: rawValue, className: 'MEDIUM' };
+  }
+
+  if (normalized === 'low') {
+    return { short: 'Low', full: rawValue, className: 'LOW' };
+  }
+
+  if (normalized === 'n/a') {
+    return { short: 'N/A', full: rawValue, className: 'N/A' };
+  }
+
+  if (normalized.includes('restricted')) {
+    return { short: 'Rstr', full: rawValue, className: 'BLOCKED' };
+  }
+
+  if (normalized.includes('unavailable') || normalized.includes('notavailable')) {
+    return { short: 'Unav', full: rawValue, className: 'BLOCKED' };
+  }
+
+  return { short: rawValue.slice(0, 4), full: rawValue, className: 'N/A' };
+}
+
+function setCapacityScoreStatus(message, fullDetail) {
+  if (!capacityScoreLiveStatus) {
+    return;
+  }
+
+  capacityScoreLiveStatus.textContent = message;
+  capacityScoreLiveStatus.title = fullDetail || message;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+async function logErrorToDatabase(errorEntry = {}) {
+  try {
+    const payload = {
+      source: errorEntry.source || 'unknown',
+      type: errorEntry.type || 'UnknownError',
+      message: errorEntry.message || 'No error message',
+      stack: errorEntry.stack || null,
+      severity: errorEntry.severity || 'error',
+      context: errorEntry.context || null,
+      region: errorEntry.region || null,
+      sku: errorEntry.sku || null,
+      desiredCount: errorEntry.desiredCount || null
+    };
+
+    const response = await fetch('/api/admin/errors/log', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    // Silently fail — don't disrupt user experience if error logging fails
+    if (!response.ok) {
+      console.warn('Failed to log error to database:', response.status);
+    }
+  } catch (logErr) {
+    console.warn('Error logging exception:', logErr.message);
+  }
+}
+
+function setSidebarCollapsed(collapsed) {
+  document.body.classList.toggle('sidebar-collapsed', collapsed);
+  if (!sidebarToggle) {
+    return;
+  }
+
+  sidebarToggle.setAttribute('aria-expanded', String(!collapsed));
+  sidebarToggle.title = collapsed ? 'Expand navigation' : 'Collapse navigation';
+  const label = sidebarToggle.querySelector('.nav-label');
+  if (label) {
+    label.textContent = collapsed ? 'Expand' : 'Collapse';
+  }
 }
 
 function renderIngestionStatusCard(status) {
@@ -326,6 +473,10 @@ function stopIngestStatusPolling() {
     clearInterval(ingestStatusPollHandle);
     ingestStatusPollHandle = null;
   }
+  if (operationHistoryPollHandle) {
+    clearInterval(operationHistoryPollHandle);
+    operationHistoryPollHandle = null;
+  }
 }
 
 async function fetchAdminIngestStatus() {
@@ -370,6 +521,11 @@ function startIngestStatusPolling() {
       setAdminStatus(error.message || 'Failed to refresh ingestion status.', 'error');
     });
   }, 5000);
+
+  // Also refresh operation history every 10 seconds while ingest is running
+  operationHistoryPollHandle = setInterval(() => {
+    syncOperationHistory().catch(() => {});
+  }, 10000);
 }
 
 async function triggerCapacityIngest() {
@@ -413,6 +569,66 @@ async function triggerCapacityIngest() {
     setButtonBusy(triggerIngestBtn, false);
     setAdminStatus(error.message || 'Failed to start capacity ingestion.', 'error');
   }
+}
+
+async function fetchOperationHistory(options = {}) {
+  try {
+    const params = new URLSearchParams({
+      limit: options.limit || 25,
+      type: options.type || '',
+      failed: options.failed ? 'true' : 'false'
+    });
+
+    const response = await fetch(`/api/admin/operations?${params.toString()}`);
+    const payload = await response.ok ? await response.json() : { ok: false, rows: [] };
+    return Array.isArray(payload.rows) ? payload.rows : [];
+  } catch (err) {
+    console.warn('Failed to fetch operation history:', err.message);
+    return [];
+  }
+}
+
+function renderOperationHistory(operations) {
+  if (!operationHistoryBody) {
+    return;
+  }
+
+  operationHistoryBody.innerHTML = '';
+  if (!operations || operations.length === 0) {
+    operationHistoryBody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 20px; color: #5d7085;">No recent operations. Ingest and refresh operations will appear here.</td></tr>';
+    return;
+  }
+
+  operations.forEach((op) => {
+    const timeText = op.startedAtUtc
+      ? new Date(op.startedAtUtc).toLocaleString('en-US', { hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit', month: 'short', day: 'numeric', year: '2-digit' })
+      : 'unknown';
+    const statusClass = op.status === 'success' ? 'success' : op.status === 'failed' ? 'failed' : 'running';
+    const durationText = op.durationMs ? `${op.durationMs}ms` : '—';
+    const rowsText = op.rowsAffected != null ? String(op.rowsAffected) : '—';
+    const noteText = op.note || op.errorMessage || '—';
+    const noteEscaped = String(noteText).slice(0, 200);
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="col-time" title="${op.startedAtUtc || 'unknown'}">${timeText}</td>
+      <td class="col-operation">${escapeHtml(op.name || op.type || 'Unknown')}</td>
+      <td class="col-status"><span class="operation-status-badge ${statusClass}">${escapeHtml(op.status || 'unknown')}</span></td>
+      <td class="col-duration">${durationText}</td>
+      <td class="col-rows">${rowsText}</td>
+      <td class="col-note" title="${escapeHtml(noteText)}">${escapeHtml(noteEscaped)}${noteText.length > 200 ? '...' : ''}</td>
+    `;
+    operationHistoryBody.appendChild(tr);
+  });
+}
+
+async function syncOperationHistory() {
+  if (!operationHistoryContainer) {
+    return;
+  }
+
+  const operations = await fetchOperationHistory({ limit: 20 });
+  renderOperationHistory(operations);
 }
 
 function activePresetRegions() {
@@ -1451,26 +1667,46 @@ function renderCapacityScores(scoreRows) {
 
   scoreRows.forEach((row) => {
     const scoreClass = String(row.score || '').toUpperCase();
-    const liveScoreClass = String(row.livePlacementScore || '').toUpperCase();
-    const liveStatus = row.livePlacementAvailable == null
-      ? (row.livePlacementScore === 'N/A' ? 'No live score returned' : 'Not checked')
-      : (row.livePlacementAvailable ? 'Available' : (row.livePlacementRestricted ? 'Restricted' : 'Unavailable'));
+    const liveScore = getCompactLiveScore(row.livePlacementScore);
+    const liveStatus = getCompactLiveStatus(row);
+    const regionText = escapeHtml(row.region || 'n/a');
+    const skuText = escapeHtml(row.sku || 'n/a');
+    const familyText = escapeHtml(formatFamilyLabel(row.family) || 'n/a');
+    const scoreText = escapeHtml(row.score || 'n/a');
+    const liveScoreText = escapeHtml(liveScore.short);
+    const liveScoreTitleText = escapeHtml(liveScore.full);
+    const liveStatusText = escapeHtml(liveStatus.full);
+    const liveStatusShortText = escapeHtml(liveStatus.short);
+    const liveCheckedTitleText = escapeHtml(row.liveCheckedAtUtc ? formatTimestamp(row.liveCheckedAtUtc) : 'Not checked');
+    const liveCheckedText = escapeHtml(formatCompactTimestamp(row.liveCheckedAtUtc));
+    const reasonText = escapeHtml(row.reason || 'n/a');
+    
+    // Build the live score cell content with error display
+    let liveScoreCellHtml = '';
+    if (liveScore.isError) {
+      // Display error as visible text instead of just in tooltip
+      const errorMsg = escapeHtml(liveScore.errorMessage || 'Unknown error');
+      liveScoreCellHtml = `<span class="badge ${liveScore.className}" title="${liveScoreTitleText}">${liveScoreText}</span><div class="live-score-error-text">${errorMsg.slice(0, 50)}${errorMsg.length > 50 ? '...' : ''}</div>`;
+    } else {
+      liveScoreCellHtml = `<span class="badge ${liveScore.className}" title="${liveScoreTitleText}">${liveScoreText}</span>`;
+    }
+
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td style="white-space:nowrap">${row.region || 'n/a'}</td>
-      <td style="white-space:nowrap">${row.sku || 'n/a'}</td>
-      <td style="white-space:nowrap">${formatFamilyLabel(row.family) || 'n/a'}</td>
-      <td><span class="badge ${scoreClass}">${row.score || 'n/a'}</span></td>
-      <td><span class="badge ${liveScoreClass}">${row.livePlacementScore || 'N/A'}</span></td>
-      <td style="white-space:nowrap">${liveStatus}</td>
-      <td style="white-space:nowrap">${row.liveCheckedAtUtc ? formatTimestamp(row.liveCheckedAtUtc) : 'Not checked'}</td>
-      <td>${row.subscriptionCount ?? 0}</td>
-      <td>${row.okRows ?? 0}</td>
-      <td>${row.limitedRows ?? 0}</td>
-      <td>${row.constrainedRows ?? 0}</td>
-      <td>${row.totalQuotaAvailable ?? 0}</td>
-      <td>${row.utilizationPct ?? 0}%</td>
-      <td>${row.reason || 'n/a'}</td>
+      <td class="score-cell-region" title="${regionText}">${regionText}</td>
+      <td class="score-cell-sku" title="${skuText}">${skuText}</td>
+      <td class="score-cell-family" title="${familyText}">${familyText}</td>
+      <td class="score-cell-score"><span class="badge ${scoreClass}">${scoreText}</span></td>
+      <td class="score-cell-live-score" title="${liveScoreTitleText}">${liveScoreCellHtml}</td>
+      <td class="score-cell-status" title="${liveStatusText}"><span class="status-pill ${liveStatus.className}">${liveStatusShortText}</span></td>
+      <td class="score-cell-live-check" title="${liveCheckedTitleText}">${liveCheckedText}</td>
+      <td class="score-cell-metric">${row.subscriptionCount ?? 0}</td>
+      <td class="score-cell-metric">${row.okRows ?? 0}</td>
+      <td class="score-cell-metric">${row.limitedRows ?? 0}</td>
+      <td class="score-cell-metric">${row.constrainedRows ?? 0}</td>
+      <td class="score-cell-quota">${row.totalQuotaAvailable ?? 0}</td>
+      <td class="score-cell-utilization">${row.utilizationPct ?? 0}%</td>
+      <td class="score-cell-reason" title="${reasonText}">${reasonText}</td>
     `;
     capacityScoreGridBody.appendChild(tr);
   });
@@ -1501,9 +1737,7 @@ async function refreshLivePlacementScores() {
   const desiredCount = normalizeDesiredPlacementCount();
   const extraSkus = getFamilyExtraSkus(filters.family);
   setButtonBusy(refreshLivePlacementBtn, true, 'Refreshing...');
-  if (capacityScoreLiveStatus) {
-    capacityScoreLiveStatus.textContent = 'Refreshing live placement scores from Get-AzVMAvailability...';
-  }
+  setCapacityScoreStatus('Refreshing live placement scores...', 'Refreshing live placement scores from Get-AzVMAvailability...');
 
   try {
     const response = await fetch('/api/capacity/scores/live', {
@@ -1524,16 +1758,26 @@ async function refreshLivePlacementScores() {
     }
 
     renderCapacityScores(Array.isArray(payload.rows) ? payload.rows : []);
-    if (capacityScoreLiveStatus) {
-      const requestedCount = payload.requestedDesiredCount ?? desiredCount;
-      const effectiveCount = payload.effectiveDesiredCount ?? desiredCount;
-      const warningText = payload.warning ? ` ${payload.warning}` : '';
-      capacityScoreLiveStatus.textContent = `Live placement refreshed at ${formatTimestamp(payload.liveCheckedAtUtc)} via ${payload.source}. Requested ${requestedCount} VM(s); evaluated ${effectiveCount}.${warningText}`;
-    }
+    const requestedCount = payload.requestedDesiredCount ?? desiredCount;
+    const effectiveCount = payload.effectiveDesiredCount ?? desiredCount;
+    const statusMessage = `Live refresh ${formatCompactTimestamp(payload.liveCheckedAtUtc)}. Requested ${requestedCount}; evaluated ${effectiveCount}.${payload.warning ? ' Warning.' : ''}`;
+    const detailMessage = `Live placement refreshed at ${formatTimestamp(payload.liveCheckedAtUtc)} via ${payload.source}. Requested ${requestedCount} VM(s); evaluated ${effectiveCount}.${payload.warning ? ` ${payload.warning}` : ''}`;
+    setCapacityScoreStatus(statusMessage, detailMessage);
   } catch (error) {
-    if (capacityScoreLiveStatus) {
-      capacityScoreLiveStatus.textContent = error.message || 'Failed to refresh live placement scores.';
-    }
+    const errorMsg = error.message || 'Failed to refresh live placement scores.';
+    setCapacityScoreStatus('Live refresh failed.', errorMsg);
+    
+    // Log error to database for support visibility
+    await logErrorToDatabase({
+      source: 'live-placement-refresh',
+      type: error.name || 'LivePlacementError',
+      message: errorMsg,
+      stack: error.stack || null,
+      severity: 'error',
+      context: { filters: getQueryFilters(), desiredCount },
+      region: filters.region && filters.region !== 'all' ? filters.region : null,
+      desiredCount
+    });
   } finally {
     setButtonBusy(refreshLivePlacementBtn, false);
   }
@@ -1960,6 +2204,10 @@ function wireButtons() {
     capacityPaging.pageNumber = capacityPaging.pageNumber + 1;
     loadCapacityRows();
   });
+
+  sidebarToggle?.addEventListener('click', () => {
+    setSidebarCollapsed(!document.body.classList.contains('sidebar-collapsed'));
+  });
 }
 
 quotaManagementGroupFilter?.addEventListener('change', () => {
@@ -2033,12 +2281,14 @@ wireButtons();
 if (capacityPageSize) {
   capacityPaging.pageSize = Math.max(10, Math.min(Number(capacityPageSize.value || 50), 500));
 }
+setSidebarCollapsed(false);
 renderCapacityPaging();
 syncRegionOptions();
 loadViewerAuth().then((proceed) => {
   if (!proceed) return; // not authenticated — navigating to /auth/login
   loadManagementGroups();
   syncIngestStatus().catch(() => {});
+  syncOperationHistory().catch(() => {});
   // Load subscriptions (fast — queries dbo.Subscriptions table), then load
   // the default capacity-grid view. All other report views load on first click.
   loadSubscriptions().then(() => loadCapacityRows());

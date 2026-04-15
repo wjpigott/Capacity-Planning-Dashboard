@@ -635,6 +635,315 @@ async function listQuotaCandidateRuns(filters = {}) {
   return result.recordset || [];
 }
 
+async function ensureDashboardErrorLogSchema(pool) {
+  const createScript = `
+    IF OBJECT_ID('dbo.DashboardErrorLog', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.DashboardErrorLog (
+        errorLogId BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        errorSource NVARCHAR(64) NOT NULL,
+        errorType NVARCHAR(128) NOT NULL,
+        errorMessage NVARCHAR(2048) NOT NULL,
+        stackTrace NVARCHAR(MAX) NULL,
+        occurredAtUtc DATETIME2 NOT NULL,
+        severity NVARCHAR(16) NOT NULL,
+        context NVARCHAR(MAX) NULL,
+        affectedRegion NVARCHAR(64) NULL,
+        affectedSku NVARCHAR(128) NULL,
+        affectedDesiredCount INT NULL,
+        isResolved BIT NOT NULL DEFAULT 0,
+        resolvedAtUtc DATETIME2 NULL,
+        resolutionNotes NVARCHAR(512) NULL
+      )
+    END;
+  `;
+
+  const createIndexScript = `
+    IF NOT EXISTS (
+      SELECT 1
+      FROM sys.indexes
+      WHERE name = 'IX_DashboardErrorLog_OccurredAt'
+        AND object_id = OBJECT_ID('dbo.DashboardErrorLog')
+    )
+    BEGIN
+      CREATE INDEX IX_DashboardErrorLog_OccurredAt
+        ON dbo.DashboardErrorLog (occurredAtUtc DESC, errorSource, severity);
+    END;
+
+    IF NOT EXISTS (
+      SELECT 1
+      FROM sys.indexes
+      WHERE name = 'IX_DashboardErrorLog_Unresolved'
+        AND object_id = OBJECT_ID('dbo.DashboardErrorLog')
+    )
+    BEGIN
+      CREATE INDEX IX_DashboardErrorLog_Unresolved
+        ON dbo.DashboardErrorLog (isResolved, occurredAtUtc DESC)
+        WHERE isResolved = 0;
+    END;
+  `;
+
+  await pool.request().query(createScript);
+  await pool.request().query(createIndexScript);
+}
+
+async function insertDashboardErrorLog(entry = {}) {
+  const pool = await getSqlPool();
+  if (!pool) {
+    return 0;
+  }
+
+  await ensureDashboardErrorLogSchema(pool);
+
+  const request = pool.request();
+  request.input('errorSource', sql.NVarChar(64), entry.source || 'unknown');
+  request.input('errorType', sql.NVarChar(128), entry.type || 'UnkownError');
+  request.input('errorMessage', sql.NVarChar(2048), (entry.message || 'No error message').substring(0, 2048));
+  request.input('stackTrace', sql.NVarChar(sql.MAX), entry.stack || null);
+  request.input('occurredAtUtc', sql.DateTime2, entry.occurredAtUtc || new Date());
+  request.input('severity', sql.NVarChar(16), entry.severity || 'error');
+  request.input('context', sql.NVarChar(sql.MAX), entry.context ? JSON.stringify(entry.context) : null);
+  request.input('affectedRegion', sql.NVarChar(64), entry.region || null);
+  request.input('affectedSku', sql.NVarChar(128), entry.sku || null);
+  request.input('affectedDesiredCount', sql.Int, Number.isFinite(entry.desiredCount) ? entry.desiredCount : null);
+
+  try {
+    await request.query(`
+      INSERT INTO dbo.DashboardErrorLog
+      (errorSource, errorType, errorMessage, stackTrace, occurredAtUtc, severity, context, affectedRegion, affectedSku, affectedDesiredCount, isResolved)
+      VALUES
+      (@errorSource, @errorType, @errorMessage, @stackTrace, @occurredAtUtc, @severity, @context, @affectedRegion, @affectedSku, @affectedDesiredCount, 0)
+    `);
+    return 1;
+  } catch (err) {
+    console.error('Failed to log error to database:', err.message);
+    return 0;
+  }
+}
+
+async function listDashboardErrorLogs(options = {}) {
+  const pool = await getSqlPool();
+  if (!pool) {
+    return [];
+  }
+
+  await ensureDashboardErrorLogSchema(pool);
+
+  const limit = Math.max(5, Math.min(Number(options.limit || 50), 200));
+  const onlyUnresolved = Boolean(options.onlyUnresolved);
+  const source = options.source || null;
+  const severity = options.severity || null;
+  const hoursBack = Math.max(1, Math.min(Number(options.hoursBack || 168), 24 * 365));
+
+  const request = pool.request();
+  request.input('limitRows', sql.Int, limit);
+  request.input('hoursBack', sql.Int, hoursBack);
+
+  let where = 'WHERE occurredAtUtc >= DATEADD(hour, -@hoursBack, SYSUTCDATETIME())';
+  if (onlyUnresolved) {
+    where += ' AND isResolved = 0';
+  }
+  if (source) {
+    where += ' AND errorSource = @source';
+    request.input('source', sql.NVarChar(64), source);
+  }
+  if (severity) {
+    where += ' AND severity = @severity';
+    request.input('severity', sql.NVarChar(16), severity);
+  }
+
+  const result = await request.query(`
+    SELECT TOP (@limitRows)
+      errorLogId,
+      errorSource,
+      errorType,
+      errorMessage,
+      stackTrace,
+      occurredAtUtc,
+      severity,
+      context,
+      affectedRegion,
+      affectedSku,
+      affectedDesiredCount,
+      isResolved,
+      resolvedAtUtc,
+      resolutionNotes
+    FROM dbo.DashboardErrorLog
+    ${where}
+    ORDER BY occurredAtUtc DESC, errorLogId DESC
+  `);
+
+  return (result.recordset || []).map((row) => {
+    let contextObj = null;
+    if (row.context) {
+      try {
+        contextObj = JSON.parse(row.context);
+      } catch {
+        contextObj = null;
+      }
+    }
+
+    return {
+      id: Number(row.errorLogId),
+      source: row.errorSource,
+      type: row.errorType,
+      message: row.errorMessage,
+      stack: row.stackTrace,
+      occurredAtUtc: row.occurredAtUtc,
+      severity: row.severity,
+      context: contextObj,
+      region: row.affectedRegion,
+      sku: row.affectedSku,
+      desiredCount: row.affectedDesiredCount == null ? null : Number(row.affectedDesiredCount),
+      isResolved: Boolean(row.isResolved),
+      resolvedAtUtc: row.resolvedAtUtc,
+      resolutionNotes: row.resolutionNotes
+    };
+  });
+}
+
+async function ensureDashboardOperationLogSchema(pool) {
+  const createScript = `
+    IF OBJECT_ID('dbo.DashboardOperationLog', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.DashboardOperationLog (
+        operationLogId BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        operationType NVARCHAR(64) NOT NULL,
+        operationName NVARCHAR(128) NOT NULL,
+        status NVARCHAR(16) NOT NULL,
+        triggerSource NVARCHAR(32) NOT NULL,
+        startedAtUtc DATETIME2 NOT NULL,
+        completedAtUtc DATETIME2 NULL,
+        durationMs INT NULL,
+        rowsAffected INT NULL,
+        subscriptionCount INT NULL,
+        requestedDesiredCount INT NULL,
+        effectiveDesiredCount INT NULL,
+        regionPreset NVARCHAR(64) NULL,
+        note NVARCHAR(512) NULL,
+        errorMessage NVARCHAR(2048) NULL
+      )
+    END;
+  `;
+
+  const createIndexScript = `
+    IF NOT EXISTS (
+      SELECT 1
+      FROM sys.indexes
+      WHERE name = 'IX_DashboardOperationLog_StartedAt'
+        AND object_id = OBJECT_ID('dbo.DashboardOperationLog')
+    )
+    BEGIN
+      CREATE INDEX IX_DashboardOperationLog_StartedAt
+        ON dbo.DashboardOperationLog (startedAtUtc DESC, operationType, status);
+    END;
+  `;
+
+  await pool.request().query(createScript);
+  await pool.request().query(createIndexScript);
+}
+
+async function logDashboardOperation(entry = {}) {
+  const pool = await getSqlPool();
+  if (!pool) {
+    return 0;
+  }
+
+  await ensureDashboardOperationLogSchema(pool);
+
+  const request = pool.request();
+  request.input('operationType', sql.NVarChar(64), entry.type || 'unknown');
+  request.input('operationName', sql.NVarChar(128), entry.name || entry.type || 'Unknown Operation');
+  request.input('status', sql.NVarChar(16), entry.status || 'success');
+  request.input('triggerSource', sql.NVarChar(32), entry.triggerSource || 'manual');
+  request.input('startedAtUtc', sql.DateTime2, entry.startedAtUtc || new Date());
+  request.input('completedAtUtc', sql.DateTime2, entry.completedAtUtc || new Date());
+  request.input('durationMs', sql.Int, Number.isFinite(entry.durationMs) ? entry.durationMs : null);
+  request.input('rowsAffected', sql.Int, Number.isFinite(entry.rowsAffected) ? entry.rowsAffected : null);
+  request.input('subscriptionCount', sql.Int, Number.isFinite(entry.subscriptionCount) ? entry.subscriptionCount : null);
+  request.input('requestedDesiredCount', sql.Int, Number.isFinite(entry.requestedDesiredCount) ? entry.requestedDesiredCount : null);
+  request.input('effectiveDesiredCount', sql.Int, Number.isFinite(entry.effectiveDesiredCount) ? entry.effectiveDesiredCount : null);
+  request.input('regionPreset', sql.NVarChar(64), entry.regionPreset || null);
+  request.input('note', sql.NVarChar(512), entry.note || null);
+  request.input('errorMessage', sql.NVarChar(2048), entry.errorMessage || null);
+
+  try {
+    await request.query(`
+      INSERT INTO dbo.DashboardOperationLog
+      (operationType, operationName, status, triggerSource, startedAtUtc, completedAtUtc, durationMs, rowsAffected, subscriptionCount, requestedDesiredCount, effectiveDesiredCount, regionPreset, note, errorMessage)
+      VALUES
+      (@operationType, @operationName, @status, @triggerSource, @startedAtUtc, @completedAtUtc, @durationMs, @rowsAffected, @subscriptionCount, @requestedDesiredCount, @effectiveDesiredCount, @regionPreset, @note, @errorMessage)
+    `);
+    return 1;
+  } catch (err) {
+    console.error('Failed to log operation:', err.message);
+    return 0;
+  }
+}
+
+async function listDashboardOperations(options = {}) {
+  const pool = await getSqlPool();
+  if (!pool) {
+    return [];
+  }
+
+  await ensureDashboardOperationLogSchema(pool);
+
+  const limit = Math.max(5, Math.min(Number(options.limit || 25), 100));
+  const request = pool.request();
+  request.input('limitRows', sql.Int, limit);
+
+  let where = '';
+  if (options.operationType) {
+    where += ' WHERE operationType = @operationType';
+    request.input('operationType', sql.NVarChar(64), options.operationType);
+  }
+
+  if (options.onlyFailed) {
+    where = where ? where + ' AND status = \'failed\'' : ' WHERE status = \'failed\'';
+  }
+
+  const result = await request.query(`
+    SELECT TOP (@limitRows)
+      operationLogId,
+      operationType,
+      operationName,
+      status,
+      triggerSource,
+      startedAtUtc,
+      completedAtUtc,
+      durationMs,
+      rowsAffected,
+      subscriptionCount,
+      requestedDesiredCount,
+      effectiveDesiredCount,
+      regionPreset,
+      note,
+      errorMessage
+    FROM dbo.DashboardOperationLog
+    ${where}
+    ORDER BY startedAtUtc DESC, operationLogId DESC
+  `);
+
+  return (result.recordset || []).map((row) => ({
+    id: Number(row.operationLogId),
+    type: row.operationType,
+    name: row.operationName,
+    status: row.status,
+    triggerSource: row.triggerSource,
+    startedAtUtc: row.startedAtUtc,
+    completedAtUtc: row.completedAtUtc,
+    durationMs: Number(row.durationMs || 0),
+    rowsAffected: row.rowsAffected == null ? null : Number(row.rowsAffected),
+    subscriptionCount: row.subscriptionCount == null ? null : Number(row.subscriptionCount),
+    requestedDesiredCount: row.requestedDesiredCount == null ? null : Number(row.requestedDesiredCount),
+    effectiveDesiredCount: row.effectiveDesiredCount == null ? null : Number(row.effectiveDesiredCount),
+    regionPreset: row.regionPreset,
+    note: row.note,
+    errorMessage: row.errorMessage
+  }));
+}
+
 async function ensurePhase3Schema() {
   const pool = await getSqlPool();
   if (!pool) {
@@ -643,6 +952,8 @@ async function ensurePhase3Schema() {
 
   await ensureSubscriptionsTableSchema(pool);
   await ensureCapacityScoreSnapshotSchema(pool);
+  await ensureDashboardErrorLogSchema(pool);
+  await ensureDashboardOperationLogSchema(pool);
 
   const alterScript = `
     IF COL_LENGTH('dbo.CapacitySnapshot', 'subscriptionId') IS NULL
@@ -712,5 +1023,11 @@ module.exports = {
   getCapacityScoreSnapshotHistory,
   getQuotaCandidateSnapshots,
   listQuotaCandidateRuns,
+  ensureDashboardErrorLogSchema,
+  insertDashboardErrorLog,
+  listDashboardErrorLogs,
+  ensureDashboardOperationLogSchema,
+  logDashboardOperation,
+  listDashboardOperations,
   ensurePhase3Schema
 };

@@ -162,6 +162,58 @@ if (-not $contextStatus.hasContext) {
     throw "Azure context is required for recommendations but is unavailable. $($contextStatus.message)"
 }
 
+$regionsJson = $regions | ConvertTo-Json -Compress
+
+# Invoke from the local repo directory so the script can find the AzVMAvailability module.
+# Use a child pwsh process to prevent script-level `exit` from terminating this wrapper silently.
+# The child script signs in with managed identity in-session so Azure context is guaranteed there.
+$currentPwsh = (Get-Process -Id $PID).Path
+$childRunnerPath = Join-Path ([System.IO.Path]::GetTempPath()) ("capacity-recommend-child-" + [guid]::NewGuid().ToString('N') + ".ps1")
+
+$childRunnerContent = @'
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$ScriptPath,
+
+    [Parameter(Mandatory = $true)]
+    [string]$TargetSku,
+
+    [Parameter(Mandatory = $true)]
+    [string]$RegionsJson,
+
+    [Parameter(Mandatory = $true)]
+    [int]$TopN,
+
+    [Parameter(Mandatory = $true)]
+    [int]$MinScore,
+
+    [switch]$ShowPricing,
+
+    [switch]$ShowSpot
+)
+
+$ErrorActionPreference = 'Stop'
+
+if (Get-Command -Name 'Get-AzContext' -ErrorAction SilentlyContinue) {
+    $ctx = Get-AzContext -ErrorAction SilentlyContinue
+    if (-not ($ctx -and $ctx.Subscription)) {
+        if (-not (Get-Command -Name 'Connect-AzAccount' -ErrorAction SilentlyContinue)) {
+            throw 'Connect-AzAccount cmdlet is not available in child PowerShell session.'
+        }
+
+        $null = Connect-AzAccount -Identity -ErrorAction Stop
+        $ctx = Get-AzContext -ErrorAction SilentlyContinue
+        if (-not ($ctx -and $ctx.Subscription)) {
+            throw 'Managed identity sign-in in child session did not produce an Azure subscription context.'
+        }
+    }
+}
+
+$regions = @()
+if ($RegionsJson) {
+    $regions = @((ConvertFrom-Json -InputObject $RegionsJson))
+}
+
 $invokeArgs = @{
     Recommend  = $TargetSku
     Region     = $regions
@@ -179,28 +231,29 @@ if ($ShowSpot.IsPresent) {
     $invokeArgs.ShowSpot = $true
 }
 
-# Invoke from the local repo directory so the script can find the AzVMAvailability module.
-# Use a child pwsh process to prevent script-level `exit` from terminating this wrapper silently.
-$currentPwsh = (Get-Process -Id $PID).Path
+$result = & $ScriptPath @invokeArgs 2>&1
+$result | Out-String
+'@
+
+Set-Content -LiteralPath $childRunnerPath -Value $childRunnerContent -Encoding UTF8
+
 $childArgs = @(
     '-NoLogo',
     '-NoProfile',
     '-ExecutionPolicy',
     'Bypass',
     '-File',
+    $childRunnerPath,
+    '-ScriptPath',
     $scriptPath,
-    '-Recommend',
+    '-TargetSku',
     $TargetSku,
-    '-Region'
-)
-$childArgs += $regions
-$childArgs += @(
+    '-RegionsJson',
+    $regionsJson,
     '-TopN',
     [string]$TopN,
     '-MinScore',
-    [string]$MinScore,
-    '-JsonOutput',
-    '-NoPrompt'
+    [string]$MinScore
 )
 
 if ($ShowPricing.IsPresent) {
@@ -214,15 +267,19 @@ if ($ShowSpot.IsPresent) {
 Push-Location $repoPath.Path
 try {
     $output = & $currentPwsh @childArgs 2>&1
+    $childExitCode = $LASTEXITCODE
 }
 finally {
     Pop-Location
+    if (Test-Path -LiteralPath $childRunnerPath -PathType Leaf) {
+        Remove-Item -LiteralPath $childRunnerPath -Force -ErrorAction SilentlyContinue
+    }
 }
 
 $text = ($output | Out-String).Trim()
 
 if (-not $text) {
-    throw "Recommendation command produced no output. Context message: $($contextStatus.message)"
+    throw "Recommendation command produced no output. Child exit code: $childExitCode. Context message: $($contextStatus.message)"
 }
 
 try {

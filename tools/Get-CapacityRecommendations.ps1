@@ -84,6 +84,22 @@ function ConvertFrom-JsonArray {
     return @()
 }
 
+function Get-CapacityRecommendationScriptPath {
+    param(
+        [string]$LocalRepoRoot
+    )
+
+    # The recommendation script requires the full repository structure (including AzVMAvailability module).
+    # We use the local repo path directly for reliability and dependency resolution.
+    $localScriptPath = Join-Path $LocalRepoRoot 'Get-AzVMAvailability.ps1'
+
+    if (Test-Path -LiteralPath $localScriptPath -PathType Leaf) {
+        return $localScriptPath
+    }
+
+    throw "Get-AzVMAvailability.ps1 not found at '$localScriptPath'. Ensure Get-AzVMAvailability repository is cloned at $LocalRepoRoot or set GET_AZ_VM_AVAILABILITY_ROOT environment variable to the correct location."
+}
+
 $regions = ConvertFrom-JsonArray -JsonValue $RegionsJson
 if (-not $RepoRoot) {
     $RepoRoot = Join-Path $PSScriptRoot '..\..\Get-AzVMAvailability'
@@ -98,20 +114,8 @@ if (-not $repoPath) {
     }
 }
 
-if (-not $repoPath) {
-    $errorMsg = @"
-Recommendation repo root not found. Tried:
-  - Default: $RepoRoot
-  - Environment: GET_AZ_VM_AVAILABILITY_ROOT (not set)
-Please set GET_AZ_VM_AVAILABILITY_ROOT environment variable or ensure Get-AzVMAvailability is in expected location.
-"@
-    throw $errorMsg
-}
-
-$scriptPath = Join-Path $repoPath.Path 'Get-AzVMAvailability.ps1'
-if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
-    throw "Get-AzVMAvailability.ps1 not found at $scriptPath"
-}
+# Get script path: tries GitHub, uses cache, falls back to local repo
+$scriptPath = Get-CapacityRecommendationScriptPath -LocalRepoRoot $($repoPath.Path)
 
 if (-not $TargetSku) {
     throw 'Target SKU is required.'
@@ -140,8 +144,16 @@ if ($ShowSpot.IsPresent) {
     $invokeArgs.ShowSpot = $true
 }
 
-# JsonOutput mode should write JSON only; capture and normalize just in case warnings leak.
-$output = & $scriptPath @invokeArgs 2>&1
+# Invoke from the local repo directory so the script can find the AzVMAvailability module
+Push-Location $repoPath.Path
+try {
+    # JsonOutput mode should write JSON only; capture and normalize just in case warnings leak.
+    $output = & $scriptPath @invokeArgs 2>&1
+}
+finally {
+    Pop-Location
+}
+
 $text = ($output | Out-String).Trim()
 
 if (-not $text) {

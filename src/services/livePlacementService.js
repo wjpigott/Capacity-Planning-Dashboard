@@ -211,6 +211,32 @@ function execFileAsync(command, args, options = {}) {
   });
 }
 
+function parseJsonFromMixedOutput(rawText) {
+  const text = String(rawText || '').trim();
+  if (!text) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Continue to brace-slice parsing for hosts that prepend warnings/progress lines.
+  }
+
+  const firstBrace = text.indexOf('{');
+  const lastBrace = text.lastIndexOf('}');
+  if (firstBrace < 0 || lastBrace <= firstBrace) {
+    return null;
+  }
+
+  const candidate = text.slice(firstBrace, lastBrace + 1);
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    return null;
+  }
+}
+
 async function runRemotePlacementLookup({ skus, regions, desiredCount }) {
   const baseUrl = resolveWorkerBaseUrl();
   if (!baseUrl) {
@@ -720,18 +746,23 @@ async function runRecommendationLookupLocal({ targetSku, regions, topN, minScore
             return;
           }
 
-          const trimmedStdout = String(stdout || '').trim();
-          if (!trimmedStdout) {
-            reject(new Error(`Capacity recommendation returned no JSON output.${stderr?.trim() ? ` ${stderr.trim()}` : ''}`));
+          const parsedStdout = parseJsonFromMixedOutput(stdout);
+          if (parsedStdout) {
+            resolve(parsedStdout);
             return;
           }
 
-          try {
-            const parsed = JSON.parse(trimmedStdout);
-            resolve(parsed);
-          } catch (parseError) {
-            reject(new Error(`Capacity recommendation returned invalid JSON: ${parseError.message}`));
+          const combinedOutput = [String(stdout || '').trim(), String(stderr || '').trim()]
+            .filter(Boolean)
+            .join('\n');
+          const parsedCombined = parseJsonFromMixedOutput(combinedOutput);
+          if (parsedCombined) {
+            resolve(parsedCombined);
+            return;
           }
+
+          const detail = combinedOutput || 'No output was returned by the recommendation wrapper.';
+          reject(new Error(`Capacity recommendation returned no JSON output. ${detail}`));
         }
       );
     }).catch((bootstrapError) => {

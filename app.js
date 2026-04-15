@@ -2151,7 +2151,55 @@ function parseRegionListInput(rawValue) {
     .filter(Boolean);
 }
 
+function recommendationAvailabilityWeight(value) {
+  const normalized = String(value || '').trim().toUpperCase();
+  if (normalized === 'CONSTRAINED') return 4;
+  if (normalized === 'LIMITED') return 3;
+  if (normalized === 'OK') return 2;
+  return 1;
+}
+
+function defaultRecommendTargetSkuFromFilters() {
+  const scoped = filteredRows();
+  if (!Array.isArray(scoped) || scoped.length === 0) {
+    return '';
+  }
+
+  const bySku = new Map();
+  scoped.forEach((row) => {
+    const sku = String(row?.sku || '').trim();
+    if (!sku) {
+      return;
+    }
+
+    const current = bySku.get(sku) || { weight: 0, count: 0 };
+    current.weight += recommendationAvailabilityWeight(row?.availability);
+    current.count += 1;
+    bySku.set(sku, current);
+  });
+
+  const ordered = [...bySku.entries()]
+    .sort((a, b) => {
+      if (b[1].weight !== a[1].weight) {
+        return b[1].weight - a[1].weight;
+      }
+      if (b[1].count !== a[1].count) {
+        return b[1].count - a[1].count;
+      }
+      return a[0].localeCompare(b[0]);
+    });
+
+  return ordered[0]?.[0] || '';
+}
+
 function defaultRecommendRegionsFromFilters() {
+  const scopedRegions = [...new Set(filteredRows()
+    .map((row) => String(row?.region || '').trim().toLowerCase())
+    .filter(Boolean))];
+  if (scopedRegions.length > 0) {
+    return scopedRegions.slice(0, 20).join(',');
+  }
+
   const currentRegion = String(regionFilter?.value || '').trim().toLowerCase();
   if (currentRegion && currentRegion !== 'all') {
     return currentRegion;
@@ -2163,6 +2211,18 @@ function defaultRecommendRegionsFromFilters() {
   }
 
   return '';
+}
+
+function syncRecommendationInputsFromTopFilters() {
+  const targetSkuFromFilters = defaultRecommendTargetSkuFromFilters();
+  const regionsFromFilters = defaultRecommendRegionsFromFilters();
+
+  if (recommendTargetSku && targetSkuFromFilters) {
+    recommendTargetSku.value = targetSkuFromFilters;
+  }
+  if (recommendRegions && regionsFromFilters) {
+    recommendRegions.value = regionsFromFilters;
+  }
 }
 
 function normalizeRecommendInputs() {
@@ -2259,9 +2319,7 @@ async function loadRecommendationView() {
     return;
   }
 
-  if (!recommendRegions.value) {
-    recommendRegions.value = defaultRecommendRegionsFromFilters();
-  }
+  syncRecommendationInputsFromTopFilters();
 
   const { targetSku, regions, topN, minScore, showPricing, showSpot } = normalizeRecommendInputs();
   if (!targetSku) {
@@ -2789,6 +2847,11 @@ function wireButtons() {
   document.getElementById('simulateBtn').addEventListener('click', simulateQuotaImpact);
   triggerIngestBtn.addEventListener('click', triggerCapacityIngest);
   runRecommendBtn?.addEventListener('click', loadRecommendationView);
+  regionPresetFilter?.addEventListener('change', syncRecommendationInputsFromTopFilters);
+  regionFilter?.addEventListener('change', syncRecommendationInputsFromTopFilters);
+  familyFilter?.addEventListener('change', syncRecommendationInputsFromTopFilters);
+  availabilityFilter?.addEventListener('change', syncRecommendationInputsFromTopFilters);
+  resourceTypeFilter?.addEventListener('change', syncRecommendationInputsFromTopFilters);
   refreshLivePlacementBtn?.addEventListener('click', refreshLivePlacementScores);
   document.getElementById('applyBtn').addEventListener('click', () => {
     const ok = confirm('Apply quota movements is a write operation. Continue?');

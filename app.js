@@ -126,6 +126,7 @@ const familySummaryGridBody = document.querySelector('#familySummaryGrid tbody')
 const familySummaryEmpty = document.querySelector('#familySummaryEmpty');
 const capacityScoreGridBody = document.querySelector('#capacityScoreGrid tbody');
 const capacityScoreEmpty = document.querySelector('#capacityScoreEmpty');
+const capacityScoreHistoryDays = document.querySelector('#capacityScoreHistoryDays');
 const capacityScoreDesiredCount = document.querySelector('#capacityScoreDesiredCount');
 const refreshLivePlacementBtn = document.querySelector('#refreshLivePlacementBtn');
 const capacityScoreLiveStatus = document.querySelector('#capacityScoreLiveStatus');

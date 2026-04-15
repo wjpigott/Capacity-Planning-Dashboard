@@ -30,9 +30,9 @@
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="1" y="10" width="14" height="1.5"/><rect x="1" y="6.5" width="14" height="1.5"/><rect x="1" y="3" width="14" height="1.5"/></svg>
         <span class="nav-label">Capacity Grid</span>
       </button>
-      <button class="nav-sub-item" data-report-view="region-chart">
+      <button class="nav-sub-item" data-report-view="region-health">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="1" y="9" width="3" height="6"/><rect x="6" y="5" width="3" height="10"/><rect x="11" y="1" width="3" height="14"/></svg>
-        <span class="nav-label">By Region</span>
+        <span class="nav-label">Region Health</span>
       </button>
       <button class="nav-sub-item" data-report-view="sku-chart">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="1" y="4" width="3" height="11"/><rect x="6" y="7" width="3" height="8"/><rect x="11" y="2" width="3" height="13"/></svg>
@@ -175,15 +175,32 @@
           </div>
         </div>
 
-        <div class="view-panel" id="view-region-chart">
-          <div class="surface">
-            <h3>Capacity Availability by Region</h3>
+        <div class="view-panel" id="view-region-health">
+          <div class="surface overflow-auto">
+            <h3>Region Health</h3>
             <div class="report-explainer">
               <strong>Report Key</strong>
-              <span>The number beside each region is the count of in-scope rows that currently look deployable there.</span>
-              <span>For this chart, <strong>deployable</strong> means the latest row is <strong>OK</strong> or <strong>LIMITED</strong>. It is a row count, not VM quantity.</span>
+              <span>This report summarizes region-level capacity risk from the latest in-scope snapshot rows (subscription + region + SKU).</span>
+              <span><strong>Deployable %</strong> = <strong>(OK + LIMITED) / Total Rows</strong>. <strong>Constrained %</strong> = <strong>(CONSTRAINED + RESTRICTED) / Total Rows</strong>.</span>
+              <span><strong>Total Quota Headroom</strong> is the summed <strong>Quota Limit - Quota Current</strong> for all rows in that region.</span>
             </div>
-            <div id="regionChart" class="chart-bars"></div>
+            <table id="regionHealthGrid">
+              <thead>
+                <tr>
+                  <th>Region</th>
+                  <th>Total Rows</th>
+                  <th>Deployable Rows</th>
+                  <th>Deployable %</th>
+                  <th>Constrained Rows</th>
+                  <th>Constrained %</th>
+                  <th>Total Quota Headroom</th>
+                  <th>Deployable Families</th>
+                  <th>Subscriptions with Deployable</th>
+                  <th>Top Constrained Families</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
           </div>
         </div>
 

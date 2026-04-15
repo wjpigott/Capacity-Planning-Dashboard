@@ -141,7 +141,7 @@ const capacityScoreDesiredCount = document.querySelector('#capacityScoreDesiredC
 const refreshLivePlacementBtn = document.querySelector('#refreshLivePlacementBtn');
 const capacityScoreLiveStatus = document.querySelector('#capacityScoreLiveStatus');
 const sidebarToggle = document.querySelector('#sidebarToggle');
-const regionChart = document.querySelector('#regionChart');
+const regionHealthGridBody = document.querySelector('#regionHealthGrid tbody');
 const skuChart = document.querySelector('#skuChart');
 const subscriptionSelectionInfo = document.querySelector('#subscriptionSelectionInfo');
 const adminStatus = document.querySelector('#adminStatus');
@@ -190,7 +190,7 @@ const capacityScorePageLabel = document.querySelector('#capacityScorePageLabel')
 
 const reportViewLabels = {
   'capacity-grid': 'Capacity Grid',
-  'region-chart': 'By Region',
+  'region-health': 'Region Health',
   'sku-chart': 'Top SKUs',
   'capacity-score': 'Capacity Score',
   'family-summary': 'Family Summary',
@@ -2135,20 +2135,7 @@ function renderBarChart(host, items, options = {}) {
 function renderCharts(data) {
   const selectedType = resourceTypeFilter?.value || 'all';
   const scopedRows = (Array.isArray(data) ? data : []).filter((row) => rowMatchesSelectedResourceType(row, selectedType));
-  const byRegion = new Map();
-  scopedRows.forEach((row) => {
-    const entry = byRegion.get(row.region) || { OK: 0, LIMITED: 0, CONSTRAINED: 0, RESTRICTED: 0 };
-    entry[row.availability] = (entry[row.availability] || 0) + 1;
-    byRegion.set(row.region, entry);
-  });
-
-  const regionItems = [...byRegion.entries()].map(([region, counts]) => ({
-    label: region,
-    value: (counts.OK || 0) + (counts.LIMITED || 0)
-  })).sort((a, b) => b.value - a.value);
-  renderBarChart(regionChart, regionItems, {
-    valueFormatter: (value) => `${Number(value).toLocaleString()} row${value === 1 ? '' : 's'}`
-  });
+  renderRegionHealth(scopedRows);
 
   const bySku = new Map();
   scopedRows.forEach((row) => {
@@ -2161,6 +2148,114 @@ function renderCharts(data) {
     .slice(0, 12);
   renderBarChart(skuChart, skuItems, {
     valueFormatter: (value) => Number(value).toLocaleString()
+  });
+}
+
+function formatPercent(numerator, denominator) {
+  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator <= 0) {
+    return '0.0%';
+  }
+  return `${((numerator / denominator) * 100).toFixed(1)}%`;
+}
+
+function renderRegionHealth(data) {
+  if (!regionHealthGridBody) {
+    return;
+  }
+
+  const scopedRows = Array.isArray(data) ? data : [];
+  regionHealthGridBody.innerHTML = '';
+
+  if (scopedRows.length === 0) {
+    regionHealthGridBody.innerHTML = '<tr><td colspan="10" style="text-align: center; padding: 20px; color: #5d7085;">No data available for the current filter scope.</td></tr>';
+    return;
+  }
+
+  const byRegion = new Map();
+
+  scopedRows.forEach((row) => {
+    const region = String(row.region || '').trim();
+    if (!region) {
+      return;
+    }
+
+    if (!byRegion.has(region)) {
+      byRegion.set(region, {
+        totalRows: 0,
+        deployableRows: 0,
+        constrainedRows: 0,
+        totalQuotaHeadroom: 0,
+        deployableFamilies: new Set(),
+        deployableSubscriptions: new Set(),
+        constrainedFamilyCounts: new Map()
+      });
+    }
+
+    const entry = byRegion.get(region);
+    const availability = String(row.availability || '').toUpperCase();
+    const family = formatFamilyLabel(row.family) || String(row.family || row.sku || '').trim() || 'Unknown';
+    const subscriptionIdentity = String(row.subscriptionId || row.subscriptionKey || '').trim();
+
+    entry.totalRows += 1;
+    entry.totalQuotaHeadroom += Number(row.quotaLimit || 0) - Number(row.quotaCurrent || 0);
+
+    if (availability === 'OK' || availability === 'LIMITED') {
+      entry.deployableRows += 1;
+      entry.deployableFamilies.add(family);
+      if (subscriptionIdentity) {
+        entry.deployableSubscriptions.add(subscriptionIdentity);
+      }
+    }
+
+    if (availability === 'CONSTRAINED' || availability === 'RESTRICTED') {
+      entry.constrainedRows += 1;
+      entry.constrainedFamilyCounts.set(family, (entry.constrainedFamilyCounts.get(family) || 0) + 1);
+    }
+  });
+
+  const regionItems = [...byRegion.entries()]
+    .map(([region, entry]) => ({
+      region,
+      totalRows: entry.totalRows,
+      deployableRows: entry.deployableRows,
+      constrainedRows: entry.constrainedRows,
+      totalQuotaHeadroom: entry.totalQuotaHeadroom,
+      deployableFamilyCount: entry.deployableFamilies.size,
+      deployableSubscriptionCount: entry.deployableSubscriptions.size,
+      topConstrainedFamilies: [...entry.constrainedFamilyCounts.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .slice(0, 3)
+        .map(([family, count]) => `${family} (${count})`)
+    }))
+    .sort((a, b) => {
+      const deployableRateA = a.totalRows > 0 ? a.deployableRows / a.totalRows : 0;
+      const deployableRateB = b.totalRows > 0 ? b.deployableRows / b.totalRows : 0;
+      if (deployableRateB !== deployableRateA) {
+        return deployableRateB - deployableRateA;
+      }
+
+      if (b.totalQuotaHeadroom !== a.totalQuotaHeadroom) {
+        return b.totalQuotaHeadroom - a.totalQuotaHeadroom;
+      }
+
+      return a.region.localeCompare(b.region);
+    });
+
+  regionItems.forEach((item) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${item.region}</td>
+      <td>${item.totalRows.toLocaleString()}</td>
+      <td>${item.deployableRows.toLocaleString()}</td>
+      <td>${formatPercent(item.deployableRows, item.totalRows)}</td>
+      <td>${item.constrainedRows.toLocaleString()}</td>
+      <td>${formatPercent(item.constrainedRows, item.totalRows)}</td>
+      <td>${Math.round(item.totalQuotaHeadroom).toLocaleString()}</td>
+      <td>${item.deployableFamilyCount.toLocaleString()}</td>
+      <td>${item.deployableSubscriptionCount.toLocaleString()}</td>
+      <td>${item.topConstrainedFamilies.join(', ') || 'n/a'}</td>
+    `;
+    regionHealthGridBody.appendChild(tr);
   });
 }
 
@@ -2274,7 +2369,7 @@ async function loadChartViews() {
     renderSummary(filteredRows());
   }
 
-  loadedViews.add('region-chart');
+  loadedViews.add('region-health');
   loadedViews.add('sku-chart');
 }
 
@@ -2304,7 +2399,7 @@ function refreshActiveAnalyticsView() {
   if (view === 'trend') return loadTrendView();
   if (view === 'family-summary') return loadFamilySummaryView();
   if (view === 'region-matrix') return loadRegionMatrixView();
-  if (view === 'region-chart' || view === 'sku-chart') return loadChartViews();
+  if (view === 'region-health' || view === 'sku-chart') return loadChartViews();
 }
 
 // Keep loadAnalytics as a convenience for refreshing all views at once
@@ -2435,7 +2530,7 @@ async function loadCapacityRows() {
   const activeView = getActiveReportViewKey();
   if (activeView === 'region-matrix') {
     await loadRegionMatrixView();
-  } else if (activeView === 'region-chart' || activeView === 'sku-chart') {
+  } else if (activeView === 'region-health' || activeView === 'sku-chart') {
     await loadChartViews();
   }
 }
@@ -2483,8 +2578,8 @@ function wireViewTabs() {
           renderRegionMatrix(matrixRows);
           renderSummaryForActiveView(analyticsRows.length > 0 ? analyticsRows : filteredRows(), matrixRows);
         }
-      } else if (view === 'region-chart' || view === 'sku-chart') {
-        if (!loadedViews.has('region-chart') || !loadedViews.has('sku-chart')) {
+      } else if (view === 'region-health' || view === 'sku-chart') {
+        if (!loadedViews.has('region-health') || !loadedViews.has('sku-chart')) {
           loadChartViews();
         } else {
           const chartRows = analyticsRows.length > 0 ? analyticsRows : filteredRows();

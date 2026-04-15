@@ -111,8 +111,17 @@ function resolveProjectRoot() {
 }
 
 function resolvePlacementRepoRoot() {
-  return process.env.GET_AZ_VM_AVAILABILITY_ROOT
-    || path.resolve(__dirname, '..', '..', '..', 'Get-AzVMAvailability');
+  const configuredRoot = String(process.env.GET_AZ_VM_AVAILABILITY_ROOT || '').trim();
+  if (configuredRoot && fileExists(configuredRoot)) {
+    return configuredRoot;
+  }
+
+  const bundledRoot = path.resolve(__dirname, '..', '..', 'tools', 'Get-AzVMAvailability');
+  if (fileExists(bundledRoot)) {
+    return bundledRoot;
+  }
+
+  return path.resolve(__dirname, '..', '..', '..', 'Get-AzVMAvailability');
 }
 
 function resolveRuntimeRoot() {
@@ -800,6 +809,7 @@ async function runRecommendationLookupLocal({ targetSku, regions, topN, minScore
 }
 
 function getRecommendationDiagnostics() {
+  const configuredRepoRoot = String(process.env.GET_AZ_VM_AVAILABILITY_ROOT || '').trim();
   const wrapperPath = resolveRecommendationWrapperPath();
   const repoRoot = resolvePlacementRepoRoot();
   const wrapperExists = fileExists(wrapperPath);
@@ -808,6 +818,8 @@ function getRecommendationDiagnostics() {
   const scriptExists = fileExists(scriptPath);
 
   return {
+    configuredRepoRoot,
+    configuredRepoRootExists: configuredRepoRoot ? fileExists(configuredRepoRoot) : null,
     wrapperPath,
     wrapperExists,
     repoRoot,

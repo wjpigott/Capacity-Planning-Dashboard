@@ -273,6 +273,7 @@ Hosted worker guidance:
 - The default infrastructure path uses a dedicated App Service plan for the worker instead of Flex Consumption.
 - Enable PowerShell managed dependencies in `host.json` so `requirements.psd1` can restore Az modules on the worker.
 - NOTE: live placement also requires Azure RBAC on every subscription the worker will query. The Function App managed identity needs the built-in `Compute Recommendations Role`, or a custom role that includes `Microsoft.Compute/locations/placementScores/generate/action`. This does not need to be assigned on every subscription in the tenant, only on the subscriptions in scope for live placement. If many target subscriptions share a management group, assign it there instead of one-by-one at each subscription.
+- NOTE: pricing enrichment in Capacity Recommender requires the Function App managed identity to have both `Billing Reader` and `Cost Management Reader` on the billing scope used for pricing APIs. Without these roles, recommender runs may still succeed but will log warnings and fall back to retail pricing behavior.
 
 Current worker endpoints:
 

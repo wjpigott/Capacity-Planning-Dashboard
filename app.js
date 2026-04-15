@@ -2358,8 +2358,9 @@ async function loadRecommendationView() {
     const count = Array.isArray(payload.result?.recommendations) ? payload.result.recommendations.length : 0;
     setRecommendStatus(`Recommendation completed. ${count} alternative SKU(s) returned.`, 'success');
   } catch (error) {
-    setRecommendStatus(error.message || 'Failed to run recommendations.', 'error');
-    recommendGridBody.innerHTML = '<tr><td colspan="15" style="text-align: center; padding: 20px; color: #5d7085;">Recommendation run failed. Check auth, region scope, and target SKU.</td></tr>';
+    const errorMessage = error.message || 'Failed to run recommendations.';
+    setRecommendStatus(errorMessage, 'error');
+    recommendGridBody.innerHTML = `<tr><td colspan="15" style="text-align: center; padding: 20px; color: #5d7085;">Recommendation run failed: ${escapeHtml(errorMessage)}</td></tr>`;
   } finally {
     loadedViews.add('recommender');
     setButtonBusy(runRecommendBtn, false);

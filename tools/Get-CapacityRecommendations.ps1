@@ -102,7 +102,7 @@ function Get-CapacityRecommendationScriptPath {
 
 $regions = ConvertFrom-JsonArray -JsonValue $RegionsJson
 if (-not $RepoRoot) {
-    $RepoRoot = Join-Path $PSScriptRoot '..\..\Get-AzVMAvailability'
+    $RepoRoot = Join-Path $PSScriptRoot 'Get-AzVMAvailability'
 }
 
 $repoPath = Resolve-Path -Path $RepoRoot -ErrorAction SilentlyContinue
@@ -112,6 +112,16 @@ if (-not $repoPath) {
     if ($altRoot) {
         $repoPath = Resolve-Path -Path $altRoot -ErrorAction SilentlyContinue
     }
+}
+
+if (-not $repoPath) {
+    # Backward compatibility for local dev layouts where repo is a sibling of dashboard.
+    $legacyRoot = Join-Path $PSScriptRoot '..\..\Get-AzVMAvailability'
+    $repoPath = Resolve-Path -Path $legacyRoot -ErrorAction SilentlyContinue
+}
+
+if (-not $repoPath) {
+    throw "Get-AzVMAvailability repository root was not found. Tried bundled path '$RepoRoot', GET_AZ_VM_AVAILABILITY_ROOT, and legacy sibling path '..\\..\\Get-AzVMAvailability'."
 }
 
 # Get script path: tries GitHub, uses cache, falls back to local repo

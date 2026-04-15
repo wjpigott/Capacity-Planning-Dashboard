@@ -50,13 +50,35 @@ function ConvertFrom-JsonArray {
         return @()
     }
 
+    function Normalize-RegionToken {
+        param([string]$Value)
+
+        return ($Value -replace '[\s_\-]', '').Trim().ToLower()
+    }
+
     try {
         $parsed = ConvertFrom-Json -InputObject $JsonValue
-        if ($parsed -is [System.Collections.IEnumerable] -and $parsed -isnot [string]) {
-            return @($parsed | ForEach-Object { $_.ToString().Trim().ToLower() } | Where-Object { $_ })
+
+        # ConvertFrom-Json may unwrap single-item arrays to a scalar string.
+        if ($parsed -is [string]) {
+            $normalized = Normalize-RegionToken -Value $parsed
+            if ($normalized) {
+                return @($normalized)
+            }
+
+            return @()
+        }
+
+        if ($parsed -is [System.Collections.IEnumerable]) {
+            return @($parsed | ForEach-Object { Normalize-RegionToken -Value ($_.ToString()) } | Where-Object { $_ })
         }
     }
     catch {
+        # Allow comma-separated fallback when JSON parsing fails.
+        $fallback = @($JsonValue -split ',') | ForEach-Object { Normalize-RegionToken -Value $_ } | Where-Object { $_ }
+        if ($fallback.Count -gt 0) {
+            return @($fallback)
+        }
     }
 
     return @()

@@ -48,13 +48,22 @@ const CANONICAL_COMPUTE_FAMILY_PATTERNS = [
 function getRowResourceType(row) {
   const family = String(row?.family || '').toLowerCase();
   const sku = String(row?.sku || '').toLowerCase();
-  if (family.endsWith('family') || /^standard_/.test(String(row?.sku || ''))) return 'Compute';
   if (family.includes('disk') || sku.includes('disk') || sku.includes('snapshot')) return 'Disk';
+  if (family.endsWith('family') || /^standard_/.test(String(row?.sku || ''))) return 'Compute';
   return 'Other';
 }
 
 function rowMatchesSelectedResourceType(row, selectedType = resourceTypeFilter?.value || 'all') {
   return selectedType === 'all' || getRowResourceType(row) === selectedType;
+}
+
+function getFamilyResourceType(familyValue) {
+  // Reuse row classifier so family option filtering stays aligned with
+  // chart/grid filtering logic for Resource Type.
+  return getRowResourceType({
+    family: familyValue,
+    sku: familyValue
+  });
 }
 
 function canonicalizeFamilyToken(rawValue) {

@@ -44,11 +44,11 @@ function applyRegionPreset(rows, regionPreset) {
 function getRowResourceType(row) {
   const family = String(row?.family || '').toLowerCase();
   const sku = String(row?.sku || '').toLowerCase();
-  if (family.endsWith('family') || /^standard_/.test(String(row?.sku || ''))) {
-    return 'Compute';
-  }
   if (family.includes('disk') || sku.includes('disk') || sku.includes('snapshot')) {
     return 'Disk';
+  }
+  if (family.endsWith('family') || /^standard_/.test(String(row?.sku || ''))) {
+    return 'Compute';
   }
   return 'Other';
 }

@@ -339,7 +339,8 @@ app.get('/api/capacity', async (req, res) => {
       subscriptionIds: req.query.subscriptionIds,
       region: req.query.region,
       family: req.query.family,
-      availability: req.query.availability
+      availability: req.query.availability,
+      resourceType: req.query.resourceType
     });
     res.json({ rows });
   } catch (err) {
@@ -361,6 +362,7 @@ app.get('/api/capacity/paged', async (req, res) => {
       region: req.query.region,
       family: req.query.family,
       availability: req.query.availability,
+      resourceType: req.query.resourceType,
       pageNumber: req.query.pageNumber,
       pageSize: req.query.pageSize
     });

@@ -72,7 +72,14 @@
           <div class="filters">
             <label>Region Group
               <select id="regionPresetFilter">
-                <option value="USMajor">US Major</option>
+                <option value="USMajor">US Commercial</option>
+                <option value="CommercialAmericas">Commercial - Americas</option>
+                <option value="CommercialEurope">Commercial - Europe</option>
+                <option value="CommercialIndiaME">Commercial - India / Middle East</option>
+                <option value="CommercialAPAC">Commercial - APAC</option>
+                <option value="CommercialAustralia">Commercial - Australia</option>
+                <option value="AzureGovernment">Azure Government</option>
+                <option value="AzureChina">Azure China</option>
                 <option value="all">All Regions</option>
                 <option value="custom">Custom</option>
               </select>
@@ -120,6 +127,11 @@
 
         <div class="view-panel active" id="view-capacity-grid">
           <div class="surface overflow-auto">
+            <div class="report-explainer">
+              <strong>Report Key</strong>
+              <span>This grid shows the latest SQL snapshot at the SKU level. Each row is one subscription, one region, and one SKU observation.</span>
+              <span><strong>Quota Available</strong> is <strong>Quota Limit - Quota Current</strong>. Use this view when you need exact SKU names, zones, and quota headroom.</span>
+            </div>
             <table id="capacityGrid">
               <thead>
                 <tr>
@@ -160,6 +172,11 @@
         <div class="view-panel" id="view-region-chart">
           <div class="surface">
             <h3>Capacity Availability by Region</h3>
+            <div class="report-explainer">
+              <strong>Report Key</strong>
+              <span>The number beside each region is the count of in-scope rows that currently look deployable there.</span>
+              <span>For this chart, <strong>deployable</strong> means the latest row is <strong>OK</strong> or <strong>LIMITED</strong>. It is a row count, not VM quantity.</span>
+            </div>
             <div id="regionChart" class="chart-bars"></div>
           </div>
         </div>
@@ -167,6 +184,11 @@
         <div class="view-panel" id="view-sku-chart">
           <div class="surface">
             <h3>Top SKUs by Available Quota</h3>
+            <div class="report-explainer">
+              <strong>Report Key</strong>
+              <span>This chart ranks the filtered SKUs by total <strong>available quota</strong> across the selected subscriptions and regions.</span>
+              <span>If <strong>Resource Type = Compute</strong>, only VM-family rows should appear here. Disk and snapshot quota rows are excluded.</span>
+            </div>
             <div id="skuChart" class="chart-bars"></div>
           </div>
         </div>
@@ -216,6 +238,11 @@
         <div class="view-panel" id="view-family-summary">
           <div class="surface overflow-auto">
             <h3>SKU Families Summary</h3>
+            <div class="report-explainer">
+              <strong>Report Key</strong>
+              <span>This summary rolls raw Azure family names into the main series labels you are likely expecting, such as <strong>D</strong>, <strong>DS</strong>, <strong>E</strong>, <strong>F</strong>, and <strong>M</strong>.</span>
+              <span><strong>SKUs in Family</strong> is the number of unique SKUs seen in that series. <strong>OK SKUs</strong> is how many of those SKUs currently report <strong>OK</strong> availability.</span>
+            </div>
             <p class="inline-note family-summary-note">SKUs in Family = unique SKU count observed for the family. OK SKUs = how many of those SKUs currently report OK availability.</p>
             <table id="familySummaryGrid">
               <thead>
@@ -238,6 +265,11 @@
         <div class="view-panel" id="view-region-matrix">
           <div class="surface overflow-auto">
             <h3>Multi-Region Capacity Matrix</h3>
+            <div class="report-explainer">
+              <strong>Report Key</strong>
+              <span>Rows are grouped into main Azure compute series labels. Variant names such as memory-optimized M-series subfamilies are rolled up under <strong>M</strong>.</span>
+              <span>Each cell shows the <strong>best observed status for any SKU</strong> in that family for that region. Use the Capacity Grid when you need the exact SKU behind the rollup.</span>
+            </div>
             <p class="inline-note" style="margin: 0 0 10px;">Best-case availability for each VM family per region. Shows whether <em>any</em> SKU in the family is available — not all SKUs. Use the Capacity Grid for per-SKU detail.</p>
 
             <div class="matrix-legend">
@@ -266,6 +298,11 @@
         <div class="view-panel" id="view-trend">
           <div class="surface overflow-auto">
             <h3>Capacity Trend (last 7 days)</h3>
+            <div class="report-explainer">
+              <strong>Report Key</strong>
+              <span>This view tracks the recent SQL snapshots for the current filter scope.</span>
+              <span><strong>Total Rows</strong> is the number of stored observations for that day, while <strong>Total Quota Available</strong> is the summed headroom across those rows.</span>
+            </div>
             <table id="trendGrid">
               <thead>
                 <tr>

@@ -3,6 +3,13 @@ let subscriptionOptions = [];
 let managementGroupOptions = [];
 let quotaGroupOptions = [];
 let quotaRunOptions = [];
+let capacityFacetRegions = [];
+let capacityFacetFamilies = [];
+let regionMatrixRows = [];
+let analyticsRows = [];
+let preservedRegionOptions = [];
+let preserveRegionOptions = false;
+let capacityGridSummary = null;
 const selectedSubscriptionIds = new Set();
 // Track which report views have had their data loaded at least once.
 // Views not in this set will trigger a data fetch on first activation.
@@ -13,11 +20,74 @@ const MATRIX_DEFAULT_FAMILIES = [
   'L', 'M', 'N', 'NC', 'NCC', 'ND', 'NG', 'NV'
 ];
 
-function getFamilyResourceType(family) {
-  const f = (family || '').toLowerCase();
-  if (f.endsWith('family')) return 'Compute';
-  if (f.includes('disk')) return 'Disk';
+const CANONICAL_COMPUTE_FAMILY_PATTERNS = [
+  ['NCC', /^(NCC)/],
+  ['NC', /^(NC)/],
+  ['ND', /^(ND)/],
+  ['NG', /^(NG)/],
+  ['NV', /^(NV)/],
+  ['N', /^(N)/],
+  ['HB', /^(HB)/],
+  ['HC', /^(HC)/],
+  ['HX', /^(HX)/],
+  ['H', /^(H)/],
+  ['FX', /^(FX)/],
+  ['F', /^(F)/],
+  ['GS', /^(GS)/],
+  ['G', /^(G)/],
+  ['DC', /^(DC)/],
+  ['DS', /^(DS)/],
+  ['D', /^(D)/],
+  ['E', /^(E)/],
+  ['L', /^(L)/],
+  ['M', /^(M)/],
+  ['B', /^(B|BS|BAS|BPS)/],
+  ['A', /^(A|BASICA)/]
+];
+
+function getRowResourceType(row) {
+  const family = String(row?.family || '').toLowerCase();
+  const sku = String(row?.sku || '').toLowerCase();
+  if (family.endsWith('family') || /^standard_/.test(String(row?.sku || ''))) return 'Compute';
+  if (family.includes('disk') || sku.includes('disk') || sku.includes('snapshot')) return 'Disk';
   return 'Other';
+}
+
+function rowMatchesSelectedResourceType(row, selectedType = resourceTypeFilter?.value || 'all') {
+  return selectedType === 'all' || getRowResourceType(row) === selectedType;
+}
+
+function canonicalizeFamilyToken(rawValue) {
+  const value = String(rawValue || '').trim();
+  if (!value) {
+    return '';
+  }
+
+  return value
+    .replace(/^standard_/i, '')
+    .replace(/^standard/i, '')
+    .replace(/^basic_/i, 'Basic')
+    .replace(/family$/i, '')
+    .replace(/v\d+.*$/i, '')
+    .replace(/[\s_-]/g, '')
+    .toUpperCase();
+}
+
+function canonicalComputeFamilyLabel(rawFamily, skuName) {
+  const tokens = [canonicalizeFamilyToken(rawFamily), canonicalizeFamilyToken(skuName)];
+  for (const token of tokens) {
+    if (!token) {
+      continue;
+    }
+
+    for (const [label, pattern] of CANONICAL_COMPUTE_FAMILY_PATTERNS) {
+      if (pattern.test(token)) {
+        return label;
+      }
+    }
+  }
+
+  return '';
 }
 
 const FAMILY_EXTRA_SKU_MAP = {
@@ -28,7 +98,14 @@ const FAMILY_EXTRA_SKU_MAP = {
 };
 
 const regionPresets = {
-  USMajor: ['eastus', 'eastus2', 'centralus', 'southcentralus', 'northcentralus', 'westus', 'westus2']
+  USMajor: ['eastus', 'eastus2', 'centralus', 'northcentralus', 'southcentralus', 'westcentralus', 'westus', 'westus2', 'westus3'],
+  CommercialAmericas: ['eastus', 'eastus2', 'centralus', 'northcentralus', 'southcentralus', 'westcentralus', 'westus', 'westus2', 'westus3', 'canadacentral', 'canadaeast', 'brazilsouth'],
+  CommercialEurope: ['northeurope', 'westeurope', 'uksouth', 'ukwest', 'francecentral', 'germanywestcentral', 'swedencentral', 'switzerlandnorth'],
+  CommercialIndiaME: ['centralindia', 'southindia', 'westindia', 'uaenorth', 'uaecentral', 'qatarcentral', 'israelcentral'],
+  CommercialAPAC: ['eastasia', 'southeastasia', 'japaneast', 'japanwest', 'koreacentral', 'koreasouth'],
+  CommercialAustralia: ['australiaeast', 'australiasoutheast', 'australiacentral', 'australiacentral2'],
+  AzureGovernment: ['usgovvirginia', 'usgovtexas', 'usgovarizona'],
+  AzureChina: ['chinaeast', 'chinaeast2', 'chinanorth', 'chinanorth2']
 };
 
 const gridBody = document.querySelector('#capacityGrid tbody');
@@ -399,7 +476,7 @@ function applyFamilySearch() {
 
 function syncFamilyOptions() {
   const currentValue = familyFilter.value || 'all';
-  const dataFamilies = unique('family');
+  const dataFamilies = capacityFacetFamilies.length > 0 ? capacityFacetFamilies : unique('family');
 
   const selectedType = resourceTypeFilter?.value || 'all';
   const filteredFamilies = selectedType === 'all'
@@ -437,7 +514,7 @@ function filteredRows() {
     const byRegion = regionFilter.value === 'all' || r.region === regionFilter.value;
     const byFamily = familyFilter.value === 'all' || r.family === familyFilter.value;
     const byAvailability = availabilityFilter.value === 'all' || r.availability === availabilityFilter.value;
-    const byType = selectedType === 'all' || getFamilyResourceType(r.family) === selectedType;
+    const byType = rowMatchesSelectedResourceType(r, selectedType);
     return byRegion && byFamily && byAvailability && byType;
   });
 }
@@ -460,11 +537,25 @@ function setActiveReportTitle(viewKey) {
 }
 
 function syncRegionOptions() {
-  const availableRegions = unique('region');
-  const nextValue = availableRegions.includes(regionFilter.value) ? regionFilter.value : 'all';
-  fillSelect(regionFilter, availableRegions);
+  const presetRegions = activePresetRegions();
+  const availableRegions = Array.isArray(presetRegions) && presetRegions.length > 0
+    ? [...presetRegions].sort()
+    : (capacityFacetRegions.length > 0 ? capacityFacetRegions : unique('region'));
+  const shouldReuseAvailableRegions = (!Array.isArray(presetRegions) || presetRegions.length === 0)
+    && preserveRegionOptions
+    && regionFilter.value !== 'all'
+    && preservedRegionOptions.length > 0;
+
+  if ((!Array.isArray(presetRegions) || presetRegions.length === 0) && availableRegions.length > 0 && !shouldReuseAvailableRegions) {
+    preservedRegionOptions = [...availableRegions];
+  }
+
+  const optionValues = shouldReuseAvailableRegions ? preservedRegionOptions : availableRegions;
+  const nextValue = optionValues.includes(regionFilter.value) ? regionFilter.value : 'all';
+  fillSelect(regionFilter, optionValues);
   regionFilter.value = nextValue;
-  regionFilter.disabled = regionPresetFilter.value !== 'custom';
+  regionFilter.disabled = optionValues.length === 0;
+  preserveRegionOptions = false;
 }
 
 function resetCapacityPaging() {
@@ -496,13 +587,19 @@ function renderCapacityPaging() {
   }
 }
 
-function renderSummary(data) {
+function renderSummary(data, summaryOverride = null) {
   const total = Number(capacityPaging.total || data.length || 0);
   const rowsShown = Number(data.length || 0);
   const rowsLabel = total > rowsShown ? `${rowsShown} of ${total}` : `${total}`;
-  const constrained = data.filter((r) => r.availability === 'CONSTRAINED').length;
-  const totalAvailQuota = data.reduce((acc, r) => acc + (r.quotaLimit - r.quotaCurrent), 0);
-  const monthly = data.reduce((acc, r) => acc + (r.monthlyCost || 0), 0);
+  const constrained = summaryOverride && Number.isFinite(Number(summaryOverride.constrainedRows))
+    ? Number(summaryOverride.constrainedRows)
+    : data.filter((r) => r.availability === 'CONSTRAINED').length;
+  const totalAvailQuota = summaryOverride && Number.isFinite(Number(summaryOverride.availableQuota))
+    ? Number(summaryOverride.availableQuota)
+    : data.reduce((acc, r) => acc + (r.quotaLimit - r.quotaCurrent), 0);
+  const monthly = summaryOverride && Number.isFinite(Number(summaryOverride.monthlyCost))
+    ? Number(summaryOverride.monthlyCost)
+    : data.reduce((acc, r) => acc + (r.monthlyCost || 0), 0);
 
   summaryCards.innerHTML = `
     <div class="card"><h3>Rows</h3><p>${rowsLabel}</p></div>
@@ -518,13 +615,13 @@ function getActiveReportViewKey() {
 }
 
 function renderRegionMatrixSummary(data) {
-  const scopedData = Array.isArray(data) ? data : [];
+  const scopedData = (Array.isArray(data) ? data : []).filter((row) => isVmComputeFamily(row.family));
   const regions = resolveMatrixRegions(scopedData);
   const familyMap = {};
   const priority = { OK: 3, LIMITED: 2, CONSTRAINED: 1 };
 
   scopedData.forEach((row) => {
-    const fam = normalizeFamilyLabel(row.family) || deriveFamilyFromSkuName(row.sku) || '?';
+    const fam = normalizeFamilyLabel(row.family, row.sku) || deriveFamilyFromSkuName(row.sku) || '?';
     const region = String(row.region || '').trim().toLowerCase();
     if (!region) {
       return;
@@ -541,7 +638,7 @@ function renderRegionMatrixSummary(data) {
     }
   });
 
-  const families = [...new Set([...MATRIX_DEFAULT_FAMILIES, ...Object.keys(familyMap)])].sort();
+  const families = Object.keys(familyMap).sort();
   let familiesWithAnyOk = 0;
   let familiesFullyBlocked = 0;
 
@@ -572,7 +669,7 @@ function renderSummaryForActiveView(gridData, matrixData) {
     return;
   }
 
-  renderSummary(gridData);
+  renderSummary(gridData, view === 'capacity-grid' ? capacityGridSummary : null);
 }
 
 function renderGrid() {
@@ -1131,13 +1228,14 @@ function renderFamilySummary(familyRows) {
     const tr = document.createElement('tr');
     const skuCount = Number(row.skus || 0);
     const okSkuCount = Number(row.ok || 0);
+    const okTone = okSkuCount === 0 ? 'CONSTRAINED' : (okSkuCount === skuCount ? 'OK' : 'LIMITED');
     tr.innerHTML = `
-      <td>${formatFamilyLabel(row.family)}</td>
-      <td>${skuCount} SKU${skuCount === 1 ? '' : 's'}</td>
-      <td>${okSkuCount} SKU${okSkuCount === 1 ? '' : 's'}</td>
+      <td><span class="family-series-pill">${formatFamilyLabel(row.family)}</span></td>
+      <td><span class="family-summary-count">${skuCount} SKU${skuCount === 1 ? '' : 's'}</span></td>
+      <td><span class="badge ${okTone}">${okSkuCount} OK</span></td>
       <td>${row.largest}</td>
       <td>${row.zones}</td>
-      <td>${row.status}</td>
+      <td><span class="badge ${row.status}">${row.status}</span></td>
       <td>${row.quota}</td>
     `;
     familySummaryGridBody.appendChild(tr);
@@ -1149,13 +1247,15 @@ function deriveFamilySummaryFromRows(dataRows) {
 
   (dataRows || []).forEach((row) => {
     const familyRaw = String(row.family || '').trim();
-    if (!familyRaw) {
+    const canonicalFamily = normalizeFamilyLabel(familyRaw, row.sku);
+    const isVmComputeFamily = /^(STANDARD|BASIC)[A-Z0-9]+FAMILY$/i.test(familyRaw);
+    if (!familyRaw || !isVmComputeFamily || !canonicalFamily) {
       return;
     }
 
-    if (!byFamily.has(familyRaw)) {
-      byFamily.set(familyRaw, {
-        family: familyRaw,
+    if (!byFamily.has(canonicalFamily)) {
+      byFamily.set(canonicalFamily, {
+        family: canonicalFamily,
         skus: new Set(),
         okSkus: new Set(),
         zones: new Set(),
@@ -1167,7 +1267,7 @@ function deriveFamilySummaryFromRows(dataRows) {
       });
     }
 
-    const entry = byFamily.get(familyRaw);
+    const entry = byFamily.get(canonicalFamily);
     entry.skus.add(row.sku);
     if (row.availability === 'OK') {
       entry.okSkus.add(row.sku);
@@ -1208,21 +1308,8 @@ function deriveFamilySummaryFromRows(dataRows) {
     .sort((left, right) => String(left.family).localeCompare(String(right.family)));
 }
 
-function normalizeFamilyLabel(rawFamily) {
-  const value = String(rawFamily || '').trim();
-  if (!value) {
-    return '';
-  }
-
-  let normalized = value
-    .replace(/^standard/i, '')
-    .replace(/family$/i, '')
-    .replace(/[\s_-]/g, '')
-    .toUpperCase();
-
-  normalized = normalized.replace(/V\d+.*$/, '');
-  normalized = normalized.replace(/\d+.*$/, '');
-  return normalized;
+function normalizeFamilyLabel(rawFamily, skuName) {
+  return canonicalComputeFamilyLabel(rawFamily, skuName);
 }
 
 function deriveFamilyFromSkuName(skuName) {
@@ -1231,17 +1318,21 @@ function deriveFamilyFromSkuName(skuName) {
     return '';
   }
 
-  return normalizeFamilyLabel(match[1]);
+  return normalizeFamilyLabel('', match[1]);
+}
+
+function isVmComputeFamily(familyName) {
+  return /^(STANDARD|BASIC)[A-Z0-9]+FAMILY$/i.test(String(familyName || '').trim());
 }
 
 function resolveMatrixRegions(scopedData) {
+  if (regionFilter.value && regionFilter.value !== 'all') {
+    return [String(regionFilter.value).trim().toLowerCase()];
+  }
+
   const selectedRegions = activePresetRegions();
   if (Array.isArray(selectedRegions) && selectedRegions.length > 0) {
     return [...new Set(selectedRegions.map((region) => String(region || '').trim().toLowerCase()).filter(Boolean))].sort();
-  }
-
-  if (regionPresetFilter.value === 'custom' && regionFilter.value && regionFilter.value !== 'all') {
-    return [String(regionFilter.value).trim().toLowerCase()];
   }
 
   return [...new Set((scopedData || []).map((row) => String(row.region || '').trim().toLowerCase()).filter(Boolean))].sort();
@@ -1254,7 +1345,7 @@ function renderRegionMatrix(data) {
 
   container.innerHTML = '';
 
-  const scopedData = data && data.length > 0 ? data : filteredRows();
+  const scopedData = ((data && data.length > 0 ? data : filteredRows()) || []).filter((row) => isVmComputeFamily(row.family));
   const regions = resolveMatrixRegions(scopedData);
 
   if ((!scopedData || scopedData.length === 0) && regions.length === 0) {
@@ -1270,7 +1361,7 @@ function renderRegionMatrix(data) {
   const familyMap = {};
 
   scopedData.forEach((r) => {
-    const fam = normalizeFamilyLabel(r.family) || deriveFamilyFromSkuName(r.sku) || '?';
+    const fam = normalizeFamilyLabel(r.family, r.sku) || deriveFamilyFromSkuName(r.sku) || '?';
     if (!familyMap[fam]) familyMap[fam] = {};
     const region = String(r.region || '').trim().toLowerCase();
     if (!region) {
@@ -1284,7 +1375,7 @@ function renderRegionMatrix(data) {
     }
   });
 
-  const families = [...new Set([...MATRIX_DEFAULT_FAMILIES, ...Object.keys(familyMap)])].sort();
+  const families = Object.keys(familyMap).sort();
 
   // Row-level rollup: best status across all regions for row highlight
   function rowRollup(regionMap) {
@@ -1447,7 +1538,7 @@ async function refreshLivePlacementScores() {
   }
 }
 
-function renderBarChart(host, items) {
+function renderBarChart(host, items, options = {}) {
   if (!host) return;
   host.innerHTML = '';
   if (!items || items.length === 0) {
@@ -1456,6 +1547,9 @@ function renderBarChart(host, items) {
   }
 
   const maxValue = Math.max(...items.map((item) => item.value), 1);
+  const valueFormatter = typeof options.valueFormatter === 'function'
+    ? options.valueFormatter
+    : ((value) => String(value));
   items.forEach((item) => {
     const width = Math.max(2, Math.round((item.value / maxValue) * 100));
     const row = document.createElement('div');
@@ -1463,15 +1557,17 @@ function renderBarChart(host, items) {
     row.innerHTML = `
       <div>${item.label}</div>
       <div class="chart-track"><div class="chart-fill" style="width:${width}%"></div></div>
-      <div>${item.value}</div>
+      <div>${valueFormatter(item.value, item)}</div>
     `;
     host.appendChild(row);
   });
 }
 
 function renderCharts(data) {
+  const selectedType = resourceTypeFilter?.value || 'all';
+  const scopedRows = (Array.isArray(data) ? data : []).filter((row) => rowMatchesSelectedResourceType(row, selectedType));
   const byRegion = new Map();
-  data.forEach((row) => {
+  scopedRows.forEach((row) => {
     const entry = byRegion.get(row.region) || { OK: 0, LIMITED: 0, CONSTRAINED: 0, RESTRICTED: 0 };
     entry[row.availability] = (entry[row.availability] || 0) + 1;
     byRegion.set(row.region, entry);
@@ -1481,10 +1577,12 @@ function renderCharts(data) {
     label: region,
     value: (counts.OK || 0) + (counts.LIMITED || 0)
   })).sort((a, b) => b.value - a.value);
-  renderBarChart(regionChart, regionItems);
+  renderBarChart(regionChart, regionItems, {
+    valueFormatter: (value) => `${Number(value).toLocaleString()} row${value === 1 ? '' : 's'}`
+  });
 
   const bySku = new Map();
-  data.forEach((row) => {
+  scopedRows.forEach((row) => {
     const available = row.quotaLimit - row.quotaCurrent;
     bySku.set(row.sku, (bySku.get(row.sku) || 0) + available);
   });
@@ -1492,12 +1590,14 @@ function renderCharts(data) {
     .map(([sku, value]) => ({ label: sku, value }))
     .sort((a, b) => b.value - a.value)
     .slice(0, 12);
-  renderBarChart(skuChart, skuItems);
+  renderBarChart(skuChart, skuItems, {
+    valueFormatter: (value) => Number(value).toLocaleString()
+  });
 }
 
 function getQueryFilters() {
   const regionPreset = regionPresetFilter.value || 'USMajor';
-  const region = regionPreset === 'custom' ? (regionFilter.value || 'all') : 'all';
+  const region = regionFilter.value || 'all';
   const family = familyFilter.value || 'all';
   const availability = availabilityFilter.value || 'all';
   const subscriptionIds = selectedSubscriptionCsv();
@@ -1571,6 +1671,46 @@ async function loadFamilySummaryView() {
   loadedViews.add('family-summary');
 }
 
+async function loadDerivedAnalyticsRows() {
+  const baseFilters = getQueryFilters();
+  const query = new URLSearchParams(baseFilters);
+
+  const response = await fetch(`/api/capacity?${query.toString()}`);
+  const payload = response.ok ? await response.json() : { rows: [] };
+  analyticsRows = Array.isArray(payload.rows) ? payload.rows : [];
+  return analyticsRows;
+}
+
+async function loadChartViews() {
+  try {
+    const data = await loadDerivedAnalyticsRows();
+    renderCharts(data);
+    renderSummary(data);
+  } catch (_) {
+    analyticsRows = [];
+    renderCharts(filteredRows());
+    renderSummary(filteredRows());
+  }
+
+  loadedViews.add('region-chart');
+  loadedViews.add('sku-chart');
+}
+
+async function loadRegionMatrixView() {
+  try {
+    regionMatrixRows = await loadDerivedAnalyticsRows();
+    renderRegionMatrix(regionMatrixRows);
+    renderSummaryForActiveView(regionMatrixRows, regionMatrixRows);
+  } catch (_) {
+    analyticsRows = [];
+    regionMatrixRows = [];
+    renderRegionMatrix(reportScopedRows());
+    renderSummaryForActiveView(filteredRows(), reportScopedRows());
+  }
+
+  loadedViews.add('region-matrix');
+}
+
 function refreshActiveAnalyticsView() {
   const view = getActiveReportViewKey();
   // Remove from loaded set so the tab handler re-fetches fresh data
@@ -1578,9 +1718,8 @@ function refreshActiveAnalyticsView() {
   if (view === 'capacity-score') return loadCapacityScoreView();
   if (view === 'trend') return loadTrendView();
   if (view === 'family-summary') return loadFamilySummaryView();
-  // Charts and matrix derive from already-loaded rows; just re-render
-  if (view === 'region-chart' || view === 'sku-chart') return renderCharts(filteredRows());
-  if (view === 'region-matrix') return renderRegionMatrix(reportScopedRows());
+  if (view === 'region-matrix') return loadRegionMatrixView();
+  if (view === 'region-chart' || view === 'sku-chart') return loadChartViews();
 }
 
 // Keep loadAnalytics as a convenience for refreshing all views at once
@@ -1677,6 +1816,15 @@ async function loadCapacityRows() {
     }
     const payload = await response.json();
     rows = Array.isArray(payload.data) ? payload.data : [];
+    capacityFacetRegions = Array.isArray(payload.facets?.regions) ? payload.facets.regions : [];
+    capacityFacetFamilies = Array.isArray(payload.facets?.families) ? payload.facets.families : [];
+    capacityGridSummary = payload.summary
+      ? {
+          constrainedRows: Number(payload.summary.constrainedRows || 0),
+          availableQuota: Number(payload.summary.availableQuota || 0),
+          monthlyCost: Number(payload.summary.monthlyCost || 0)
+        }
+      : null;
 
     const paging = payload.pagination || {};
     capacityPaging.total = Number(paging.total || 0);
@@ -1687,6 +1835,9 @@ async function loadCapacityRows() {
     capacityPaging.hasPrev = Boolean(paging.hasPrev);
   } catch (_) {
     rows = [];
+    capacityFacetRegions = [];
+    capacityFacetFamilies = [];
+    capacityGridSummary = null;
     capacityPaging.total = 0;
     capacityPaging.pageCount = 1;
     capacityPaging.hasNext = false;
@@ -1696,6 +1847,13 @@ async function loadCapacityRows() {
   syncRegionOptions();
   syncFamilyOptions();
   renderGrid();
+
+  const activeView = getActiveReportViewKey();
+  if (activeView === 'region-matrix') {
+    await loadRegionMatrixView();
+  } else if (activeView === 'region-chart' || activeView === 'sku-chart') {
+    await loadChartViews();
+  }
 }
 
 function wireTabs() {
@@ -1727,14 +1885,28 @@ function wireViewTabs() {
       if (panel) panel.classList.add('active');
       setActiveReportTitle(btn.dataset.reportView);
 
-      renderSummaryForActiveView(filteredRows(), reportScopedRows());
+      const derivedRows = analyticsRows.length > 0 ? analyticsRows : filteredRows();
+      const derivedMatrixRows = regionMatrixRows.length > 0 ? regionMatrixRows : reportScopedRows();
+      renderSummaryForActiveView(derivedRows, derivedMatrixRows);
 
       const view = btn.dataset.reportView;
 
       if (view === 'region-matrix') {
-        renderRegionMatrix(reportScopedRows());
+        if (!loadedViews.has('region-matrix')) {
+          loadRegionMatrixView();
+        } else {
+          const matrixRows = regionMatrixRows.length > 0 ? regionMatrixRows : reportScopedRows();
+          renderRegionMatrix(matrixRows);
+          renderSummaryForActiveView(analyticsRows.length > 0 ? analyticsRows : filteredRows(), matrixRows);
+        }
       } else if (view === 'region-chart' || view === 'sku-chart') {
-        renderCharts(filteredRows());
+        if (!loadedViews.has('region-chart') || !loadedViews.has('sku-chart')) {
+          loadChartViews();
+        } else {
+          const chartRows = analyticsRows.length > 0 ? analyticsRows : filteredRows();
+          renderCharts(chartRows);
+          renderSummary(chartRows);
+        }
       } else if (view === 'capacity-score' && !loadedViews.has('capacity-score')) {
         loadCapacityScoreView();
       } else if (view === 'family-summary' && !loadedViews.has('family-summary')) {
@@ -1828,12 +2000,14 @@ quotaRunFilter?.addEventListener('change', () => {
 });
 
 regionPresetFilter.addEventListener('change', () => {
+  preserveRegionOptions = false;
   syncRegionOptions();
   resetCapacityPaging();
   loadCapacityRows();
 });
 
 regionFilter.addEventListener('change', () => {
+  preserveRegionOptions = regionFilter.value !== 'all';
   resetCapacityPaging();
   loadCapacityRows();
 });

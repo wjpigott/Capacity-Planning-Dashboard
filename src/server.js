@@ -27,7 +27,7 @@ const {
   startIngestionScheduler
 } = require('./services/azureIngestionService');
 const { listManagementGroups, listQuotaGroups } = require('./services/quotaDiscoveryService');
-const { ensurePhase3Schema, getCapacityScoreSnapshotHistory } = require('./store/sql');
+const { getSqlPool, ensurePhase3Schema, ensureSubscriptionsTableSchema, getCapacityScoreSnapshotHistory } = require('./store/sql');
 const { applyIndexes } = require('./maintenance/applyPerformanceIndexes');
 
 const app = express();
@@ -52,13 +52,29 @@ app.use(cors());
 app.use(express.json());
 
 // Session — required for MSAL auth code flow state and account storage.
-// In production, use a SQL-backed store so sessions survive app restarts and
-// zero-downtime slot swaps on Azure App Service. Falls back to in-memory store
-// for local dev (no SQL connection config needed).
+// In production, prefer SQL-backed sessions when SQL is configured so auth
+// survives redirects and worker recycling. The required table is ensured at
+// startup before the server begins accepting traffic.
+function shouldUseSqlSessionStore() {
+  const sqlServer = process.env.SQL_SERVER;
+  const sqlDatabase = process.env.SQL_DATABASE;
+  const rawSetting = String(process.env.SESSION_STORE_SQL_ENABLED || '').toLowerCase();
+
+  if (!sqlServer || !sqlDatabase || process.env.NODE_ENV !== 'production') {
+    return false;
+  }
+
+  if (rawSetting === 'false' || rawSetting === '0' || rawSetting === 'no') {
+    return false;
+  }
+
+  return true;
+}
+
 function buildSessionStore() {
   const sqlServer = process.env.SQL_SERVER;
   const sqlDatabase = process.env.SQL_DATABASE;
-  if (!sqlServer || !sqlDatabase || process.env.NODE_ENV !== 'production') {
+  if (!shouldUseSqlSessionStore()) {
     return undefined; // express-session uses MemoryStore by default
   }
   try {
@@ -73,11 +89,49 @@ function buildSessionStore() {
           : { userName: process.env.SQL_USER, password: process.env.SQL_PASSWORD }
       }
     };
-    return new MSSQLStore(sqlConfig, { autoRemoveExpired: true, autoRemoveInterval: 1 });
+    const storeOptions = {
+      table: process.env.SESSION_STORE_SQL_TABLE || 'sessions',
+      autoRemove: true,
+      autoRemoveInterval: 1000 * 60 * 60
+    };
+    return new MSSQLStore(sqlConfig, storeOptions);
   } catch (e) {
     console.warn('[session] SQL store init failed, falling back to MemoryStore:', e.message);
     return undefined;
   }
+}
+
+async function ensureSessionStoreSchema() {
+  if (!shouldUseSqlSessionStore()) {
+    return;
+  }
+
+  const sessionTable = process.env.SESSION_STORE_SQL_TABLE || 'sessions';
+  const pool = await getSqlPool();
+  if (!pool) {
+    throw new Error('SQL session store is enabled but SQL connection is not configured.');
+  }
+
+  await pool.request()
+    .input('sessionTable', sessionTable)
+    .query(`
+      DECLARE @tableName SYSNAME = @sessionTable;
+      DECLARE @schemaName SYSNAME = 'dbo';
+      DECLARE @qualifiedTable NVARCHAR(258) = QUOTENAME(@schemaName) + '.' + QUOTENAME(@tableName);
+
+      IF OBJECT_ID(@qualifiedTable, 'U') IS NULL
+      BEGIN
+        EXEC(N'
+          CREATE TABLE ' + @qualifiedTable + '(
+            [sid] NVARCHAR(255) NOT NULL PRIMARY KEY,
+            [session] NVARCHAR(MAX) NOT NULL,
+            [expires] DATETIME NOT NULL
+          )
+        ');
+      END
+    `);
+
+  console.log(`[session] SQL session table ready: dbo.${sessionTable}`);
 }
 
 app.use(session({
@@ -441,21 +495,38 @@ app.get('*', (_, res) => {
   res.sendFile(path.resolve(__dirname, '..', 'index.html'));
 });
 
-app.listen(port, () => {
-  startIngestionScheduler();
-  
-  // Apply performance indexes on startup (idempotent - safe to run multiple times)
-  if (process.env.SQL_SERVER) {
-    applyIndexes().then(success => {
-      if (success) {
-        console.log('✓ Performance indexes verified/created');
-      } else {
-        console.warn('⚠ Could not apply performance indexes - will retry on next startup');
-      }
-    }).catch(err => {
-      console.warn('⚠ Performance index setup failed (non-blocking):', err.message);
-    });
+async function startServer() {
+  try {
+    await ensureSessionStoreSchema();
+  } catch (err) {
+    console.warn('⚠ Session store schema setup failed, continuing with current session configuration:', err.message);
   }
-  
-  console.log(`Capacity dashboard listening on port ${port}`);
-});
+
+  try {
+    await ensurePhase3Schema();
+    console.log('[schema] Phase-3 dashboard schema ready');
+  } catch (err) {
+    console.warn('⚠ Dashboard schema setup failed, continuing with existing SQL objects:', err.message);
+  }
+
+  app.listen(port, () => {
+    startIngestionScheduler();
+
+    // Apply performance indexes on startup (idempotent - safe to run multiple times)
+    if (process.env.SQL_SERVER) {
+      applyIndexes().then(success => {
+        if (success) {
+          console.log('✓ Performance indexes verified/created');
+        } else {
+          console.warn('⚠ Could not apply performance indexes - will retry on next startup');
+        }
+      }).catch(err => {
+        console.warn('⚠ Performance index setup failed (non-blocking):', err.message);
+      });
+    }
+
+    console.log(`Capacity dashboard listening on port ${port}`);
+  });
+}
+
+startServer();

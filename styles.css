@@ -570,6 +570,39 @@ th {
   font-size: 14px;
 }
 
+.report-explainer {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  background: linear-gradient(180deg, #f7fbff 0%, #eef5fd 100%);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: #274868;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.report-explainer strong {
+  color: #10263d;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.family-series-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #eaf3ff;
+  color: #1f4f85;
+}
+
+.family-summary-count {
+  color: #274868;
+}
+
 .grid-pagination {
   display: flex;
   justify-content: center;

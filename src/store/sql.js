@@ -196,6 +196,43 @@ async function getSubscriptionsFromTable({ search, limit } = {}) {
   }));
 }
 
+async function ensureSubscriptionsTableSchema(pool) {
+  const createScript = `
+    IF OBJECT_ID('dbo.Subscriptions', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.Subscriptions (
+        subscriptionId NVARCHAR(64) NOT NULL,
+        subscriptionName NVARCHAR(256) NOT NULL,
+        updatedAtUtc DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+        CONSTRAINT PK_Subscriptions PRIMARY KEY (subscriptionId)
+      );
+    END;
+  `;
+
+  const backfillScript = `
+    MERGE dbo.Subscriptions AS tgt
+    USING (
+      SELECT
+        subscriptionId,
+        MAX(subscriptionName) AS subscriptionName,
+        MAX(capturedAtUtc) AS updatedAtUtc
+      FROM dbo.CapacitySnapshot
+      WHERE subscriptionId IS NOT NULL
+        AND subscriptionId <> 'legacy-data'
+      GROUP BY subscriptionId
+    ) AS src
+    ON tgt.subscriptionId = src.subscriptionId
+    WHEN MATCHED THEN
+      UPDATE SET subscriptionName = src.subscriptionName, updatedAtUtc = src.updatedAtUtc
+    WHEN NOT MATCHED THEN
+      INSERT (subscriptionId, subscriptionName, updatedAtUtc)
+      VALUES (src.subscriptionId, src.subscriptionName, src.updatedAtUtc);
+  `;
+
+  await pool.request().query(createScript);
+  await pool.request().query(backfillScript);
+}
+
 async function ensureCapacityScoreSnapshotSchema(pool) {
   const createScript = `
     IF OBJECT_ID('dbo.CapacityScoreSnapshot', 'U') IS NULL
@@ -604,6 +641,7 @@ async function ensurePhase3Schema() {
     throw new Error('SQL connection is not configured.');
   }
 
+  await ensureSubscriptionsTableSchema(pool);
   await ensureCapacityScoreSnapshotSchema(pool);
 
   const alterScript = `
@@ -625,45 +663,28 @@ async function ensurePhase3Schema() {
 
   const viewScript = `
     CREATE OR ALTER VIEW dbo.CapacityLatest AS
-    WITH Ranked AS (
-      SELECT
-        capturedAtUtc,
-        subscriptionKey,
-        subscriptionId,
-        subscriptionName,
-        region,
-        skuName,
-        skuFamily,
-        vCpu,
-        memoryGB,
-        zonesCsv,
-        availabilityState,
-        quotaCurrent,
-        quotaLimit,
-        monthlyCostEstimate,
-        ROW_NUMBER() OVER (
-          PARTITION BY ISNULL(subscriptionKey, 'legacy-data'), region, skuName
-          ORDER BY capturedAtUtc DESC
-        ) AS rn
+    WITH LatestCapture AS (
+      SELECT MAX(capturedAtUtc) AS capturedAtUtc
       FROM dbo.CapacitySnapshot
     )
     SELECT
-      capturedAtUtc,
-      subscriptionKey,
-      subscriptionId,
-      subscriptionName,
-      region,
-      skuName,
-      skuFamily,
-      vCpu,
-      memoryGB,
-      zonesCsv,
-      availabilityState,
-      quotaCurrent,
-      quotaLimit,
-      monthlyCostEstimate
-    FROM Ranked
-    WHERE rn = 1;
+      snapshot.capturedAtUtc,
+      snapshot.subscriptionKey,
+      snapshot.subscriptionId,
+      snapshot.subscriptionName,
+      snapshot.region,
+      snapshot.skuName,
+      snapshot.skuFamily,
+      snapshot.vCpu,
+      snapshot.memoryGB,
+      snapshot.zonesCsv,
+      snapshot.availabilityState,
+      snapshot.quotaCurrent,
+      snapshot.quotaLimit,
+      snapshot.monthlyCostEstimate
+    FROM dbo.CapacitySnapshot AS snapshot
+    INNER JOIN LatestCapture
+      ON snapshot.capturedAtUtc = LatestCapture.capturedAtUtc;
   `;
 
   const updateScript = `
@@ -685,6 +706,7 @@ module.exports = {
   insertCapacitySnapshots,
   upsertSubscriptions,
   getSubscriptionsFromTable,
+  ensureSubscriptionsTableSchema,
   insertCapacityScoreSnapshots,
   insertQuotaCandidateSnapshots,
   getCapacityScoreSnapshotHistory,

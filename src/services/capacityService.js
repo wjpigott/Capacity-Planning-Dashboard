@@ -3,6 +3,31 @@ const { mockRows } = require('../store/mockCapacity');
 const { getRegionsForPreset } = require('../config/regionPresets');
 const { CapacityDetailDTO, SubscriptionSummaryDTO, FamilySummaryDTO, TrendDTO, PaginationDTO } = require('../models/dtos');
 
+const CANONICAL_COMPUTE_FAMILY_PATTERNS = [
+  ['NCC', /^(NCC)/],
+  ['NC', /^(NC)/],
+  ['ND', /^(ND)/],
+  ['NG', /^(NG)/],
+  ['NV', /^(NV)/],
+  ['N', /^(N)/],
+  ['HB', /^(HB)/],
+  ['HC', /^(HC)/],
+  ['HX', /^(HX)/],
+  ['H', /^(H)/],
+  ['FX', /^(FX)/],
+  ['F', /^(F)/],
+  ['GS', /^(GS)/],
+  ['G', /^(G)/],
+  ['DC', /^(DC)/],
+  ['DS', /^(DS)/],
+  ['D', /^(D)/],
+  ['E', /^(E)/],
+  ['L', /^(L)/],
+  ['M', /^(M)/],
+  ['B', /^(B|BS|BAS|BPS)/],
+  ['A', /^(A|BASICA)/]
+];
+
 function applyRegionPreset(rows, regionPreset) {
   if (!regionPreset || regionPreset === 'all' || regionPreset === 'custom') {
     return rows;
@@ -16,12 +41,58 @@ function applyRegionPreset(rows, regionPreset) {
   return rows.filter((row) => presetRegions.includes(row.region));
 }
 
-function applyFilters(rows, { region, family, availability }) {
+function getRowResourceType(row) {
+  const family = String(row?.family || '').toLowerCase();
+  const sku = String(row?.sku || '').toLowerCase();
+  if (family.endsWith('family') || /^standard_/.test(String(row?.sku || ''))) {
+    return 'Compute';
+  }
+  if (family.includes('disk') || sku.includes('disk') || sku.includes('snapshot')) {
+    return 'Disk';
+  }
+  return 'Other';
+}
+
+function canonicalizeFamilyToken(rawValue) {
+  const value = String(rawValue || '').trim();
+  if (!value) {
+    return '';
+  }
+
+  return value
+    .replace(/^standard_/i, '')
+    .replace(/^standard/i, '')
+    .replace(/^basic_/i, 'Basic')
+    .replace(/family$/i, '')
+    .replace(/v\d+.*$/i, '')
+    .replace(/[\s_-]/g, '')
+    .toUpperCase();
+}
+
+function canonicalComputeFamilyLabel(rawFamily, skuName) {
+  const tokens = [canonicalizeFamilyToken(rawFamily), canonicalizeFamilyToken(skuName)];
+  for (const token of tokens) {
+    if (!token) {
+      continue;
+    }
+
+    for (const [label, pattern] of CANONICAL_COMPUTE_FAMILY_PATTERNS) {
+      if (pattern.test(token)) {
+        return label;
+      }
+    }
+  }
+
+  return '';
+}
+
+function applyFilters(rows, { region, family, availability, resourceType }) {
   return rows.filter((r) => {
     const byRegion = !region || region === 'all' || r.region === region;
     const byFamily = !family || family === 'all' || r.family === family;
     const byAvailability = !availability || availability === 'all' || r.availability === availability;
-    return byRegion && byFamily && byAvailability;
+    const byType = !resourceType || resourceType === 'all' || getRowResourceType(r) === resourceType;
+    return byRegion && byFamily && byAvailability && byType;
   });
 }
 
@@ -150,24 +221,40 @@ async function getCapacityRowsPaginated(filters) {
     const allRows = applyFilters(applyRegionPreset(mockRows, filters.regionPreset), filters);
     const total = allRows.length;
     const pagedRows = allRows.slice(offset, offset + pageSize);
+    const facets = {
+      regions: [...new Set(allRows.map((row) => row.region).filter(Boolean))].sort(),
+      families: [...new Set(allRows.map((row) => row.family).filter(Boolean))].sort()
+    };
+    const summary = {
+      constrainedRows: allRows.filter((row) => row.availability === 'CONSTRAINED').length,
+      availableQuota: allRows.reduce((acc, row) => acc + (Number(row.quotaLimit || 0) - Number(row.quotaCurrent || 0)), 0),
+      monthlyCost: allRows.reduce((acc, row) => acc + Number(row.monthlyCost || 0), 0)
+    };
 
     return {
       data: pagedRows.map((r) => new CapacityDetailDTO(r)),
-      pagination: new PaginationDTO(total, pageSize, pageNumber)
+      pagination: new PaginationDTO(total, pageSize, pageNumber),
+      facets,
+      summary
     };
   }
 
   const request = pool.request();
-  
-  // First, get total count for pagination
+
+  // First, get total count and summary metrics for the full filtered result set.
   let countQuery = `
-    SELECT COUNT(1) AS total
+    SELECT
+      COUNT(1) AS total,
+      SUM(CASE WHEN availabilityState = 'CONSTRAINED' THEN 1 ELSE 0 END) AS constrainedRows,
+      SUM(ISNULL(quotaLimit, 0) - ISNULL(quotaCurrent, 0)) AS availableQuota,
+      SUM(ISNULL(monthlyCostEstimate, 0)) AS monthlyCost
     FROM dbo.CapacityLatest
     WHERE 1 = 1
   `;
   countQuery += appendCommonSqlFilters(filters, request);
   const countResult = await request.query(countQuery);
-  const total = countResult.recordset[0]?.total || 0;
+  const summaryRow = countResult.recordset[0] || {};
+  const total = Number(summaryRow.total || 0);
 
   // Then get paginated rows for the capacity grid.
   const pageRequest = pool.request();
@@ -203,12 +290,34 @@ async function getCapacityRowsPaginated(filters) {
 
   const result = await pageRequest.query(query);
 
+  const facetRequest = pool.request();
+  let facetQuery = `
+    SELECT DISTINCT
+      region,
+      skuFamily AS family
+    FROM dbo.CapacityLatest
+    WHERE 1 = 1
+  `;
+  facetQuery += appendCommonSqlFilters(filters, facetRequest);
+  const facetResult = await facetRequest.query(facetQuery);
+
   const data = result.recordset.map((r) => new CapacityDetailDTO(r));
   const pagination = new PaginationDTO(total, pageSize, pageNumber);
+  const facets = {
+    regions: [...new Set((facetResult.recordset || []).map((row) => row.region).filter(Boolean))].sort(),
+    families: [...new Set((facetResult.recordset || []).map((row) => row.family).filter(Boolean))].sort()
+  };
+  const summary = {
+    constrainedRows: Number(summaryRow.constrainedRows || 0),
+    availableQuota: Number(summaryRow.availableQuota || 0),
+    monthlyCost: Number(summaryRow.monthlyCost || 0)
+  };
 
   return {
     data,
-    pagination
+    pagination,
+    facets,
+    summary
   };
 }
 
@@ -344,10 +453,12 @@ async function getCapacityTrends(filters) {
 }
 
 function toFamilyLabel(familyName) {
-  const cleaned = String(familyName || '').replace(/family$/i, '');
-  const reduced = cleaned.replace(/^standard/i, '');
-  const simple = reduced.replace(/v\d+$/i, '');
-  return (simple || 'Unknown').toUpperCase();
+  return canonicalComputeFamilyLabel(familyName, '') || 'Unknown';
+}
+
+function isVmComputeFamilyName(familyName) {
+  return /^standard[a-z0-9]+family$/i.test(String(familyName || '').trim())
+    || /^basic[a-z0-9]+family$/i.test(String(familyName || '').trim());
 }
 
 function getCapacityScoreLabel(summary) {
@@ -472,10 +583,14 @@ async function getFamilySummary(filters) {
   const byFamily = new Map();
 
   for (const row of rows) {
-    const key = row.family;
+    if (!isVmComputeFamilyName(row.family)) {
+      continue;
+    }
+
+    const key = toFamilyLabel(row.family);
     if (!byFamily.has(key)) {
       byFamily.set(key, {
-        family: toFamilyLabel(row.family),
+        family: key,
         familyRaw: row.family,
         skus: new Set(),
         okSkus: new Set(),

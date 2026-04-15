@@ -995,7 +995,9 @@ function renderCapacityScorePaging() {
 function renderSummary(data, summaryOverride = null) {
   const total = Number(capacityPaging.total || data.length || 0);
   const rowsShown = Number(data.length || 0);
-  const rowsLabel = total > rowsShown ? `${rowsShown} of ${total}` : `${total}`;
+  const rowsLabel = total > rowsShown 
+    ? `${rowsShown.toLocaleString()} of ${total.toLocaleString()}` 
+    : `${total.toLocaleString()}`;
   const constrained = summaryOverride && Number.isFinite(Number(summaryOverride.constrainedRows))
     ? Number(summaryOverride.constrainedRows)
     : data.filter((r) => r.availability === 'CONSTRAINED').length;
@@ -1008,8 +1010,8 @@ function renderSummary(data, summaryOverride = null) {
 
   summaryCards.innerHTML = `
     <div class="card"><h3>Rows</h3><p>${rowsLabel}</p></div>
-    <div class="card"><h3>Constrained Rows</h3><p>${constrained}</p></div>
-    <div class="card"><h3>Available Quota</h3><p>${totalAvailQuota}</p></div>
+    <div class="card"><h3>Constrained Rows</h3><p>${constrained.toLocaleString()}</p></div>
+    <div class="card"><h3>Available Quota</h3><p>${totalAvailQuota.toLocaleString()}</p></div>
     <div class="card"><h3>Monthly Cost</h3><p>$${monthly.toLocaleString()}</p></div>
   `;
 }
@@ -1060,10 +1062,10 @@ function renderRegionMatrixSummary(data) {
   });
 
   summaryCards.innerHTML = `
-    <div class="card"><h3>Families Shown</h3><p>${families.length}</p></div>
-    <div class="card"><h3>Families with Any OK</h3><p>${familiesWithAnyOk}</p></div>
-    <div class="card"><h3>Fully Blocked Families</h3><p>${familiesFullyBlocked}</p></div>
-    <div class="card"><h3>Regions in Scope</h3><p>${regions.length}</p></div>
+    <div class="card"><h3>Families Shown</h3><p>${families.length.toLocaleString()}</p></div>
+    <div class="card"><h3>Families with Any OK</h3><p>${familiesWithAnyOk.toLocaleString()}</p></div>
+    <div class="card"><h3>Fully Blocked Families</h3><p>${familiesFullyBlocked.toLocaleString()}</p></div>
+    <div class="card"><h3>Regions in Scope</h3><p>${regions.length.toLocaleString()}</p></div>
   `;
 }
 

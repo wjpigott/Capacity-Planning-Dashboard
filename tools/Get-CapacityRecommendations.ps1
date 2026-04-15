@@ -20,14 +20,23 @@ param(
 )
 
 function Initialize-AzureContext {
+    $result = [pscustomobject]@{
+        hasContext = $false
+        loginAttempted = $false
+        message = ''
+    }
+
     if (-not (Get-Command -Name 'Get-AzContext' -ErrorAction SilentlyContinue)) {
-        return
+        $result.message = 'Get-AzContext cmdlet is not available in this PowerShell host.'
+        return $result
     }
 
     try {
         $ctx = Get-AzContext -ErrorAction SilentlyContinue
         if ($ctx -and $ctx.Subscription) {
-            return
+            $result.hasContext = $true
+            $result.message = "Using existing Azure context for subscription '$($ctx.Subscription.Id)'."
+            return $result
         }
     }
     catch {
@@ -35,12 +44,25 @@ function Initialize-AzureContext {
 
     if (Get-Command -Name 'Connect-AzAccount' -ErrorAction SilentlyContinue) {
         try {
+            $result.loginAttempted = $true
             $null = Connect-AzAccount -Identity -ErrorAction Stop
+            $ctx = Get-AzContext -ErrorAction SilentlyContinue
+            if ($ctx -and $ctx.Subscription) {
+                $result.hasContext = $true
+                $result.message = "Managed identity sign-in succeeded for subscription '$($ctx.Subscription.Id)'."
+                return $result
+            }
+            $result.message = 'Managed identity sign-in completed, but no Azure subscription context is available.'
+            return $result
         }
         catch {
-            # Non-fatal: if MSI is unavailable, script may still work with an existing context.
+            $result.message = "Managed identity sign-in failed: $($_.Exception.Message)"
+            return $result
         }
     }
+
+    $result.message = 'Connect-AzAccount cmdlet is not available in this PowerShell host.'
+    return $result
 }
 
 function ConvertFrom-JsonArray {
@@ -135,7 +157,10 @@ if ($regions.Count -eq 0) {
     throw 'At least one region is required.'
 }
 
-Initialize-AzureContext
+$contextStatus = Initialize-AzureContext
+if (-not $contextStatus.hasContext) {
+    throw "Azure context is required for recommendations but is unavailable. $($contextStatus.message)"
+}
 
 $invokeArgs = @{
     Recommend  = $TargetSku
@@ -154,11 +179,41 @@ if ($ShowSpot.IsPresent) {
     $invokeArgs.ShowSpot = $true
 }
 
-# Invoke from the local repo directory so the script can find the AzVMAvailability module
+# Invoke from the local repo directory so the script can find the AzVMAvailability module.
+# Use a child pwsh process to prevent script-level `exit` from terminating this wrapper silently.
+$currentPwsh = (Get-Process -Id $PID).Path
+$childArgs = @(
+    '-NoLogo',
+    '-NoProfile',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-File',
+    $scriptPath,
+    '-Recommend',
+    $TargetSku,
+    '-Region'
+)
+$childArgs += $regions
+$childArgs += @(
+    '-TopN',
+    [string]$TopN,
+    '-MinScore',
+    [string]$MinScore,
+    '-JsonOutput',
+    '-NoPrompt'
+)
+
+if ($ShowPricing.IsPresent) {
+    $childArgs += '-ShowPricing'
+}
+
+if ($ShowSpot.IsPresent) {
+    $childArgs += '-ShowSpot'
+}
+
 Push-Location $repoPath.Path
 try {
-    # JsonOutput mode should write JSON only; capture and normalize just in case warnings leak.
-    $output = & $scriptPath @invokeArgs 2>&1
+    $output = & $currentPwsh @childArgs 2>&1
 }
 finally {
     Pop-Location
@@ -167,7 +222,7 @@ finally {
 $text = ($output | Out-String).Trim()
 
 if (-not $text) {
-    throw 'Recommendation command produced no output.'
+    throw "Recommendation command produced no output. Context message: $($contextStatus.message)"
 }
 
 try {

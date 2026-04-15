@@ -12,6 +12,10 @@ const DEFAULT_REGION_CONCURRENCY = 4;
 const DEFAULT_ARM_TIMEOUT_MS = 30000;
 
 let schedulerHandle;
+let schedulerConfig = {
+  intervalMinutes: 0,
+  runOnStartup: false
+};
 const ingestStatus = {
   inProgress: false,
   lastRunUtc: null,
@@ -447,15 +451,37 @@ function getIngestionStatus() {
   return { ...ingestStatus };
 }
 
-function startIngestionScheduler() {
+function normalizeSchedulerConfig(config = {}) {
+  const envInterval = Number(process.env.INGEST_INTERVAL_MINUTES || 0);
+  const envRunOnStartup = String(process.env.INGEST_ON_STARTUP || '').toLowerCase() === 'true';
+
+  const intervalMinutesRaw = config.intervalMinutes == null ? envInterval : Number(config.intervalMinutes);
+  const intervalMinutes = Number.isFinite(intervalMinutesRaw)
+    ? Math.max(0, Math.min(Math.trunc(intervalMinutesRaw), 7 * 24 * 60))
+    : 0;
+
+  const runOnStartup = config.runOnStartup == null
+    ? envRunOnStartup
+    : String(config.runOnStartup).toLowerCase() === 'true' || config.runOnStartup === true;
+
+  return {
+    intervalMinutes,
+    runOnStartup
+  };
+}
+
+function applyIngestionScheduler(config = {}, options = {}) {
+  const normalized = normalizeSchedulerConfig(config);
+  const shouldRunStartup = Boolean(options.runStartup) && normalized.runOnStartup;
+
   if (schedulerHandle) {
-    return;
+    clearInterval(schedulerHandle);
+    schedulerHandle = null;
   }
 
-  const intervalMinutes = Number(process.env.INGEST_INTERVAL_MINUTES || 0);
-  const runOnStartup = (process.env.INGEST_ON_STARTUP || '').toLowerCase() === 'true';
+  schedulerConfig = normalized;
 
-  if (runOnStartup) {
+  if (shouldRunStartup) {
     setTimeout(() => {
       runCapacityIngestion().catch((err) => {
         ingestStatus.lastError = err.message;
@@ -463,17 +489,33 @@ function startIngestionScheduler() {
     }, 1000);
   }
 
-  if (intervalMinutes > 0) {
+  if (normalized.intervalMinutes > 0) {
     schedulerHandle = setInterval(() => {
       runCapacityIngestion().catch((err) => {
         ingestStatus.lastError = err.message;
       });
-    }, intervalMinutes * 60 * 1000);
+    }, normalized.intervalMinutes * 60 * 1000);
   }
+
+  return { ...schedulerConfig };
+}
+
+function startIngestionScheduler(config = {}) {
+  return applyIngestionScheduler(config, { runStartup: true });
+}
+
+function updateIngestionScheduler(config = {}) {
+  return applyIngestionScheduler(config, { runStartup: false });
+}
+
+function getIngestionSchedulerConfig() {
+  return { ...schedulerConfig };
 }
 
 module.exports = {
   runCapacityIngestion,
   getIngestionStatus,
-  startIngestionScheduler
+  startIngestionScheduler,
+  updateIngestionScheduler,
+  getIngestionSchedulerConfig
 };

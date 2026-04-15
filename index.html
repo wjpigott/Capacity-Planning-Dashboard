@@ -210,14 +210,14 @@
             </div>
             <div class="score-explainer">
               <strong>Derived score</strong> comes from persisted quota and capacity data in SQL.
-              <strong>Live placement score</strong> is only populated when you press <span>Refresh Live Placement</span>.
-              Desired Placement Count is capped at <strong>1000 VMs</strong> per live lookup.
+              <strong>Live placement score</strong> and <strong>State</strong> come from saved SQL snapshots for the selected Desired Placement Count when available, and are updated immediately when you press <span>Refresh Live Placement</span>.
+              Desired Placement Count acts as a per-report what-if input for the currently filtered SKU-region rows, capped at <strong>1000 VMs</strong> per live lookup.
             </div>
             <div class="score-legend" aria-label="Capacity score legend">
               <span class="score-legend-item"><span class="status-pill status-pill--ok">AVL</span> Available</span>
               <span class="score-legend-item"><span class="status-pill status-pill--warn">RST</span> Restricted</span>
               <span class="score-legend-item"><span class="status-pill status-pill--off">UNA</span> Unavailable</span>
-              <span class="score-legend-item"><span class="status-pill status-pill--muted">PND</span> Not checked yet</span>
+              <span class="score-legend-item"><span class="status-pill status-pill--muted">--</span> Not checked yet</span>
               <span class="score-legend-item"><span class="status-pill status-pill--muted">NS</span> No live score returned</span>
             </div>
             <p id="capacityScoreLiveStatus" class="inline-note" style="margin: 0 0 8px;">Live placement has not been refreshed in this session.</p>
@@ -243,6 +243,21 @@
                 </thead>
                 <tbody></tbody>
               </table>
+            </div>
+            <div class="grid-pagination" id="capacityScorePagination">
+              <div class="grid-pagination-info" id="capacityScorePageInfo">Showing 0-0 of 0</div>
+              <div class="grid-pagination-controls">
+                <label for="capacityScorePageSize">Rows per page</label>
+                <select id="capacityScorePageSize">
+                  <option value="50" selected>50</option>
+                  <option value="100">100</option>
+                  <option value="250">250</option>
+                  <option value="500">500</option>
+                </select>
+                <button id="capacityScorePrevPage" type="button">Previous</button>
+                <span id="capacityScorePageLabel">Page 1 of 1</span>
+                <button id="capacityScoreNextPage" type="button">Next</button>
+              </div>
             </div>
             <p id="capacityScoreEmpty" class="inline-note" style="display:none; margin-top:8px;">No capacity score data available</p>
 
@@ -336,7 +351,38 @@
       <section class="page" id="admin-page">
         <div class="admin-page-label">Data Ingestion</div>
         <p class="page-description">Trigger live ingestion from Azure ARM APIs and manage the subscription catalog stored in SQL. These operations write to the database.</p>
+        <div class="report-explainer" style="margin-bottom: 12px;">
+          <strong>Refresh schedule</strong>
+          <span><strong>Capacity ingest</strong> and <strong>Live placement refresh</strong> schedules are stored in SQL and can be updated here without an app restart.</span>
+          <span><strong>Interval (minutes)</strong> examples: <strong>30</strong> = every 30 minutes, <strong>60</strong> = hourly, <strong>1440</strong> = daily, and <strong>0</strong> = disabled.</span>
+          <span>Use startup toggles when you want a job to run one time after service start, in addition to its repeating interval.</span>
+        </div>
         <div id="adminStatus" class="admin-status info">No admin action submitted yet.</div>
+
+        <div class="surface" style="margin-top: 12px; margin-bottom: 12px;">
+          <div class="filter-section-label">Scheduler Settings (Stored in SQL)</div>
+          <div class="filters" style="align-items: end;">
+            <label>Capacity Ingest Interval (minutes)
+              <input id="ingestIntervalMinutesInput" type="number" min="0" max="10080" step="1" value="0" />
+            </label>
+            <label style="min-width: 180px;">
+              <span style="display:block; margin-bottom: 6px;">Capacity Ingest Startup Run</span>
+              <input id="ingestRunOnStartupInput" type="checkbox" /> Run once on startup
+            </label>
+            <label>Live Placement Interval (minutes)
+              <input id="livePlacementIntervalMinutesInput" type="number" min="0" max="10080" step="1" value="0" />
+            </label>
+            <label style="min-width: 180px;">
+              <span style="display:block; margin-bottom: 6px;">Live Placement Startup Run</span>
+              <input id="livePlacementRunOnStartupInput" type="checkbox" /> Run once on startup
+            </label>
+          </div>
+          <div class="actions" style="margin-top: 10px;">
+            <button id="saveSchedulerSettingsBtn" type="button">Save Schedule Settings</button>
+            <button id="reloadSchedulerSettingsBtn" type="button">Reload Schedule Settings</button>
+          </div>
+          <p id="scheduleSettingsStatus" class="inline-note" style="margin: 8px 0 0;">Schedule settings have not been loaded yet.</p>
+        </div>
 
         <div class="admin-status-grid">
           <div class="admin-status-card">

@@ -176,8 +176,7 @@ async function getSubscriptionsFromTable({ search, limit } = {}) {
   let query = `
     SELECT TOP (@limitRows)
       subscriptionId,
-      subscriptionName,
-      updatedAtUtc
+      subscriptionName
     FROM dbo.Subscriptions
     WHERE 1 = 1
   `;
@@ -207,6 +206,12 @@ async function ensureSubscriptionsTableSchema(pool) {
         CONSTRAINT PK_Subscriptions PRIMARY KEY (subscriptionId)
       );
     END;
+
+    IF COL_LENGTH('dbo.Subscriptions', 'subscriptionName') IS NULL
+      EXEC('ALTER TABLE dbo.Subscriptions ADD subscriptionName NVARCHAR(256) NOT NULL CONSTRAINT DF_Subscriptions_SubscriptionName DEFAULT (''Unknown subscription'')');
+
+    IF COL_LENGTH('dbo.Subscriptions', 'updatedAtUtc') IS NULL
+      EXEC('ALTER TABLE dbo.Subscriptions ADD updatedAtUtc DATETIME2 NOT NULL CONSTRAINT DF_Subscriptions_UpdatedAtUtc DEFAULT GETUTCDATE()');
   `;
 
   const backfillScript = `
@@ -944,6 +949,106 @@ async function listDashboardOperations(options = {}) {
   }));
 }
 
+async function ensureDashboardSettingSchema(pool) {
+  const createScript = `
+    IF OBJECT_ID('dbo.DashboardSetting', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.DashboardSetting (
+        settingKey NVARCHAR(128) NOT NULL PRIMARY KEY,
+        settingValue NVARCHAR(MAX) NOT NULL,
+        updatedAtUtc DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+      )
+    END;
+  `;
+
+  await pool.request().query(createScript);
+}
+
+async function getDashboardSettings(prefix = null) {
+  const pool = await getSqlPool();
+  if (!pool) {
+    return {};
+  }
+
+  await ensureDashboardSettingSchema(pool);
+
+  const request = pool.request();
+  let where = '';
+
+  if (prefix && String(prefix).trim()) {
+    request.input('prefix', sql.NVarChar(128), `${String(prefix).trim()}%`);
+    where = 'WHERE settingKey LIKE @prefix';
+  }
+
+  const result = await request.query(`
+    SELECT settingKey, settingValue, updatedAtUtc
+    FROM dbo.DashboardSetting
+    ${where}
+    ORDER BY settingKey ASC
+  `);
+
+  const map = {};
+  for (const row of result.recordset || []) {
+    map[row.settingKey] = {
+      value: row.settingValue,
+      updatedAtUtc: row.updatedAtUtc
+    };
+  }
+
+  return map;
+}
+
+async function upsertDashboardSettings(entries = {}) {
+  const keys = Object.keys(entries || {});
+  if (keys.length === 0) {
+    return 0;
+  }
+
+  const pool = await getSqlPool();
+  if (!pool) {
+    return 0;
+  }
+
+  await ensureDashboardSettingSchema(pool);
+
+  let updatedCount = 0;
+  for (const key of keys) {
+    const normalizedKey = String(key || '').trim();
+    if (!normalizedKey) {
+      continue;
+    }
+
+    const rawValue = entries[key];
+    const normalizedValue = rawValue == null ? '' : String(rawValue);
+
+    const request = pool.request();
+    request.input('settingKey', sql.NVarChar(128), normalizedKey);
+    request.input('settingValue', sql.NVarChar(sql.MAX), normalizedValue);
+
+    await request.query(`
+      MERGE dbo.DashboardSetting AS target
+      USING (
+        SELECT
+          @settingKey AS settingKey,
+          @settingValue AS settingValue,
+          SYSUTCDATETIME() AS updatedAtUtc
+      ) AS source
+      ON target.settingKey = source.settingKey
+      WHEN MATCHED THEN
+        UPDATE SET
+          settingValue = source.settingValue,
+          updatedAtUtc = source.updatedAtUtc
+      WHEN NOT MATCHED THEN
+        INSERT (settingKey, settingValue, updatedAtUtc)
+        VALUES (source.settingKey, source.settingValue, source.updatedAtUtc);
+    `);
+
+    updatedCount += 1;
+  }
+
+  return updatedCount;
+}
+
 async function ensureLivePlacementSnapshotSchema(pool) {
   const createScript = `
     IF OBJECT_ID('dbo.LivePlacementSnapshot', 'U') IS NULL
@@ -1091,6 +1196,7 @@ async function ensurePhase3Schema() {
   await ensureLivePlacementSnapshotSchema(pool);
   await ensureDashboardErrorLogSchema(pool);
   await ensureDashboardOperationLogSchema(pool);
+  await ensureDashboardSettingSchema(pool);
 
   const alterScript = `
     IF COL_LENGTH('dbo.CapacitySnapshot', 'subscriptionId') IS NULL
@@ -1169,5 +1275,8 @@ module.exports = {
   ensureDashboardOperationLogSchema,
   logDashboardOperation,
   listDashboardOperations,
+  ensureDashboardSettingSchema,
+  getDashboardSettings,
+  upsertDashboardSettings,
   ensurePhase3Schema
 };

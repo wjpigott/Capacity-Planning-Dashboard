@@ -69,7 +69,8 @@ Status legend:
 - [x] Managed identity token flow for ARM ingestion
 - [x] Region preset ingestion (`USMajor`)
 - [x] Family filter ingestion — optional; set `INGEST_QUOTA_FAMILY_FILTERS` to a comma-separated list to restrict, or omit entirely to ingest all VM families
-- [x] Ingestion scheduler (`INGEST_ON_STARTUP`, `INGEST_INTERVAL_MINUTES`)
+- [x] Ingestion scheduler (DB-backed admin settings with environment fallback)
+- [ ] Move recurring scheduler execution to Function App TimerTrigger jobs (ingestion + live placement)
 - [ ] Retry/backoff and dead-letter behavior for ingestion failures
 
 #### API and analytics
@@ -99,7 +100,7 @@ Status legend:
 - [x] On-demand live placement refresh using `Get-AzVMAvailability` placement scores
 - [x] Worker-first live placement routing with local fallback for rollback safety
 - [x] Ingestion status widget in UI
-- [ ] Admin UI setting for scheduled refresh rates (quota discovery, capacity ingestion, and future background refresh jobs)
+- [x] Admin UI setting for scheduled refresh rates (capacity ingestion and live placement refresh stored in SQL)
 - [ ] Admin UI setting for quota discovery scope selection (management group and, if needed, quota group picker/default)
 - [x] Pagination for report grids (prefer server-side paging for large result sets)
 - [ ] Export (CSV/XLSX) actions wired to backend
@@ -118,7 +119,11 @@ Status legend:
 - [x] Worker packaging/deploy script scaffold
 - [x] Database error log table for support visibility (`dbo.DashboardErrorLog`)
 - [x] Live placement error display on reports (compact error badges visible in grid)
-- [ ] Admin error log viewer/dashboard for support triage
+- [x] Operation history logging (`dbo.DashboardOperationLog`) for audit/support
+- [x] Admin operation history UI showing recent ingest and refresh events
+- [x] Live placement snapshot persistence (`dbo.LivePlacementSnapshot`) across sessions and desired-count refreshes
+- [ ] Admin error log reviewer/dashboard for support triage
+- [x] Daily scheduled live placement refresh with batching
 - [ ] CI/CD pipeline for build/deploy/migrations
 - [ ] Scheduled ingestion monitoring/alerts
 - [ ] Deployment follow-up: investigate why `Compute Recommendations Role` assigned at the management-group scope did not satisfy `Microsoft.Compute/locations/placementScores/generate/action` for the worker managed identity, while the subscription-level assignment did
@@ -151,6 +156,62 @@ Optional worker-first settings:
 - `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK`
 
 When `CAPACITY_WORKER_BASE_URL` is set, live placement refresh calls the Azure Function worker first. If the worker is unavailable and `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK` is not `true`, the dashboard falls back to the in-process App Service path to preserve rollback safety.
+
+## Dashboard web app deployment
+
+Use zip/web package deploy for the dashboard App Service.
+
+Current target:
+
+- Resource group: `CapacityDashboard`
+- App Service: `app-capdash-dev-cap001`
+
+Important packaging rule:
+
+- Do not zip the whole dashboard folder blindly.
+- Exclude deployment artifacts, prior zip files, downloaded App Service logs, `.git`, and `node_modules`.
+- Including `artifacts/`, `appservice-logs*/`, or prior `deploy*.zip` files makes uploads much larger and can cause Kudu extraction failures such as `PathTooLongException`.
+
+Package only the runtime files and folders:
+
+```powershell
+$items = @(
+	'app.js',
+	'index.html',
+	'styles.css',
+	'package.json',
+	'package-lock.json',
+	'src',
+	'sql',
+	'scripts',
+	'functions',
+	'docs',
+	'api-contract.md'
+)
+
+Compress-Archive -Path $items -DestinationPath ..\webpackage-capdash-clean.zip -Force
+```
+
+Deploy the package with:
+
+```powershell
+az webapp deploy \
+	--resource-group CapacityDashboard \
+	--name app-capdash-dev-cap001 \
+	--src-path ..\webpackage-capdash-clean.zip \
+	--type zip
+```
+
+Verification checks after deploy:
+
+- `curl.exe -i -s https://app-capdash-dev-cap001.azurewebsites.net/`
+- `curl.exe -i -s https://app-capdash-dev-cap001.azurewebsites.net/api/auth/me`
+
+Expected behavior:
+
+- Deployment should complete in roughly seconds to a small number of minutes, not stall on a huge upload.
+- The clean package should stay small; the last known good package was about 456 KB.
+- If deployment is slow or fails during extraction, inspect the zip contents first before retrying.
 
 ## Infrastructure deployment
 
@@ -252,7 +313,7 @@ Approvals are required before:
 
 - **Auto-discover**: If `INGEST_SUBSCRIPTION_IDS` is not set, the service calls `/subscriptions` to enumerate all accessible subscriptions.
 - **Explicit list**: Set `INGEST_SUBSCRIPTION_IDS=sub-1,sub-2,sub-3` to ingest only those subscriptions.
-- **Frequency**: Control `INGEST_INTERVAL_MINUTES` to tune refresh cadence (e.g., 30 = every 30 minutes).
+- **Frequency**: Use Admin -> Data Ingestion -> Scheduler Settings to store cadence in SQL (for example 30 = every 30 minutes). `INGEST_INTERVAL_MINUTES` remains the fallback default when SQL settings are unavailable.
 - **Batch tuning**: Subscription batch size (100) and inter-batch delay (2s) are hardcoded; adjust in `azureIngestionService.js` if needed for different ARM throttle profiles.
 
 This design avoids the performance and cost penalties of real-time API calls during dashboard queries — all filtering happens on indexed SQL tables. Batching and retry logic ensure safe ingestion at scale.
@@ -274,8 +335,8 @@ Required app settings:
 - `INGEST_QUOTA_FAMILY_FILTERS` (optional; comma-separated VM family names to restrict ingestion, e.g. `standard_BS,standard_DS`; omit or leave empty to ingest all families)
 - `INGEST_SUBSCRIPTION_HASH_SALT` (optional salt for masked subscription key hashing)
 - `INGEST_SUBSCRIPTION_IDS` (optional comma-separated list; if omitted, enabled subscriptions are auto-discovered)
-- `INGEST_ON_STARTUP` (`true`/`false`)
-- `INGEST_INTERVAL_MINUTES` (`0` disables scheduling)
+- `INGEST_ON_STARTUP` (`true`/`false`, fallback default when SQL schedule settings are not present)
+- `INGEST_INTERVAL_MINUTES` (`0` disables scheduling, fallback default when SQL schedule settings are not present)
 - `ADMIN_RBAC_MODE` (`off` by default; set to `enforce` after App Service Authentication is enabled)
 - `ADMIN_ROLE_NAME` (`CapacityAdmin` by default)
 - `QUOTA_MANAGEMENT_GROUP_ID` (required for live quota discovery)
@@ -283,6 +344,15 @@ Required app settings:
 - `CAPACITY_WORKER_SHARED_SECRET` (optional shared secret header value for worker calls)
 - `CAPACITY_WORKER_TIMEOUT_MS` (optional timeout for worker calls, default `60000`)
 - `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK` (`true` disables App Service fallback when the worker is configured but unavailable)
+- `LIVE_PLACEMENT_REFRESH_ON_STARTUP` (`true`/`false`, fallback default when SQL schedule settings are not present)
+- `LIVE_PLACEMENT_REFRESH_INTERVAL_MINUTES` (`0` disables scheduling; `1440` gives a daily refresh; fallback default when SQL schedule settings are not present)
+- `LIVE_PLACEMENT_REFRESH_REGION_PRESET` (default `USMajor`)
+- `LIVE_PLACEMENT_REFRESH_DESIRED_COUNT` (default `1`; use `1` if you want scheduled results reused automatically in the Capacity Score grid)
+- `LIVE_PLACEMENT_REFRESH_SUBSCRIPTION_IDS` (optional comma-separated list; falls back to `INGEST_SUBSCRIPTION_IDS` when omitted)
+- `LIVE_PLACEMENT_REFRESH_REGION` (optional single-region override, default `all`)
+- `LIVE_PLACEMENT_REFRESH_FAMILY` (optional family filter, default `all`)
+- `LIVE_PLACEMENT_REFRESH_AVAILABILITY` (optional availability filter, default `all`)
+- `LIVE_PLACEMENT_REFRESH_EXTRA_SKUS` (optional comma-separated extra SKUs for scheduled placement checks)
 
 Runtime note:
 
@@ -440,13 +510,16 @@ Key query behavior:
 - The value is passed through to `Get-AzVMAvailability` as `DesiredCount`, which tells Azure placement scoring how many VMs you want to place at once. Example: `1` asks "can I likely place one VM here?" while `5` asks for the likelihood of placing five VMs together.
 - The live placement UI clamps `Desired Placement Count` to `1000`. If a larger number is entered, the refresh status line reports the requested value and the effective value sent to the live placement API.
 - Increasing `Desired Placement Count` raises the bar for a `High` live placement result, because the placement API is evaluating a larger simultaneous allocation request.
-- `Desired Placement Count` does not change the persisted dashboard score history in `dbo.CapacityScoreSnapshot`; it only changes the transient live placement enrichment shown after a manual refresh.
+- `Desired Placement Count` does not change the persisted dashboard score history in `dbo.CapacityScoreSnapshot`.
+- Live placement refreshes now persist snapshot rows to `dbo.LivePlacementSnapshot` for the effective desired count used by the refresh. The Capacity Score grid auto-hydrates from SQL snapshots for the currently selected desired count.
 
 #### Data Ingestion (Admin page)
 
 Admin UI APIs:
 - `POST /api/admin/ingest/capacity`
 - `GET /api/admin/ingest/status`
+- `GET /api/admin/ingest/schedule`
+- `PUT /api/admin/ingest/schedule`
 
 Protected internal APIs:
 - `POST /internal/ingest/capacity`

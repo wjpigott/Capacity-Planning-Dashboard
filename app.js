@@ -142,6 +142,13 @@ const quotaGroupFilter = document.querySelector('#quotaGroupFilter');
 const quotaRunFilter = document.querySelector('#quotaRunFilter');
 const triggerIngestBtn = document.querySelector('#triggerIngestBtn');
 const subscriptionRefreshBtn = document.querySelector('#subscriptionRefreshBtn');
+const ingestIntervalMinutesInput = document.querySelector('#ingestIntervalMinutesInput');
+const ingestRunOnStartupInput = document.querySelector('#ingestRunOnStartupInput');
+const livePlacementIntervalMinutesInput = document.querySelector('#livePlacementIntervalMinutesInput');
+const livePlacementRunOnStartupInput = document.querySelector('#livePlacementRunOnStartupInput');
+const saveSchedulerSettingsBtn = document.querySelector('#saveSchedulerSettingsBtn');
+const reloadSchedulerSettingsBtn = document.querySelector('#reloadSchedulerSettingsBtn');
+const scheduleSettingsStatus = document.querySelector('#scheduleSettingsStatus');
 const adminNavItems = document.querySelectorAll('[data-admin-only="true"]');
 const ingestStateValue = document.querySelector('#ingestStateValue');
 const ingestLastRunValue = document.querySelector('#ingestLastRunValue');
@@ -161,6 +168,11 @@ const capacityPageSize = document.querySelector('#capacityPageSize');
 const capacityPrevPage = document.querySelector('#capacityPrevPage');
 const capacityNextPage = document.querySelector('#capacityNextPage');
 const capacityPageLabel = document.querySelector('#capacityPageLabel');
+const capacityScorePageInfo = document.querySelector('#capacityScorePageInfo');
+const capacityScorePageSize = document.querySelector('#capacityScorePageSize');
+const capacityScorePrevPage = document.querySelector('#capacityScorePrevPage');
+const capacityScoreNextPage = document.querySelector('#capacityScoreNextPage');
+const capacityScorePageLabel = document.querySelector('#capacityScorePageLabel');
 
 const reportViewLabels = {
   'capacity-grid': 'Capacity Grid',
@@ -181,6 +193,26 @@ const capacityPaging = {
   hasPrev: false
 };
 
+const capacityScorePaging = {
+  pageNumber: 1,
+  pageSize: 50,
+  total: 0,
+  pageCount: 1,
+  hasNext: false,
+  hasPrev: false
+};
+
+let authRedirectInProgress = false;
+
+function redirectToLoginOnce() {
+  if (authRedirectInProgress) {
+    return;
+  }
+
+  authRedirectInProgress = true;
+  window.location.href = '/auth/login';
+}
+
 let ingestStatusPollHandle = null;
 let operationHistoryPollHandle = null;
 
@@ -200,6 +232,124 @@ function setQuotaMovementStatus(message, tone = 'info') {
   if (!quotaMovementStatus) return;
   quotaMovementStatus.className = `admin-status ${tone}`;
   quotaMovementStatus.textContent = message;
+}
+
+function normalizeSchedulerInterval(value, fallback = 0) {
+  const candidate = Number(value);
+  if (!Number.isFinite(candidate)) {
+    return Math.max(0, Math.min(Math.trunc(Number(fallback) || 0), 10080));
+  }
+  return Math.max(0, Math.min(Math.trunc(candidate), 10080));
+}
+
+function setScheduleSettingsStatus(message) {
+  if (!scheduleSettingsStatus) {
+    return;
+  }
+  scheduleSettingsStatus.textContent = message;
+}
+
+function renderSchedulerSettings(settings, runtime) {
+  if (!settings) {
+    return;
+  }
+
+  if (ingestIntervalMinutesInput) {
+    ingestIntervalMinutesInput.value = String(normalizeSchedulerInterval(settings.ingest?.intervalMinutes, 0));
+  }
+
+  if (ingestRunOnStartupInput) {
+    ingestRunOnStartupInput.checked = Boolean(settings.ingest?.runOnStartup);
+  }
+
+  if (livePlacementIntervalMinutesInput) {
+    livePlacementIntervalMinutesInput.value = String(normalizeSchedulerInterval(settings.livePlacement?.intervalMinutes, 0));
+  }
+
+  if (livePlacementRunOnStartupInput) {
+    livePlacementRunOnStartupInput.checked = Boolean(settings.livePlacement?.runOnStartup);
+  }
+
+  const runtimeIngest = runtime?.ingest?.intervalMinutes;
+  const runtimeLive = runtime?.livePlacement?.intervalMinutes;
+  if (runtimeIngest == null || runtimeLive == null) {
+    setScheduleSettingsStatus('Loaded schedule settings from SQL.');
+    return;
+  }
+
+  setScheduleSettingsStatus(`Loaded schedule settings. Runtime intervals: ingest ${runtimeIngest} min, live placement ${runtimeLive} min.`);
+}
+
+async function fetchSchedulerSettings() {
+  const response = await fetch('/api/admin/ingest/schedule');
+  const payload = await response.json();
+
+  if (!response.ok || !payload.ok) {
+    throw new Error(payload.error || 'Failed to load scheduler settings.');
+  }
+
+  return payload;
+}
+
+async function reloadSchedulerSettings() {
+  if (!reloadSchedulerSettingsBtn) {
+    return;
+  }
+
+  setButtonBusy(reloadSchedulerSettingsBtn, true, 'Loading...');
+  setScheduleSettingsStatus('Loading schedule settings from SQL...');
+
+  try {
+    const payload = await fetchSchedulerSettings();
+    renderSchedulerSettings(payload.settings, payload.runtime);
+  } catch (error) {
+    setScheduleSettingsStatus(error.message || 'Failed to load scheduler settings.');
+  } finally {
+    setButtonBusy(reloadSchedulerSettingsBtn, false);
+  }
+}
+
+async function saveSchedulerSettings() {
+  if (!saveSchedulerSettingsBtn) {
+    return;
+  }
+
+  const settings = {
+    ingest: {
+      intervalMinutes: normalizeSchedulerInterval(ingestIntervalMinutesInput?.value, 0),
+      runOnStartup: Boolean(ingestRunOnStartupInput?.checked)
+    },
+    livePlacement: {
+      intervalMinutes: normalizeSchedulerInterval(livePlacementIntervalMinutesInput?.value, 0),
+      runOnStartup: Boolean(livePlacementRunOnStartupInput?.checked)
+    }
+  };
+
+  setButtonBusy(saveSchedulerSettingsBtn, true, 'Saving...');
+  setScheduleSettingsStatus('Saving schedule settings to SQL and applying runtime schedule...');
+
+  try {
+    const response = await fetch('/api/admin/ingest/schedule', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(settings)
+    });
+
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || 'Failed to save scheduler settings.');
+    }
+
+    renderSchedulerSettings(payload.settings, payload.runtime);
+    setAdminStatus('Scheduler settings saved and applied.', 'success');
+  } catch (error) {
+    setScheduleSettingsStatus(error.message || 'Failed to save scheduler settings.');
+    setAdminStatus(error.message || 'Failed to save scheduler settings.', 'error');
+  } finally {
+    setButtonBusy(saveSchedulerSettingsBtn, false);
+  }
 }
 
 function formatTimestamp(value) {
@@ -247,7 +397,7 @@ function getCompactLiveStatus(row) {
       return { short: 'NS', full: 'No live score returned', className: 'status-pill--muted' };
     }
 
-    return { short: 'PND', full: 'Not checked yet', className: 'status-pill--muted' };
+    return { short: '--', full: 'Not checked yet', className: 'status-pill--muted' };
   }
 
   if (row.livePlacementAvailable) {
@@ -424,7 +574,7 @@ async function loadViewerAuth() {
     }
     const auth = payload.auth;
     if (auth.authEnabled && !auth.isAuthenticated) {
-      window.location.href = '/auth/login';
+      redirectToLoginOnce();
       return false; // navigating away — callers should not proceed
     }
     updateTopbarUser(auth);
@@ -801,6 +951,35 @@ function renderCapacityPaging() {
   }
   if (capacityPageSize) {
     capacityPageSize.value = String(pageSize);
+  }
+}
+
+function resetCapacityScorePaging() {
+  capacityScorePaging.pageNumber = 1;
+}
+
+function renderCapacityScorePaging() {
+  const total = Number(capacityScorePaging.total || 0);
+  const pageSize = Number(capacityScorePaging.pageSize || 50);
+  const pageNumber = Number(capacityScorePaging.pageNumber || 1);
+  const pageCount = Math.max(1, Number(capacityScorePaging.pageCount || 1));
+  const start = total === 0 ? 0 : ((pageNumber - 1) * pageSize) + 1;
+  const end = total === 0 ? 0 : Math.min(pageNumber * pageSize, total);
+
+  if (capacityScorePageInfo) {
+    capacityScorePageInfo.textContent = `Showing ${start}-${end} of ${total}`;
+  }
+  if (capacityScorePageLabel) {
+    capacityScorePageLabel.textContent = `Page ${pageNumber} of ${pageCount}`;
+  }
+  if (capacityScorePrevPage) {
+    capacityScorePrevPage.disabled = !capacityScorePaging.hasPrev;
+  }
+  if (capacityScoreNextPage) {
+    capacityScoreNextPage.disabled = !capacityScorePaging.hasNext;
+  }
+  if (capacityScorePageSize) {
+    capacityScorePageSize.value = String(pageSize);
   }
 }
 
@@ -1723,6 +1902,27 @@ function normalizeDesiredPlacementCount() {
   return normalized;
 }
 
+function setCapacityScoreSnapshotStatus(scoreRows, desiredCount) {
+  if (!capacityScoreLiveStatus) {
+    return;
+  }
+
+  const latestSnapshot = (Array.isArray(scoreRows) ? scoreRows : [])
+    .map((row) => row?.liveCheckedAtUtc)
+    .filter(Boolean)
+    .sort((left, right) => new Date(right) - new Date(left))[0];
+
+  if (!latestSnapshot) {
+    capacityScoreLiveStatus.textContent = `No saved live placement snapshot found in SQL for desired count ${desiredCount}. Press Refresh Live Placement to calculate it.`;
+    capacityScoreLiveStatus.title = capacityScoreLiveStatus.textContent;
+    return;
+  }
+
+  const message = `Showing saved live placement snapshot for desired count ${desiredCount}, last checked ${formatTimestamp(latestSnapshot)}. Press Refresh Live Placement to update it.`;
+  capacityScoreLiveStatus.textContent = message;
+  capacityScoreLiveStatus.title = message;
+}
+
 function getFamilyExtraSkus(familyValue) {
   const mapped = FAMILY_EXTRA_SKU_MAP[String(familyValue || '').trim()];
   return Array.isArray(mapped) ? mapped : [];
@@ -1853,6 +2053,12 @@ function getQueryFilters() {
 async function loadCapacityScoreView() {
   const baseFilters = getQueryFilters();
   const base = new URLSearchParams(baseFilters);
+  const desiredCount = normalizeDesiredPlacementCount();
+  base.append('desiredCount', String(desiredCount));
+  
+  // Add pagination parameters
+  base.append('pageNumber', String(capacityScorePaging.pageNumber));
+  base.append('pageSize', String(capacityScorePaging.pageSize));
 
   try {
     const [subscriptionResponse, scoreResponse] = await Promise.all([
@@ -1864,13 +2070,29 @@ async function loadCapacityScoreView() {
     const scorePayload = scoreResponse.ok ? await scoreResponse.json() : { rows: [] };
 
     renderSubscriptionSummary(Array.isArray(subscriptionPayload.rows) ? subscriptionPayload.rows : []);
-    renderCapacityScores(Array.isArray(scorePayload.rows) ? scorePayload.rows : []);
-    if (capacityScoreLiveStatus) {
-      capacityScoreLiveStatus.textContent = 'Live placement has not been refreshed in this session.';
-    }
+  const scoreRows = Array.isArray(scorePayload.rows) ? scorePayload.rows : [];
+  renderCapacityScores(scoreRows);
+    
+    // Update pagination info from response
+    const paging = scorePayload.pagination || {};
+    capacityScorePaging.total = Number(paging.total || 0);
+    capacityScorePaging.pageNumber = Number(paging.pageNumber || capacityScorePaging.pageNumber || 1);
+    capacityScorePaging.pageSize = Number(paging.pageSize || capacityScorePaging.pageSize || 50);
+    capacityScorePaging.pageCount = Math.max(1, Number(paging.pageCount || 1));
+    capacityScorePaging.hasNext = Boolean(paging.hasNext);
+    capacityScorePaging.hasPrev = Boolean(paging.hasPrev);
+    renderCapacityScorePaging();
+    
+    setCapacityScoreSnapshotStatus(scoreRows, desiredCount);
   } catch (_) {
     renderSubscriptionSummary([]);
     renderCapacityScores([]);
+    capacityScorePaging.total = 0;
+    capacityScorePaging.pageCount = 1;
+    capacityScorePaging.hasNext = false;
+    capacityScorePaging.hasPrev = false;
+    renderCapacityScorePaging();
+    setCapacityScoreSnapshotStatus([], normalizeDesiredPlacementCount());
   }
 
   loadedViews.add('capacity-score');
@@ -1951,7 +2173,10 @@ function refreshActiveAnalyticsView() {
   const view = getActiveReportViewKey();
   // Remove from loaded set so the tab handler re-fetches fresh data
   loadedViews.delete(view);
-  if (view === 'capacity-score') return loadCapacityScoreView();
+  if (view === 'capacity-score') {
+    resetCapacityScorePaging();
+    return loadCapacityScoreView();
+  }
   if (view === 'trend') return loadTrendView();
   if (view === 'family-summary') return loadFamilySummaryView();
   if (view === 'region-matrix') return loadRegionMatrixView();
@@ -2011,7 +2236,7 @@ async function loadSubscriptions(showStatus = false) {
   try {
     const response = await fetch(`/api/subscriptions?${query.toString()}`);
     if (response.status === 401) {
-      window.location.href = '/auth/login';
+      redirectToLoginOnce();
       return;
     }
     if (!response.ok) {
@@ -2044,7 +2269,7 @@ async function loadCapacityRows() {
   try {
     const response = await fetch(`/api/capacity/paged?${query.toString()}`);
     if (response.status === 401) {
-      window.location.href = '/auth/login';
+      redirectToLoginOnce();
       return;
     }
     if (!response.ok) {
@@ -2144,6 +2369,7 @@ function wireViewTabs() {
           renderSummary(chartRows);
         }
       } else if (view === 'capacity-score' && !loadedViews.has('capacity-score')) {
+        resetCapacityScorePaging();
         loadCapacityScoreView();
       } else if (view === 'family-summary' && !loadedViews.has('family-summary')) {
         loadFamilySummaryView();
@@ -2175,6 +2401,8 @@ function wireButtons() {
     setAdminStatus('Refreshing subscription catalog...', 'info');
     await loadSubscriptions(true);
   });
+  saveSchedulerSettingsBtn?.addEventListener('click', saveSchedulerSettings);
+  reloadSchedulerSettingsBtn?.addEventListener('click', reloadSchedulerSettings);
   document.getElementById('subscriptionApplyBtn').addEventListener('click', () => {
     resetCapacityPaging();
     loadCapacityRows();
@@ -2203,6 +2431,25 @@ function wireButtons() {
     if (!capacityPaging.hasNext) return;
     capacityPaging.pageNumber = capacityPaging.pageNumber + 1;
     loadCapacityRows();
+  });
+
+  capacityScorePageSize?.addEventListener('change', () => {
+    const nextPageSize = Math.max(10, Math.min(Number(capacityScorePageSize.value || 50), 500));
+    capacityScorePaging.pageSize = nextPageSize;
+    resetCapacityScorePaging();
+    loadCapacityScoreView();
+  });
+
+  capacityScorePrevPage?.addEventListener('click', () => {
+    if (!capacityScorePaging.hasPrev) return;
+    capacityScorePaging.pageNumber = Math.max(1, capacityScorePaging.pageNumber - 1);
+    loadCapacityScoreView();
+  });
+
+  capacityScoreNextPage?.addEventListener('click', () => {
+    if (!capacityScorePaging.hasNext) return;
+    capacityScorePaging.pageNumber = capacityScorePaging.pageNumber + 1;
+    loadCapacityScoreView();
   });
 
   sidebarToggle?.addEventListener('click', () => {
@@ -2273,7 +2520,11 @@ availabilityFilter.addEventListener('change', () => {
   loadCapacityRows();
 });
 
-capacityScoreDesiredCount?.addEventListener('change', normalizeDesiredPlacementCount);
+capacityScoreDesiredCount?.addEventListener('change', () => {
+  normalizeDesiredPlacementCount();
+  resetCapacityScorePaging();
+  loadCapacityScoreView();
+});
 
 wireTabs();
 wireViewTabs();
@@ -2281,13 +2532,18 @@ wireButtons();
 if (capacityPageSize) {
   capacityPaging.pageSize = Math.max(10, Math.min(Number(capacityPageSize.value || 50), 500));
 }
+if (capacityScorePageSize) {
+  capacityScorePaging.pageSize = Math.max(10, Math.min(Number(capacityScorePageSize.value || 50), 500));
+}
 setSidebarCollapsed(false);
 renderCapacityPaging();
+renderCapacityScorePaging();
 syncRegionOptions();
 loadViewerAuth().then((proceed) => {
   if (!proceed) return; // not authenticated — navigating to /auth/login
   loadManagementGroups();
   syncIngestStatus().catch(() => {});
+  reloadSchedulerSettings().catch(() => {});
   syncOperationHistory().catch(() => {});
   // Load subscriptions (fast — queries dbo.Subscriptions table), then load
   // the default capacity-grid view. All other report views load on first click.

@@ -648,11 +648,12 @@ async function getFamilySummary(filters) {
 async function getCapacityScoreSummary(filters) {
   const rows = await getCapacityRows(filters);
   const scoreRows = deriveCapacityScoreRows(rows);
+  const desiredCount = Math.max(1, Math.min(Number(filters?.desiredCount || 1), 1000));
 
-  // Merge in saved live placement snapshots from the last refresh at desired count = 1
-  // so users see their previously-refreshed placement scores across sessions
+  // Merge in saved live placement snapshots for the currently selected desired
+  // count so users see persisted live score/state across sessions.
   try {
-    const livePlacementSnapshots = await getLatestLivePlacementSnapshots(1, 168);
+    const livePlacementSnapshots = await getLatestLivePlacementSnapshots(desiredCount, 168);
     if (Array.isArray(livePlacementSnapshots) && livePlacementSnapshots.length > 0) {
       const snapshotMap = new Map();
       livePlacementSnapshots.forEach((snap) => {
@@ -678,6 +679,30 @@ async function getCapacityScoreSummary(filters) {
   return scoreRows;
 }
 
+async function getCapacityScoreSummaryPaginated(filters = {}, pageNumber = 1, pageSize = 50) {
+  const scoreRows = await getCapacityScoreSummary(filters);
+  
+  const total = scoreRows.length;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const normalizedPageNumber = Math.max(1, Math.min(Number(pageNumber || 1), pageCount));
+  const startIndex = (normalizedPageNumber - 1) * pageSize;
+  const endIndex = startIndex + pageSize;
+  
+  const pagedRows = scoreRows.slice(startIndex, endIndex);
+  
+  return {
+    rows: pagedRows,
+    pagination: {
+      total,
+      pageNumber: normalizedPageNumber,
+      pageSize,
+      pageCount,
+      hasNext: normalizedPageNumber < pageCount,
+      hasPrev: normalizedPageNumber > 1
+    }
+  };
+}
+
 module.exports = {
   getCapacityRows,
   getCapacityRowsPaginated,
@@ -686,5 +711,6 @@ module.exports = {
   getCapacityTrends,
   getFamilySummary,
   deriveCapacityScoreRows,
-  getCapacityScoreSummary
+  getCapacityScoreSummary,
+  getCapacityScoreSummaryPaginated
 };

@@ -16,22 +16,151 @@ const {
   getSubscriptionSummary,
   getCapacityTrends,
   getFamilySummary,
-  getCapacityScoreSummary
+  getCapacityScoreSummary,
+  getCapacityScoreSummaryPaginated
 } = require('./services/capacityService');
-const { getLivePlacementScoreRows } = require('./services/livePlacementService');
+const {
+  getLivePlacementScoreRows,
+  startLivePlacementScheduler,
+  updateLivePlacementScheduler,
+  getLivePlacementSchedulerConfig
+} = require('./services/livePlacementService');
 const { getQuotaCandidates, captureQuotaCandidateSnapshots } = require('./services/quotaCandidateService');
 const { buildQuotaMovePlan, getQuotaCandidateRunHistory, simulateQuotaMovePlan } = require('./services/quotaPlanService');
 const {
   runCapacityIngestion,
   getIngestionStatus,
-  startIngestionScheduler
+  startIngestionScheduler,
+  updateIngestionScheduler,
+  getIngestionSchedulerConfig
 } = require('./services/azureIngestionService');
 const { listManagementGroups, listQuotaGroups } = require('./services/quotaDiscoveryService');
-const { getSqlPool, ensurePhase3Schema, ensureSubscriptionsTableSchema, getCapacityScoreSnapshotHistory, insertDashboardErrorLog, listDashboardErrorLogs, logDashboardOperation, listDashboardOperations } = require('./store/sql');
+const {
+  getSqlPool,
+  ensurePhase3Schema,
+  ensureSubscriptionsTableSchema,
+  getCapacityScoreSnapshotHistory,
+  insertDashboardErrorLog,
+  listDashboardErrorLogs,
+  logDashboardOperation,
+  listDashboardOperations,
+  getDashboardSettings,
+  upsertDashboardSettings
+} = require('./store/sql');
 const { applyIndexes } = require('./maintenance/applyPerformanceIndexes');
 
 const app = express();
 const port = process.env.PORT || 3000;
+
+const DASHBOARD_SETTING_KEYS = {
+  ingestIntervalMinutes: 'schedule.ingest.intervalMinutes',
+  ingestRunOnStartup: 'schedule.ingest.runOnStartup',
+  livePlacementIntervalMinutes: 'schedule.livePlacement.intervalMinutes',
+  livePlacementRunOnStartup: 'schedule.livePlacement.runOnStartup'
+};
+
+function normalizeIntervalMinutes(value, fallback = 0) {
+  const candidate = Number(value);
+  if (!Number.isFinite(candidate)) {
+    return Math.max(0, Math.min(Math.trunc(Number(fallback) || 0), 7 * 24 * 60));
+  }
+
+  return Math.max(0, Math.min(Math.trunc(candidate), 7 * 24 * 60));
+}
+
+function normalizeBoolean(value, fallback = false) {
+  if (value == null) {
+    return Boolean(fallback);
+  }
+
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  const raw = String(value).trim().toLowerCase();
+  return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on';
+}
+
+function getDefaultSchedulerSettings() {
+  return {
+    ingest: {
+      intervalMinutes: normalizeIntervalMinutes(process.env.INGEST_INTERVAL_MINUTES, 0),
+      runOnStartup: normalizeBoolean(process.env.INGEST_ON_STARTUP, false)
+    },
+    livePlacement: {
+      intervalMinutes: normalizeIntervalMinutes(process.env.LIVE_PLACEMENT_REFRESH_INTERVAL_MINUTES, 0),
+      runOnStartup: normalizeBoolean(process.env.LIVE_PLACEMENT_REFRESH_ON_STARTUP, false)
+    }
+  };
+}
+
+function parseSchedulerSettingsFromDb(dbMap = {}) {
+  const defaults = getDefaultSchedulerSettings();
+  const readValue = (key) => (dbMap?.[key]?.value == null ? null : dbMap[key].value);
+
+  return {
+    ingest: {
+      intervalMinutes: normalizeIntervalMinutes(readValue(DASHBOARD_SETTING_KEYS.ingestIntervalMinutes), defaults.ingest.intervalMinutes),
+      runOnStartup: normalizeBoolean(readValue(DASHBOARD_SETTING_KEYS.ingestRunOnStartup), defaults.ingest.runOnStartup)
+    },
+    livePlacement: {
+      intervalMinutes: normalizeIntervalMinutes(readValue(DASHBOARD_SETTING_KEYS.livePlacementIntervalMinutes), defaults.livePlacement.intervalMinutes),
+      runOnStartup: normalizeBoolean(readValue(DASHBOARD_SETTING_KEYS.livePlacementRunOnStartup), defaults.livePlacement.runOnStartup)
+    }
+  };
+}
+
+async function getEffectiveSchedulerSettings() {
+  try {
+    const dbSettings = await getDashboardSettings('schedule.');
+    return parseSchedulerSettingsFromDb(dbSettings);
+  } catch {
+    return getDefaultSchedulerSettings();
+  }
+}
+
+function applyRuntimeSchedulerSettings(settings = {}) {
+  const normalized = {
+    ingest: {
+      intervalMinutes: normalizeIntervalMinutes(settings?.ingest?.intervalMinutes, 0),
+      runOnStartup: normalizeBoolean(settings?.ingest?.runOnStartup, false)
+    },
+    livePlacement: {
+      intervalMinutes: normalizeIntervalMinutes(settings?.livePlacement?.intervalMinutes, 0),
+      runOnStartup: normalizeBoolean(settings?.livePlacement?.runOnStartup, false)
+    }
+  };
+
+  updateIngestionScheduler(normalized.ingest);
+  updateLivePlacementScheduler(normalized.livePlacement);
+  return normalized;
+}
+
+async function saveSchedulerSettings(settings = {}) {
+  const normalized = {
+    ingest: {
+      intervalMinutes: normalizeIntervalMinutes(settings?.ingest?.intervalMinutes, 0),
+      runOnStartup: normalizeBoolean(settings?.ingest?.runOnStartup, false)
+    },
+    livePlacement: {
+      intervalMinutes: normalizeIntervalMinutes(settings?.livePlacement?.intervalMinutes, 0),
+      runOnStartup: normalizeBoolean(settings?.livePlacement?.runOnStartup, false)
+    }
+  };
+
+  const savedCount = await upsertDashboardSettings({
+    [DASHBOARD_SETTING_KEYS.ingestIntervalMinutes]: String(normalized.ingest.intervalMinutes),
+    [DASHBOARD_SETTING_KEYS.ingestRunOnStartup]: normalized.ingest.runOnStartup ? 'true' : 'false',
+    [DASHBOARD_SETTING_KEYS.livePlacementIntervalMinutes]: String(normalized.livePlacement.intervalMinutes),
+    [DASHBOARD_SETTING_KEYS.livePlacementRunOnStartup]: normalized.livePlacement.runOnStartup ? 'true' : 'false'
+  });
+
+  if (savedCount < 4) {
+    throw new Error('SQL scheduler settings could not be saved. Verify SQL connectivity and permissions.');
+  }
+
+  return normalized;
+}
 
 // Trust Azure App Service's reverse proxy so req.secure is correct for HTTPS
 // connections. Required for secure session cookies to work on App Service.
@@ -399,14 +528,18 @@ app.get('/api/capacity/families', async (req, res) => {
 
 app.get('/api/capacity/scores', async (req, res) => {
   try {
-    const rows = await getCapacityScoreSummary({
+    const pageNumber = Number(req.query.pageNumber || 1);
+    const pageSize = Number(req.query.pageSize || 50);
+    
+    const payload = await getCapacityScoreSummaryPaginated({
       regionPreset: req.query.regionPreset,
       subscriptionIds: req.query.subscriptionIds,
       region: req.query.region,
       family: req.query.family,
       availability: req.query.availability
-    });
-    res.json({ rows });
+    }, pageNumber, pageSize);
+    
+    res.json(payload);
   } catch (err) {
     res.status(500).json({ error: 'Failed to retrieve capacity score summary', detail: err.message });
   }
@@ -462,6 +595,42 @@ app.post('/api/admin/ingest/capacity', requireAdmin, async (req, res) => {
 
 app.get('/api/admin/ingest/status', requireAdmin, (_, res) => {
   res.json({ ok: true, status: getIngestionStatus() });
+});
+
+app.get('/api/admin/ingest/schedule', requireAdmin, async (_, res) => {
+  try {
+    const persisted = await getEffectiveSchedulerSettings();
+    const runtime = {
+      ingest: getIngestionSchedulerConfig(),
+      livePlacement: getLivePlacementSchedulerConfig()
+    };
+
+    res.json({ ok: true, settings: persisted, runtime });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message || 'Failed to load scheduler settings.' });
+  }
+});
+
+app.put('/api/admin/ingest/schedule', requireAdmin, async (req, res) => {
+  try {
+    const candidate = {
+      ingest: {
+        intervalMinutes: req.body?.ingest?.intervalMinutes,
+        runOnStartup: req.body?.ingest?.runOnStartup
+      },
+      livePlacement: {
+        intervalMinutes: req.body?.livePlacement?.intervalMinutes,
+        runOnStartup: req.body?.livePlacement?.runOnStartup
+      }
+    };
+
+    const savedSettings = await saveSchedulerSettings(candidate);
+    const runtime = applyRuntimeSchedulerSettings(savedSettings);
+
+    res.json({ ok: true, settings: savedSettings, runtime });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message || 'Failed to save scheduler settings.' });
+  }
 });
 
 app.post('/api/admin/errors/log', async (req, res) => {
@@ -593,7 +762,16 @@ async function startServer() {
   }
 
   app.listen(port, () => {
-    startIngestionScheduler();
+    getEffectiveSchedulerSettings()
+      .then((settings) => {
+        startIngestionScheduler(settings.ingest);
+        startLivePlacementScheduler(settings.livePlacement);
+      })
+      .catch((err) => {
+        console.warn('⚠ Failed to load DB scheduler settings; falling back to environment defaults:', err.message);
+        startIngestionScheduler();
+        startLivePlacementScheduler();
+      });
 
     // Apply performance indexes on startup (idempotent - safe to run multiple times)
     if (process.env.SQL_SERVER) {

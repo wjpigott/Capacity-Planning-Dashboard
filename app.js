@@ -2380,6 +2380,24 @@ function renderRecommendations(payload) {
   });
 }
 
+function initializeRecommendationView() {
+  if (!recommendTargetSku || !recommendGridBody) {
+    return;
+  }
+
+  syncRecommendationInputsFromTopFilters();
+
+  const { targetSku } = normalizeRecommendInputs();
+  if (!targetSku) {
+    setRecommendStatus('Enter a target SKU, then press Run Recommendation.', 'warn');
+    recommendGridBody.innerHTML = '<tr><td colspan="15" style="text-align: center; padding: 20px; color: #5d7085;">Enter a target SKU and press Run Recommendation.</td></tr>';
+    return;
+  }
+
+  setRecommendStatus('Press Run Recommendation to evaluate alternatives.', 'info');
+  recommendGridBody.innerHTML = '<tr><td colspan="15" style="text-align: center; padding: 20px; color: #5d7085;">Press Run Recommendation to evaluate alternatives for the current target SKU and regions.</td></tr>';
+}
+
 async function loadRecommendationView() {
   if (!recommendTargetSku || !recommendGridBody) {
     return;
@@ -2693,7 +2711,7 @@ function refreshActiveAnalyticsView() {
   const view = getActiveReportViewKey();
   // Remove from loaded set so the tab handler re-fetches fresh data
   loadedViews.delete(view);
-  if (view === 'recommender') return loadRecommendationView();
+  if (view === 'recommender') return initializeRecommendationView();
   if (view === 'capacity-score') {
     resetCapacityScorePaging();
     return loadCapacityScoreView();
@@ -2892,7 +2910,7 @@ function wireViewTabs() {
         resetCapacityScorePaging();
         loadCapacityScoreView();
       } else if (view === 'recommender' && !loadedViews.has('recommender')) {
-        loadRecommendationView();
+        initializeRecommendationView();
       } else if (view === 'family-summary' && !loadedViews.has('family-summary')) {
         loadFamilySummaryView();
       } else if (view === 'trend' && !loadedViews.has('trend')) {

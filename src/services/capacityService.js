@@ -160,15 +160,10 @@ function appendCommonSqlFilters(filters, request) {
     where += ` AND ISNULL(subscriptionId, 'legacy-data') IN (${subParams.join(',')})`;
   }
 
-  if (filters.resourceType && filters.resourceType !== 'all') {
-    if (filters.resourceType === 'Compute') {
-      where += ` AND LOWER(skuFamily) LIKE '%family%'`;
-    } else if (filters.resourceType === 'Disk') {
-      where += ` AND LOWER(skuFamily) LIKE '%disk%'`;
-    } else if (filters.resourceType === 'Other') {
-      where += ` AND LOWER(skuFamily) NOT LIKE '%family%' AND LOWER(skuFamily) NOT LIKE '%disk%'`;
-    }
-  }
+  // NOTE: resourceType filtering is applied in-memory after SQL retrieval
+  // to ensure consistency with getRowResourceType() classification logic.
+  // SQL LIKE patterns were insufficient to match the full classification logic
+  // (which checks both family and sku properties with prefix/suffix matching).
 
   return where;
 }
@@ -191,7 +186,7 @@ async function getCapacityRows(filters) {
   query += appendCommonSqlFilters(filters, request);
 
   const result = await request.query(query);
-  return applyRegionPreset(result.recordset.map((r) => ({
+  const rows = result.recordset.map((r) => ({
     capturedAtUtc: r.capturedAtUtc,
     subscriptionKey: r.subscriptionKey || 'legacy-data',
     subscriptionId: r.subscriptionId || 'legacy-data',
@@ -206,7 +201,10 @@ async function getCapacityRows(filters) {
     vCpu: Number(r.vCpu || 0),
     memoryGB: Number(r.memoryGB || 0),
     zonesCsv: r.zonesCsv || ''
-  })), filters.regionPreset);
+  }));
+  
+  // Apply in-memory filters (including resourceType) for consistency with client classification
+  return applyFilters(applyRegionPreset(rows, filters.regionPreset), filters);
 }
 
 /**
@@ -241,23 +239,9 @@ async function getCapacityRowsPaginated(filters) {
 
   const request = pool.request();
 
-  // First, get total count and summary metrics for the full filtered result set.
-  let countQuery = `
-    SELECT
-      COUNT(1) AS total,
-      SUM(CASE WHEN availabilityState = 'CONSTRAINED' THEN 1 ELSE 0 END) AS constrainedRows,
-      SUM(ISNULL(quotaLimit, 0) - ISNULL(quotaCurrent, 0)) AS availableQuota,
-      SUM(ISNULL(monthlyCostEstimate, 0)) AS monthlyCost
-    FROM dbo.CapacityLatest
-    WHERE 1 = 1
-  `;
-  countQuery += appendCommonSqlFilters(filters, request);
-  const countResult = await request.query(countQuery);
-  const summaryRow = countResult.recordset[0] || {};
-  const total = Number(summaryRow.total || 0);
-
-  // Then get paginated rows for the capacity grid.
-  const pageRequest = pool.request();
+  // Fetch all rows matching SQL filters (regionPreset, region, family, availability, subscriptions).
+  // NOTE: resourceType filtering is NOT applied at SQL level; it's applied in-memory via applyFilters()
+  // to ensure consistency with getRowResourceType() classification logic.
   let query = `
     SELECT 
       capturedAtUtc,
@@ -278,44 +262,51 @@ async function getCapacityRowsPaginated(filters) {
     WHERE 1 = 1
   `;
   
-  query += appendCommonSqlFilters(filters, pageRequest);
+  query += appendCommonSqlFilters(filters, request);
   query += `
     ORDER BY region ASC, skuFamily ASC, skuName ASC
-    OFFSET @offset ROWS
-    FETCH NEXT @pageSize ROWS ONLY
   `;
+
+  const result = await request.query(query);
   
-  pageRequest.input('offset', offset);
-  pageRequest.input('pageSize', pageSize);
-
-  const result = await pageRequest.query(query);
-
-  const facetRequest = pool.request();
-  let facetQuery = `
-    SELECT DISTINCT
-      region,
-      skuFamily AS family
-    FROM dbo.CapacityLatest
-    WHERE 1 = 1
-  `;
-  facetQuery += appendCommonSqlFilters(filters, facetRequest);
-  const facetResult = await facetRequest.query(facetQuery);
-
-  const data = result.recordset.map((r) => new CapacityDetailDTO(r));
-  const pagination = new PaginationDTO(total, pageSize, pageNumber);
+  // Apply in-memory filters (including resourceType) for accuracy
+  const allRows = applyFilters(
+    result.recordset.map((r) => ({
+      capturedAtUtc: r.capturedAtUtc,
+      subscriptionKey: r.subscriptionKey || 'legacy-data',
+      subscriptionId: r.subscriptionId || 'legacy-data',
+      subscriptionName: r.subscriptionName || 'Legacy data',
+      region: r.region,
+      sku: r.sku,
+      family: r.family,
+      availability: r.availability,
+      quotaCurrent: Number(r.quotaCurrent || 0),
+      quotaLimit: Number(r.quotaLimit || 0),
+      monthlyCost: Number(r.monthlyCost || 0),
+      vCpu: Number(r.vCpu || 0),
+      memoryGB: Number(r.memoryGB || 0),
+      zonesCsv: r.zonesCsv || ''
+    })),
+    filters
+  );
+  
+  const filteredRows = applyRegionPreset(allRows, filters.regionPreset);
+  const total = filteredRows.length;
+  const pagedRows = filteredRows.slice(offset, offset + pageSize);
+  
   const facets = {
-    regions: [...new Set((facetResult.recordset || []).map((row) => row.region).filter(Boolean))].sort(),
-    families: [...new Set((facetResult.recordset || []).map((row) => row.family).filter(Boolean))].sort()
+    regions: [...new Set(filteredRows.map((row) => row.region).filter(Boolean))].sort(),
+    families: [...new Set(filteredRows.map((row) => row.family).filter(Boolean))].sort()
   };
   const summary = {
-    constrainedRows: Number(summaryRow.constrainedRows || 0),
-    availableQuota: Number(summaryRow.availableQuota || 0),
-    monthlyCost: Number(summaryRow.monthlyCost || 0)
+    constrainedRows: filteredRows.filter((row) => row.availability === 'CONSTRAINED').length,
+    availableQuota: filteredRows.reduce((acc, row) => acc + (Number(row.quotaLimit || 0) - Number(row.quotaCurrent || 0)), 0),
+    monthlyCost: filteredRows.reduce((acc, row) => acc + Number(row.monthlyCost || 0), 0)
   };
 
   return {
-    data,
-    pagination,
+    data: pagedRows.map((r) => new CapacityDetailDTO(r)),
+    pagination: new PaginationDTO(total, pageSize, pageNumber),
     facets,
     summary
   };

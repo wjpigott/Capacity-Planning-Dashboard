@@ -29,6 +29,29 @@ param sqlEntraAdminLogin string
 @description('Microsoft Entra administrator object ID for Azure SQL')
 param sqlEntraAdminObjectId string
 
+@description('Address prefix for the virtual network used by App Service integration and private endpoints')
+param vnetAddressPrefix string = '10.90.0.0/16'
+
+@description('Address prefix for the App Service integration subnet')
+param appServiceIntegrationSubnetPrefix string = '10.90.1.0/24'
+
+@description('Address prefix for the private endpoint subnet')
+param privateEndpointSubnetPrefix string = '10.90.2.0/24'
+
+@description('SQL server public network access mode')
+@allowed([
+  'Enabled'
+  'Disabled'
+])
+param sqlPublicNetworkAccess string = 'Disabled'
+
+@description('Key Vault public network access mode')
+@allowed([
+  'Enabled'
+  'Disabled'
+])
+param keyVaultPublicNetworkAccess string = 'Disabled'
+
 @secure()
 @description('Optional shared secret used between the dashboard web app and the worker function app')
 param workerSharedSecret string = ''
@@ -43,6 +66,60 @@ var logAnalyticsName = 'log-capdash-${environment}-${workloadSuffix}'
 var keyVaultName = 'kv-capdash-${environment}-${workloadSuffix}'
 var sqlServerName = 'sql-capdash-${environment}-${workloadSuffix}'
 var sqlDatabaseName = 'sqldb-capdash-${environment}'
+var vnetName = 'vnet-capdash-${environment}-${workloadSuffix}'
+var appServiceIntegrationSubnetName = 'snet-appsvc-integration'
+var privateEndpointSubnetName = 'snet-private-endpoints'
+var sqlPrivateEndpointName = 'pep-sql-capdash-${environment}-${workloadSuffix}'
+var sqlPrivateDnsZoneName = 'privatelink${az.environment().suffixes.sqlServerHostname}'
+var sqlPrivateDnsZoneVnetLinkName = 'pdz-link-capdash-${environment}-${workloadSuffix}'
+var keyVaultPrivateEndpointName = 'pep-kv-capdash-${environment}-${workloadSuffix}'
+var keyVaultPrivateDnsZoneName = replace(az.environment().suffixes.keyvaultDns, 'vault.', 'privatelink.vaultcore.')
+var keyVaultPrivateDnsZoneVnetLinkName = 'pdz-link-kv-capdash-${environment}-${workloadSuffix}'
+
+resource vnet 'Microsoft.Network/virtualNetworks@2023-09-01' = {
+  name: vnetName
+  location: location
+  properties: {
+    addressSpace: {
+      addressPrefixes: [
+        vnetAddressPrefix
+      ]
+    }
+    subnets: [
+      {
+        name: appServiceIntegrationSubnetName
+        properties: {
+          addressPrefix: appServiceIntegrationSubnetPrefix
+          delegations: [
+            {
+              name: 'webapp-delegation'
+              properties: {
+                serviceName: 'Microsoft.Web/serverFarms'
+              }
+            }
+          ]
+        }
+      }
+      {
+        name: privateEndpointSubnetName
+        properties: {
+          addressPrefix: privateEndpointSubnetPrefix
+          privateEndpointNetworkPolicies: 'Disabled'
+        }
+      }
+    ]
+  }
+}
+
+resource appServiceIntegrationSubnet 'Microsoft.Network/virtualNetworks/subnets@2023-09-01' existing = {
+  parent: vnet
+  name: appServiceIntegrationSubnetName
+}
+
+resource privateEndpointSubnet 'Microsoft.Network/virtualNetworks/subnets@2023-09-01' existing = {
+  parent: vnet
+  name: privateEndpointSubnetName
+}
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: logAnalyticsName
@@ -118,6 +195,7 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
   properties: {
     serverFarmId: plan.id
     httpsOnly: true
+    virtualNetworkSubnetId: appServiceIntegrationSubnet.id
     siteConfig: {
       ftpsState: 'Disabled'
       minTlsVersion: '1.2'
@@ -151,8 +229,25 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'CAPACITY_WORKER_SHARED_SECRET'
           value: workerSharedSecret
         }
+        {
+          name: 'WEBSITE_DNS_SERVER'
+          value: '168.63.129.16'
+        }
+        {
+          name: 'WEBSITE_VNET_ROUTE_ALL'
+          value: '1'
+        }
       ]
     }
+  }
+}
+
+resource webAppVnetIntegration 'Microsoft.Web/sites/networkConfig@2023-12-01' = {
+  parent: webApp
+  name: 'virtualNetwork'
+  properties: {
+    subnetResourceId: appServiceIntegrationSubnet.id
+    swiftSupported: true
   }
 }
 
@@ -166,6 +261,7 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
   properties: {
     serverFarmId: workerPlan.id
     httpsOnly: true
+    virtualNetworkSubnetId: appServiceIntegrationSubnet.id
     siteConfig: {
       ftpsState: 'Disabled'
       minTlsVersion: '1.2'
@@ -201,8 +297,25 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'WORKER_SHARED_SECRET'
           value: workerSharedSecret
         }
+        {
+          name: 'WEBSITE_DNS_SERVER'
+          value: '168.63.129.16'
+        }
+        {
+          name: 'WEBSITE_VNET_ROUTE_ALL'
+          value: '1'
+        }
       ]
     }
+  }
+}
+
+resource functionAppVnetIntegration 'Microsoft.Web/sites/networkConfig@2023-12-01' = {
+  parent: functionApp
+  name: 'virtualNetwork'
+  properties: {
+    subnetResourceId: appServiceIntegrationSubnet.id
+    swiftSupported: true
   }
 }
 
@@ -218,7 +331,7 @@ resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
     enableRbacAuthorization: true
     enableSoftDelete: true
     softDeleteRetentionInDays: 90
-    publicNetworkAccess: 'Enabled'
+    publicNetworkAccess: keyVaultPublicNetworkAccess
   }
 }
 
@@ -236,8 +349,114 @@ resource sqlServer 'Microsoft.Sql/servers@2023-08-01-preview' = {
       azureADOnlyAuthentication: true
     }
     version: '12.0'
-    publicNetworkAccess: 'Enabled'
+    publicNetworkAccess: sqlPublicNetworkAccess
     minimalTlsVersion: '1.2'
+  }
+}
+
+resource sqlPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
+  name: sqlPrivateDnsZoneName
+  location: 'global'
+}
+
+resource sqlPrivateDnsZoneVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
+  parent: sqlPrivateDnsZone
+  name: sqlPrivateDnsZoneVnetLinkName
+  location: 'global'
+  properties: {
+    registrationEnabled: false
+    virtualNetwork: {
+      id: vnet.id
+    }
+  }
+}
+
+resource sqlPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01' = {
+  name: sqlPrivateEndpointName
+  location: location
+  properties: {
+    subnet: {
+      id: privateEndpointSubnet.id
+    }
+    privateLinkServiceConnections: [
+      {
+        name: 'sqlServerConnection'
+        properties: {
+          privateLinkServiceId: sqlServer.id
+          groupIds: [
+            'sqlServer'
+          ]
+        }
+      }
+    ]
+  }
+}
+
+resource sqlPrivateEndpointDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-09-01' = {
+  parent: sqlPrivateEndpoint
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'sql-private-dns'
+        properties: {
+          privateDnsZoneId: sqlPrivateDnsZone.id
+        }
+      }
+    ]
+  }
+}
+
+resource keyVaultPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
+  name: keyVaultPrivateDnsZoneName
+  location: 'global'
+}
+
+resource keyVaultPrivateDnsZoneVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
+  parent: keyVaultPrivateDnsZone
+  name: keyVaultPrivateDnsZoneVnetLinkName
+  location: 'global'
+  properties: {
+    registrationEnabled: false
+    virtualNetwork: {
+      id: vnet.id
+    }
+  }
+}
+
+resource keyVaultPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01' = {
+  name: keyVaultPrivateEndpointName
+  location: location
+  properties: {
+    subnet: {
+      id: privateEndpointSubnet.id
+    }
+    privateLinkServiceConnections: [
+      {
+        name: 'keyVaultConnection'
+        properties: {
+          privateLinkServiceId: kv.id
+          groupIds: [
+            'vault'
+          ]
+        }
+      }
+    ]
+  }
+}
+
+resource keyVaultPrivateEndpointDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-09-01' = {
+  parent: keyVaultPrivateEndpoint
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'kv-private-dns'
+        properties: {
+          privateDnsZoneId: keyVaultPrivateDnsZone.id
+        }
+      }
+    ]
   }
 }
 
@@ -314,3 +533,6 @@ output sqlServerFqdn string = '${sqlServer.name}${az.environment().suffixes.sqlS
 output sqlServerName string = sqlServer.name
 output sqlDatabaseName string = sqlDatabase.name
 output keyVaultName string = kv.name
+output virtualNetworkName string = vnet.name
+output sqlPrivateEndpointName string = sqlPrivateEndpoint.name
+output keyVaultPrivateEndpointName string = keyVaultPrivateEndpoint.name

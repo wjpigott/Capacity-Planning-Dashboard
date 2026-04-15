@@ -856,14 +856,44 @@ async function getCapacityRecommendations(options = {}) {
   const showPricing = String(options.showPricing).toLowerCase() !== 'false';
   const showSpot = Boolean(options.showSpot);
 
-  const contract = await runRecommendationLookupLocal({
-    targetSku,
-    regions: resolvedRegions,
-    topN,
-    minScore,
-    showPricing,
-    showSpot
-  });
+  let contract;
+  let fallbackApplied = false;
+  try {
+    contract = await runRecommendationLookupLocal({
+      targetSku,
+      regions: resolvedRegions,
+      topN,
+      minScore,
+      showPricing,
+      showSpot
+    });
+  } catch (error) {
+    const errorText = String(error?.message || '').toLowerCase();
+    const isNoOutputFailure = errorText.includes('returned no json output') || errorText.includes('no output was returned by the recommendation wrapper');
+
+    if (showSpot && isNoOutputFailure) {
+      contract = await runRecommendationLookupLocal({
+        targetSku,
+        regions: resolvedRegions,
+        topN,
+        minScore,
+        showPricing,
+        showSpot: false
+      });
+      fallbackApplied = true;
+    } else {
+      throw error;
+    }
+  }
+
+  if (fallbackApplied) {
+    const warnings = Array.isArray(contract?.warnings) ? contract.warnings : [];
+    warnings.push('Spot pricing request was retried with Show Spot disabled after an empty-output runner response.');
+    contract = {
+      ...contract,
+      warnings
+    };
+  }
 
   return {
     ...contract,

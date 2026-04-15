@@ -1609,33 +1609,24 @@ function getQueryFilters() {
 async function loadCapacityScoreView() {
   const baseFilters = getQueryFilters();
   const base = new URLSearchParams(baseFilters);
-  const scoreHistoryQuery = new URLSearchParams({
-    days: capacityScoreHistoryDays?.value || '30',
-    region: baseFilters.region,
-    family: baseFilters.family
-  });
 
   try {
-    const [subscriptionResponse, scoreResponse, scoreHistoryResponse] = await Promise.all([
+    const [subscriptionResponse, scoreResponse] = await Promise.all([
       fetch(`/api/capacity/subscriptions?${base.toString()}`),
-      fetch(`/api/capacity/scores?${base.toString()}`),
-      fetch(`/api/capacity/scores/history?${scoreHistoryQuery.toString()}`)
+      fetch(`/api/capacity/scores?${base.toString()}`)
     ]);
 
     const subscriptionPayload = subscriptionResponse.ok ? await subscriptionResponse.json() : { rows: [] };
     const scorePayload = scoreResponse.ok ? await scoreResponse.json() : { rows: [] };
-    const scoreHistoryPayload = scoreHistoryResponse.ok ? await scoreHistoryResponse.json() : { rows: [] };
 
     renderSubscriptionSummary(Array.isArray(subscriptionPayload.rows) ? subscriptionPayload.rows : []);
     renderCapacityScores(Array.isArray(scorePayload.rows) ? scorePayload.rows : []);
-    renderCapacityScoreHistory(Array.isArray(scoreHistoryPayload.rows) ? scoreHistoryPayload.rows : []);
     if (capacityScoreLiveStatus) {
       capacityScoreLiveStatus.textContent = 'Live placement has not been refreshed in this session.';
     }
   } catch (_) {
     renderSubscriptionSummary([]);
     renderCapacityScores([]);
-    renderCapacityScoreHistory([]);
   }
 
   loadedViews.add('capacity-score');

@@ -85,6 +85,11 @@ function resolvePlacementWrapperPath() {
     || path.resolve(__dirname, '..', '..', 'tools', 'Get-LivePlacementScores.ps1');
 }
 
+function resolveRecommendationWrapperPath() {
+  return process.env.CAPACITY_RECOMMEND_WRAPPER_PATH
+    || path.resolve(__dirname, '..', '..', 'tools', 'Get-CapacityRecommendations.ps1');
+}
+
 function resolveWorkerBaseUrl() {
   return (process.env.CAPACITY_WORKER_BASE_URL || '').trim().replace(/\/$/, '');
 }
@@ -654,6 +659,136 @@ async function runPlacementLookup({ skus, regions, desiredCount }) {
   return runPlacementLookupLocal({ skus, regions, desiredCount });
 }
 
+async function runRecommendationLookupLocal({ targetSku, regions, topN, minScore, showPricing, showSpot }) {
+  const wrapperPath = resolveRecommendationWrapperPath();
+  const repoRoot = resolvePlacementRepoRoot();
+  const powerShellRuntime = await getPowerShellCommands();
+  const commands = powerShellRuntime.commands;
+  const args = [
+    '-NoLogo',
+    '-NoProfile',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-File',
+    wrapperPath,
+    '-RepoRoot',
+    repoRoot,
+    '-TargetSku',
+    String(targetSku || ''),
+    '-RegionsJson',
+    JSON.stringify(regions || []),
+    '-TopN',
+    String(topN),
+    '-MinScore',
+    String(minScore)
+  ];
+
+  if (showPricing) {
+    args.push('-ShowPricing');
+  }
+  if (showSpot) {
+    args.push('-ShowSpot');
+  }
+
+  function tryCommand(commandIndex, resolve, reject) {
+    if (commandIndex >= commands.length) {
+      reject(new Error('Capacity recommendation failed: no supported PowerShell executable was found.'));
+      return;
+    }
+
+    const command = commands[commandIndex];
+    const envPromise = ensureAzPlacementModules(command).catch(() => ({ ...process.env }));
+
+    envPromise.then((env) => {
+      execFile(
+        command,
+        args,
+        {
+          cwd: resolveProjectRoot(),
+          env,
+          maxBuffer: 2 * 1024 * 1024
+        },
+        (error, stdout, stderr) => {
+          if (error) {
+            if (error.code === 'ENOENT') {
+              tryCommand(commandIndex + 1, resolve, reject);
+              return;
+            }
+
+            const detail = stderr?.trim() || stdout?.trim() || error.message;
+            reject(new Error(`Capacity recommendation failed: ${detail}`));
+            return;
+          }
+
+          const trimmedStdout = String(stdout || '').trim();
+          if (!trimmedStdout) {
+            reject(new Error(`Capacity recommendation returned no JSON output.${stderr?.trim() ? ` ${stderr.trim()}` : ''}`));
+            return;
+          }
+
+          try {
+            const parsed = JSON.parse(trimmedStdout);
+            resolve(parsed);
+          } catch (parseError) {
+            reject(new Error(`Capacity recommendation returned invalid JSON: ${parseError.message}`));
+          }
+        }
+      );
+    }).catch((bootstrapError) => {
+      reject(new Error(`Capacity recommendation failed during PowerShell bootstrap: ${bootstrapError.message}`));
+    });
+  }
+
+  return new Promise((resolve, reject) => {
+    tryCommand(0, resolve, reject);
+  });
+}
+
+async function getCapacityRecommendations(options = {}) {
+  const targetSku = normalizeSkuName(options.targetSku);
+  if (!targetSku) {
+    throw new Error('Target SKU is required for recommendations.');
+  }
+
+  const explicitRegions = Array.isArray(options.regions)
+    ? options.regions.map((region) => String(region || '').trim().toLowerCase()).filter(Boolean)
+    : [];
+  const presetRegions = getRegionsForPreset(options.regionPreset);
+  const resolvedRegions = explicitRegions.length > 0
+    ? [...new Set(explicitRegions)]
+    : (Array.isArray(presetRegions) && presetRegions.length > 0
+      ? [...new Set(presetRegions.map((region) => String(region || '').trim().toLowerCase()).filter(Boolean))]
+      : []);
+
+  if (resolvedRegions.length === 0) {
+    throw new Error('At least one target region is required for recommendations.');
+  }
+
+  const topN = Math.max(1, Math.min(Number(options.topN || 10), 25));
+  const minScore = Math.max(0, Math.min(Number(options.minScore ?? 50), 100));
+  const showPricing = String(options.showPricing).toLowerCase() !== 'false';
+  const showSpot = Boolean(options.showSpot);
+
+  const contract = await runRecommendationLookupLocal({
+    targetSku,
+    regions: resolvedRegions,
+    topN,
+    minScore,
+    showPricing,
+    showSpot
+  });
+
+  return {
+    ...contract,
+    requestedTargetSku: targetSku,
+    requestedRegions: resolvedRegions,
+    requestedTopN: topN,
+    requestedMinScore: minScore,
+    requestedShowPricing: showPricing,
+    requestedShowSpot: showSpot
+  };
+}
+
 async function getLivePlacementScoreRows(filters = {}) {
   const currentRows = await getCapacityScoreSummary(filters);
   const extraSkus = parseExtraSkus(filters.extraSkus);
@@ -937,6 +1072,7 @@ function getLivePlacementSchedulerConfig() {
 
 module.exports = {
   getLivePlacementScoreRows,
+  getCapacityRecommendations,
   runScheduledLivePlacementRefresh,
   startLivePlacementScheduler,
   updateLivePlacementScheduler,

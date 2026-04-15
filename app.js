@@ -187,10 +187,22 @@ const capacityScorePageSize = document.querySelector('#capacityScorePageSize');
 const capacityScorePrevPage = document.querySelector('#capacityScorePrevPage');
 const capacityScoreNextPage = document.querySelector('#capacityScoreNextPage');
 const capacityScorePageLabel = document.querySelector('#capacityScorePageLabel');
+const recommendGridBody = document.querySelector('#recommendGrid tbody');
+const recommendTargetSku = document.querySelector('#recommendTargetSku');
+const recommendRegions = document.querySelector('#recommendRegions');
+const recommendTopN = document.querySelector('#recommendTopN');
+const recommendMinScore = document.querySelector('#recommendMinScore');
+const recommendShowPricing = document.querySelector('#recommendShowPricing');
+const recommendShowSpot = document.querySelector('#recommendShowSpot');
+const runRecommendBtn = document.querySelector('#runRecommendBtn');
+const recommendStatus = document.querySelector('#recommendStatus');
+const recommendTargetSummary = document.querySelector('#recommendTargetSummary');
+const recommendWarnings = document.querySelector('#recommendWarnings');
 
 const reportViewLabels = {
   'capacity-grid': 'Capacity Grid',
   'region-health': 'Region Health',
+  recommender: 'Capacity Recommender',
   'sku-chart': 'Top SKUs',
   'capacity-score': 'Capacity Score',
   'family-summary': 'Family Summary',
@@ -2132,6 +2144,170 @@ function renderBarChart(host, items, options = {}) {
   });
 }
 
+function parseRegionListInput(rawValue) {
+  return String(rawValue || '')
+    .split(',')
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function defaultRecommendRegionsFromFilters() {
+  const currentRegion = String(regionFilter?.value || '').trim().toLowerCase();
+  if (currentRegion && currentRegion !== 'all') {
+    return currentRegion;
+  }
+
+  const presetRegions = activePresetRegions();
+  if (Array.isArray(presetRegions) && presetRegions.length > 0) {
+    return presetRegions.join(',');
+  }
+
+  return '';
+}
+
+function normalizeRecommendInputs() {
+  const targetSku = String(recommendTargetSku?.value || '').trim();
+  const regions = parseRegionListInput(recommendRegions?.value || '');
+  const topN = Math.max(1, Math.min(Number(recommendTopN?.value || 10), 25));
+  const minScore = Math.max(0, Math.min(Number(recommendMinScore?.value || 50), 100));
+  const showPricing = Boolean(recommendShowPricing?.checked);
+  const showSpot = Boolean(recommendShowSpot?.checked);
+
+  if (recommendTopN) {
+    recommendTopN.value = String(topN);
+  }
+  if (recommendMinScore) {
+    recommendMinScore.value = String(minScore);
+  }
+
+  return {
+    targetSku,
+    regions,
+    topN,
+    minScore,
+    showPricing,
+    showSpot
+  };
+}
+
+function setRecommendStatus(message, tone = 'info') {
+  if (!recommendStatus) {
+    return;
+  }
+  recommendStatus.className = `inline-note ${tone}`;
+  recommendStatus.textContent = message;
+}
+
+function renderRecommendations(payload) {
+  if (!recommendGridBody) {
+    return;
+  }
+
+  const target = payload?.target || null;
+  const targetAvailability = Array.isArray(payload?.targetAvailability) ? payload.targetAvailability : [];
+  const recommendations = Array.isArray(payload?.recommendations) ? payload.recommendations : [];
+  const warnings = Array.isArray(payload?.warnings) ? payload.warnings : [];
+  const belowMinSpec = Array.isArray(payload?.belowMinSpec) ? payload.belowMinSpec : [];
+
+  if (recommendTargetSummary) {
+    if (target?.name) {
+      const targetStatus = targetAvailability.length > 0
+        ? targetAvailability.map((row) => `${row.region}: ${row.capacity}`).join(' | ')
+        : 'No target region status returned.';
+      recommendTargetSummary.textContent = `Target ${target.name} | ${target.vCPU ?? 'n/a'} vCPU | ${target.memoryGB ?? 'n/a'} GiB | ${target.arch || 'n/a'} | ${target.disk || 'n/a'} | Status: ${targetStatus}`;
+    } else {
+      recommendTargetSummary.textContent = '';
+    }
+  }
+
+  if (recommendWarnings) {
+    const warningTexts = [...warnings, ...(belowMinSpec.length > 0 ? [`${belowMinSpec.length} recommendation candidate(s) were below minimum vCPU/memory filters.`] : [])];
+    recommendWarnings.textContent = warningTexts.length > 0 ? warningTexts.join(' ') : '';
+  }
+
+  recommendGridBody.innerHTML = '';
+  if (recommendations.length === 0) {
+    recommendGridBody.innerHTML = '<tr><td colspan="15" style="text-align: center; padding: 20px; color: #5d7085;">No alternatives matched the current recommend filters.</td></tr>';
+    return;
+  }
+
+  recommendations.forEach((row) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${row.rank ?? ''}</td>
+      <td>${row.sku || 'n/a'}</td>
+      <td>${row.region || 'n/a'}</td>
+      <td>${row.vCPU ?? 'n/a'}</td>
+      <td>${row.memGiB ?? 'n/a'}</td>
+      <td>${row.score != null ? `${row.score}%` : 'n/a'}</td>
+      <td>${row.cpu || 'n/a'}</td>
+      <td>${row.disk || 'n/a'}</td>
+      <td>${row.purpose || 'n/a'}</td>
+      <td>${row.capacity || 'n/a'}</td>
+      <td>${row.zonesOK ?? 'n/a'}</td>
+      <td>${row.priceHr != null ? `$${Number(row.priceHr).toFixed(2)}` : 'n/a'}</td>
+      <td>${row.priceMo != null ? `$${Number(row.priceMo).toFixed(0)}` : 'n/a'}</td>
+      <td>${row.spotPriceHr != null ? `$${Number(row.spotPriceHr).toFixed(2)}` : 'n/a'}</td>
+      <td>${row.spotPriceMo != null ? `$${Number(row.spotPriceMo).toFixed(0)}` : 'n/a'}</td>
+    `;
+    recommendGridBody.appendChild(tr);
+  });
+}
+
+async function loadRecommendationView() {
+  if (!recommendTargetSku || !recommendGridBody) {
+    return;
+  }
+
+  if (!recommendRegions.value) {
+    recommendRegions.value = defaultRecommendRegionsFromFilters();
+  }
+
+  const { targetSku, regions, topN, minScore, showPricing, showSpot } = normalizeRecommendInputs();
+  if (!targetSku) {
+    setRecommendStatus('Enter a target SKU to run recommendations.', 'warn');
+    recommendGridBody.innerHTML = '<tr><td colspan="15" style="text-align: center; padding: 20px; color: #5d7085;">Enter a target SKU and press Run Recommendation.</td></tr>';
+    return;
+  }
+
+  setRecommendStatus(`Running recommendations for ${targetSku}...`, 'info');
+  setButtonBusy(runRecommendBtn, true, 'Running...');
+
+  try {
+    const baseFilters = getQueryFilters();
+    const response = await fetch('/api/capacity/recommendations', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        targetSku,
+        regions,
+        regionPreset: baseFilters.regionPreset,
+        topN,
+        minScore,
+        showPricing,
+        showSpot
+      })
+    });
+
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.detail || payload.error || 'Recommendation request failed.');
+    }
+
+    renderRecommendations(payload.result || {});
+    const count = Array.isArray(payload.result?.recommendations) ? payload.result.recommendations.length : 0;
+    setRecommendStatus(`Recommendation completed. ${count} alternative SKU(s) returned.`, 'success');
+  } catch (error) {
+    setRecommendStatus(error.message || 'Failed to run recommendations.', 'error');
+    recommendGridBody.innerHTML = '<tr><td colspan="15" style="text-align: center; padding: 20px; color: #5d7085;">Recommendation run failed. Check auth, region scope, and target SKU.</td></tr>';
+  } finally {
+    loadedViews.add('recommender');
+    setButtonBusy(runRecommendBtn, false);
+  }
+}
+
 function renderCharts(data) {
   const selectedType = resourceTypeFilter?.value || 'all';
   const scopedRows = (Array.isArray(data) ? data : []).filter((row) => rowMatchesSelectedResourceType(row, selectedType));
@@ -2392,6 +2568,7 @@ function refreshActiveAnalyticsView() {
   const view = getActiveReportViewKey();
   // Remove from loaded set so the tab handler re-fetches fresh data
   loadedViews.delete(view);
+  if (view === 'recommender') return loadRecommendationView();
   if (view === 'capacity-score') {
     resetCapacityScorePaging();
     return loadCapacityScoreView();
@@ -2589,6 +2766,8 @@ function wireViewTabs() {
       } else if (view === 'capacity-score' && !loadedViews.has('capacity-score')) {
         resetCapacityScorePaging();
         loadCapacityScoreView();
+      } else if (view === 'recommender' && !loadedViews.has('recommender')) {
+        loadRecommendationView();
       } else if (view === 'family-summary' && !loadedViews.has('family-summary')) {
         loadFamilySummaryView();
       } else if (view === 'trend' && !loadedViews.has('trend')) {
@@ -2609,6 +2788,7 @@ function wireButtons() {
   document.getElementById('refreshAnalyticsBtn').addEventListener('click', refreshActiveAnalyticsView);
   document.getElementById('simulateBtn').addEventListener('click', simulateQuotaImpact);
   triggerIngestBtn.addEventListener('click', triggerCapacityIngest);
+  runRecommendBtn?.addEventListener('click', loadRecommendationView);
   refreshLivePlacementBtn?.addEventListener('click', refreshLivePlacementScores);
   document.getElementById('applyBtn').addEventListener('click', () => {
     const ok = confirm('Apply quota movements is a write operation. Continue?');

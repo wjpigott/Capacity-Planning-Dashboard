@@ -21,6 +21,7 @@ const {
 } = require('./services/capacityService');
 const {
   getLivePlacementScoreRows,
+  getCapacityRecommendations,
   startLivePlacementScheduler,
   updateLivePlacementScheduler,
   getLivePlacementSchedulerConfig
@@ -578,6 +579,24 @@ app.post('/api/capacity/scores/live', async (req, res) => {
   } catch (err) {
     const status = err.message.includes('not found') || err.message.includes('not configured') ? 503 : 500;
     res.status(status).json({ error: 'Failed to retrieve live placement scores', detail: err.message, rows: [] });
+  }
+});
+
+app.post('/api/capacity/recommendations', async (req, res) => {
+  try {
+    const result = await getCapacityRecommendations({
+      targetSku: req.body?.targetSku,
+      regions: req.body?.regions,
+      regionPreset: req.body?.regionPreset,
+      topN: req.body?.topN,
+      minScore: req.body?.minScore,
+      showPricing: req.body?.showPricing,
+      showSpot: req.body?.showSpot
+    });
+    res.json({ ok: true, result });
+  } catch (err) {
+    const status = err.message.includes('not found') || err.message.includes('not configured') ? 503 : 500;
+    res.status(status).json({ ok: false, error: 'Failed to retrieve capacity recommendations', detail: err.message });
   }
 });
 

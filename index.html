@@ -34,6 +34,10 @@
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="1" y="9" width="3" height="6"/><rect x="6" y="5" width="3" height="10"/><rect x="11" y="1" width="3" height="14"/></svg>
         <span class="nav-label">Region Health</span>
       </button>
+      <button class="nav-sub-item" data-report-view="recommender">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2 8l4-4v3h8v2H6v3z"/></svg>
+        <span class="nav-label">Capacity Recommender</span>
+      </button>
       <button class="nav-sub-item" data-report-view="sku-chart">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="1" y="4" width="3" height="11"/><rect x="6" y="7" width="3" height="8"/><rect x="11" y="2" width="3" height="13"/></svg>
         <span class="nav-label">Top SKUs</span>
@@ -197,6 +201,68 @@
                   <th>Deployable Families</th>
                   <th>Subscriptions with Deployable</th>
                   <th>Top Constrained Families</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="view-panel" id="view-recommender">
+          <div class="surface overflow-auto">
+            <h3>Capacity Recommender</h3>
+            <div class="report-explainer">
+              <strong>Report Key</strong>
+              <span>Enter a constrained target SKU and regions to get ranked alternatives based on similarity scoring from Get-AzVMAvailability.</span>
+              <span>Score emphasizes vCPU, memory, family, generation, architecture, and premium IO compatibility. Use this to reduce trial-and-error when a SKU is constrained.</span>
+            </div>
+
+            <div class="filters" style="margin-bottom: 10px; align-items: end;">
+              <label>Target SKU
+                <input id="recommendTargetSku" type="text" placeholder="Standard_D4s_v3" />
+              </label>
+              <label>Regions (comma-separated)
+                <input id="recommendRegions" type="text" placeholder="eastus,westus2" />
+              </label>
+              <label>Top N
+                <input id="recommendTopN" type="number" min="1" max="25" value="10" />
+              </label>
+              <label>Min Score
+                <input id="recommendMinScore" type="number" min="0" max="100" value="50" />
+              </label>
+              <label class="checkbox-inline">
+                <input id="recommendShowPricing" type="checkbox" checked />
+                <span>Show Pricing</span>
+              </label>
+              <label class="checkbox-inline">
+                <input id="recommendShowSpot" type="checkbox" />
+                <span>Show Spot</span>
+              </label>
+              <button id="runRecommendBtn" type="button">Run Recommendation</button>
+            </div>
+
+            <p id="recommendStatus" class="inline-note">Run the recommender to populate alternatives.</p>
+            <div id="recommendTargetSummary" class="inline-note" style="margin-bottom: 8px;"></div>
+            <div id="recommendWarnings" class="inline-note" style="margin-bottom: 8px;"></div>
+
+            <table id="recommendGrid">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>SKU</th>
+                  <th>Region</th>
+                  <th>vCPU</th>
+                  <th>Mem(GB)</th>
+                  <th>Score</th>
+                  <th>CPU</th>
+                  <th>Disk</th>
+                  <th>Type</th>
+                  <th>Capacity</th>
+                  <th>Zones</th>
+                  <th>$/Hr</th>
+                  <th>$/Mo</th>
+                  <th>Spot$/Hr</th>
+                  <th>Spot$/Mo</th>
                 </tr>
               </thead>
               <tbody></tbody>

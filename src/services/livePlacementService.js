@@ -293,6 +293,56 @@ async function runRemotePlacementLookup({ skus, regions, desiredCount }) {
   }
 }
 
+async function runRemoteRecommendationLookup({ targetSku, regions, topN, minScore, showPricing, showSpot }) {
+  const baseUrl = resolveWorkerBaseUrl();
+  if (!baseUrl) {
+    return null;
+  }
+
+  const controller = new AbortController();
+  const timeoutMs = Math.max(Number(process.env.CAPACITY_WORKER_TIMEOUT_MS || DEFAULT_WORKER_TIMEOUT_MS), 1000);
+  const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(`${baseUrl}/api/recommendations`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(resolveWorkerSharedSecret() ? { 'x-capacity-worker-key': resolveWorkerSharedSecret() } : {})
+      },
+      body: JSON.stringify({
+        targetSku,
+        regions,
+        topN,
+        minScore,
+        showPricing,
+        showSpot
+      }),
+      signal: controller.signal
+    });
+
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload?.ok === false) {
+      throw new Error(payload?.detail || payload?.error || `Remote worker failed with status ${response.status}.`);
+    }
+
+    return {
+      ...(payload?.result || {}),
+      diagnostics: payload?.diagnostics || {
+        executionMode: 'function-app',
+        workerUrl: baseUrl
+      }
+    };
+  } catch (error) {
+    const prefix = error?.name === 'AbortError'
+      ? `Remote worker timed out after ${timeoutMs}ms`
+      : 'Remote worker call failed';
+    throw new Error(`${prefix}: ${error.message}`);
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
+
 function httpsGetJson(url) {
   return new Promise((resolve, reject) => {
     const request = https.get(url, {
@@ -859,14 +909,25 @@ async function getCapacityRecommendations(options = {}) {
   let contract;
   let fallbackApplied = false;
   try {
-    contract = await runRecommendationLookupLocal({
-      targetSku,
-      regions: resolvedRegions,
-      topN,
-      minScore,
-      showPricing,
-      showSpot
-    });
+    if (useWorkerFirstMode()) {
+      contract = await runRemoteRecommendationLookup({
+        targetSku,
+        regions: resolvedRegions,
+        topN,
+        minScore,
+        showPricing,
+        showSpot
+      });
+    } else {
+      contract = await runRecommendationLookupLocal({
+        targetSku,
+        regions: resolvedRegions,
+        topN,
+        minScore,
+        showPricing,
+        showSpot
+      });
+    }
   } catch (error) {
     const errorText = String(error?.message || '').toLowerCase();
     const isNoOutputFailure = errorText.includes('returned no json output') || errorText.includes('no output was returned by the recommendation wrapper');

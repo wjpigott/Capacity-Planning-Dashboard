@@ -22,6 +22,7 @@ const {
 const {
   getLivePlacementScoreRows,
   getCapacityRecommendations,
+  getRecommendationDiagnostics,
   startLivePlacementScheduler,
   updateLivePlacementScheduler,
   getLivePlacementSchedulerConfig
@@ -596,7 +597,17 @@ app.post('/api/capacity/recommendations', async (req, res) => {
     res.json({ ok: true, result });
   } catch (err) {
     const status = err.message.includes('not found') || err.message.includes('not configured') ? 503 : 500;
-    res.status(status).json({ ok: false, error: 'Failed to retrieve capacity recommendations', detail: err.message });
+    const diagnostics = getRecommendationDiagnostics();
+    res.status(status).json({ ok: false, error: 'Failed to retrieve capacity recommendations', detail: err.message, diagnostics });
+  }
+});
+
+app.get('/api/admin/recommendations/diagnostics', requireAdmin, (req, res) => {
+  try {
+    const diagnostics = getRecommendationDiagnostics();
+    res.json({ ok: true, diagnostics });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: 'Failed to retrieve diagnostics', detail: err.message });
   }
 });
 

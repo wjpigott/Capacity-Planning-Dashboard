@@ -775,6 +775,26 @@ async function runRecommendationLookupLocal({ targetSku, regions, topN, minScore
   });
 }
 
+function getRecommendationDiagnostics() {
+  const wrapperPath = resolveRecommendationWrapperPath();
+  const repoRoot = resolvePlacementRepoRoot();
+  const wrapperExists = fileExists(wrapperPath);
+  const repoExists = fileExists(repoRoot);
+  const scriptPath = path.join(repoRoot, 'Get-AzVMAvailability.ps1');
+  const scriptExists = fileExists(scriptPath);
+
+  return {
+    wrapperPath,
+    wrapperExists,
+    repoRoot,
+    repoExists,
+    scriptPath,
+    scriptExists,
+    projectRoot: resolveProjectRoot(),
+    runtimeRoot: resolveRuntimeRoot()
+  };
+}
+
 async function getCapacityRecommendations(options = {}) {
   const targetSku = normalizeSkuName(options.targetSku);
   if (!targetSku) {
@@ -1104,6 +1124,7 @@ function getLivePlacementSchedulerConfig() {
 module.exports = {
   getLivePlacementScoreRows,
   getCapacityRecommendations,
+  getRecommendationDiagnostics,
   runScheduledLivePlacementRefresh,
   startLivePlacementScheduler,
   updateLivePlacementScheduler,

@@ -11,6 +11,7 @@ const DEFAULT_MAX_SKUS_PER_CALL = 5;
 const DEFAULT_MAX_REGIONS_PER_CALL = 8;
 const POWERSHELL_RELEASE_API = 'https://api.github.com/repos/PowerShell/PowerShell/releases/latest';
 const DEFAULT_WORKER_TIMEOUT_MS = 60000;
+const DEFAULT_RECOMMENDATION_WORKER_TIMEOUT_MS = 180000;
 
 let portablePowerShellPromise;
 let azModuleBootstrapPromise;
@@ -96,6 +97,17 @@ function resolveWorkerBaseUrl() {
 
 function resolveWorkerSharedSecret() {
   return (process.env.CAPACITY_WORKER_SHARED_SECRET || '').trim();
+}
+
+function resolveRecommendationWorkerTimeoutMs() {
+  return Math.max(
+    Number(
+      process.env.CAPACITY_RECOMMEND_WORKER_TIMEOUT_MS
+      || process.env.CAPACITY_WORKER_TIMEOUT_MS
+      || DEFAULT_RECOMMENDATION_WORKER_TIMEOUT_MS
+    ),
+    1000
+  );
 }
 
 function useWorkerFirstMode() {
@@ -300,7 +312,7 @@ async function runRemoteRecommendationLookup({ targetSku, regions, topN, minScor
   }
 
   const controller = new AbortController();
-  const timeoutMs = Math.max(Number(process.env.CAPACITY_WORKER_TIMEOUT_MS || DEFAULT_WORKER_TIMEOUT_MS), 1000);
+  const timeoutMs = resolveRecommendationWorkerTimeoutMs();
   const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
 
   try {

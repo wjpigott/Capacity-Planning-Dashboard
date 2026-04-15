@@ -417,6 +417,41 @@ function formatCompactTimestamp(value) {
   });
 }
 
+function formatRelativeAgeFromTimestamp(value) {
+  if (!value) {
+    return 'unknown age';
+  }
+
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) {
+    return 'unknown age';
+  }
+
+  const diffMs = Date.now() - timestamp.getTime();
+  if (diffMs < 0) {
+    return 'just now';
+  }
+
+  const minuteMs = 60 * 1000;
+  const hourMs = 60 * minuteMs;
+  const dayMs = 24 * hourMs;
+
+  if (diffMs < minuteMs) {
+    return 'just now';
+  }
+  if (diffMs < hourMs) {
+    const minutes = Math.floor(diffMs / minuteMs);
+    return `${minutes} min ago`;
+  }
+  if (diffMs < dayMs) {
+    const hours = Math.floor(diffMs / hourMs);
+    return `${hours} hr ago`;
+  }
+
+  const days = Math.floor(diffMs / dayMs);
+  return `${days} day${days === 1 ? '' : 's'} ago`;
+}
+
 function getCompactLiveStatus(row) {
   if (row.livePlacementAvailable == null) {
     if (row.livePlacementScore === 'N/A') {
@@ -1023,15 +1058,21 @@ function renderSummary(data, summaryOverride = null) {
   const totalAvailQuota = summaryOverride && Number.isFinite(Number(summaryOverride.availableQuota))
     ? Number(summaryOverride.availableQuota)
     : data.reduce((acc, r) => acc + (r.quotaLimit - r.quotaCurrent), 0);
-  const monthly = summaryOverride && Number.isFinite(Number(summaryOverride.monthlyCost))
-    ? Number(summaryOverride.monthlyCost)
-    : data.reduce((acc, r) => acc + (r.monthlyCost || 0), 0);
+  const latestCapturedAtMs = data
+    .map((row) => new Date(row?.capturedAtUtc || '').getTime())
+    .filter((value) => Number.isFinite(value))
+    .reduce((max, value) => Math.max(max, value), 0);
+  const latestCapturedAt = summaryOverride?.lastDataUpdatedUtc
+    || (latestCapturedAtMs > 0 ? new Date(latestCapturedAtMs).toISOString() : null);
+  const lastUpdatedDisplay = latestCapturedAt
+    ? `${formatCompactTimestamp(latestCapturedAt)} (${formatRelativeAgeFromTimestamp(latestCapturedAt)})`
+    : 'No timestamp available';
 
   summaryCards.innerHTML = `
     <div class="card"><h3>SKU Observations</h3><p>${rowsLabel}</p></div>
     <div class="card"><h3>Constrained Observations</h3><p>${constrained.toLocaleString()}</p></div>
     <div class="card"><h3>Available Quota</h3><p>${totalAvailQuota.toLocaleString()}</p></div>
-    <div class="card"><h3>Reference SKU $/Mo Sum</h3><p>$${monthly.toLocaleString()}</p></div>
+    <div class="card"><h3>Last Data Update</h3><p>${lastUpdatedDisplay}</p></div>
   `;
 }
 

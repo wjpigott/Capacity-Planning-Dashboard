@@ -134,10 +134,14 @@ function readCookie(req, name) {
 }
 
 function getOAuthStateCookieBaseOptions() {
+  const redirectUri = getRedirectUri();
+  const usesHttpsCallback = /^https:\/\//i.test(redirectUri);
   return {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
+    // form_post callback is a cross-site top-level POST from login.microsoftonline.com.
+    // SameSite=Lax can drop cookies on POST, causing state mismatch.
+    secure: usesHttpsCallback || process.env.NODE_ENV === 'production',
+    sameSite: usesHttpsCallback ? 'none' : 'lax',
     path: '/'
   };
 }

@@ -20,6 +20,21 @@ body {
   color: var(--ink);
 }
 
+body.auth-pending .topbar,
+body.auth-pending .app-shell {
+  visibility: hidden;
+}
+
+body.auth-pending::before {
+  content: "Checking sign-in...";
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #3a5572;
+  font-size: 14px;
+}
+
 .topbar {
   padding: 20px 24px;
   background: linear-gradient(135deg, #003a68, #0063b1);

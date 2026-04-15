@@ -593,9 +593,11 @@ async function loadViewerAuth() {
     }
     updateTopbarUser(auth);
     applyAdminAccess(auth);
+    document.body.classList.remove('auth-pending');
     return true;
   } catch {
     applyAdminAccess({ canAccessAdmin: true });
+    document.body.classList.remove('auth-pending');
     return true; // network error — proceed and let individual calls fail gracefully
   }
 }

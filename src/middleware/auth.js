@@ -211,43 +211,9 @@ function buildAuthRouter() {
   const { Router } = require('express');
   const router = Router();
 
-  // GET /auth/login  – initiate MSAL auth code flow
-  router.get('/login', async (req, res) => {
-    if (!AUTH_ENABLED) return res.redirect('/');
-    const client = getMsalClient();
-    if (!client) {
-      return res.status(503).send(
-        'Entra auth is not configured. ' +
-        'Set ENTRA_CLIENT_ID, ENTRA_TENANT_ID, and ENTRA_CLIENT_SECRET in your environment, ' +
-        'or set AUTH_ENABLED=false to disable auth.'
-      );
-    }
-    const state = crypto.randomBytes(16).toString('hex');
-    // Keep a short rolling list of pending states to tolerate users opening
-    // multiple login tabs or retrying quickly without causing false mismatches.
-    const pendingStates = parseOAuthStateList(readCookie(req, 'oauth_state'));
-    const nextStates = pendingStates
-      .filter((s) => s !== state)
-      .concat(state)
-      .slice(-OAUTH_STATE_MAX_PENDING);
-    writeOAuthStateList(res, nextStates);
-    try {
-      const url = await client.getAuthCodeUrl({
-        scopes: ['openid', 'profile', 'email'],
-        redirectUri: getRedirectUri(),
-        state,
-        prompt: 'select_account'
-      });
-      return res.redirect(url);
-    } catch (err) {
-      console.error('[auth] getAuthCodeUrl failed:', err.message);
-      return res.status(500).send('Failed to initiate login. Verify ENTRA_CLIENT_ID and ENTRA_CLIENT_SECRET.');
-    }
-  });
-
-  // GET /auth/callback  – exchange auth code for tokens
-  router.get('/callback', async (req, res) => {
-    const { code, state, error, error_description } = req.query;
+  async function handleAuthCallback(req, res) {
+    const callbackPayload = req.method === 'POST' ? req.body : req.query;
+    const { code, state, error, error_description } = callbackPayload || {};
     if (error) {
       console.error('[auth] callback error:', error, error_description);
       if (isAccessDeniedError(error, error_description)) {
@@ -337,7 +303,46 @@ function buildAuthRouter() {
         err.message
       );
     }
+  }
+
+  // GET /auth/login  – initiate MSAL auth code flow
+  router.get('/login', async (req, res) => {
+    if (!AUTH_ENABLED) return res.redirect('/');
+    const client = getMsalClient();
+    if (!client) {
+      return res.status(503).send(
+        'Entra auth is not configured. ' +
+        'Set ENTRA_CLIENT_ID, ENTRA_TENANT_ID, and ENTRA_CLIENT_SECRET in your environment, ' +
+        'or set AUTH_ENABLED=false to disable auth.'
+      );
+    }
+    const state = crypto.randomBytes(16).toString('hex');
+    // Keep a short rolling list of pending states to tolerate users opening
+    // multiple login tabs or retrying quickly without causing false mismatches.
+    const pendingStates = parseOAuthStateList(readCookie(req, 'oauth_state'));
+    const nextStates = pendingStates
+      .filter((s) => s !== state)
+      .concat(state)
+      .slice(-OAUTH_STATE_MAX_PENDING);
+    writeOAuthStateList(res, nextStates);
+    try {
+      const url = await client.getAuthCodeUrl({
+        scopes: ['openid', 'profile', 'email'],
+        redirectUri: getRedirectUri(),
+        state,
+        responseMode: 'form_post',
+        prompt: 'select_account'
+      });
+      return res.redirect(url);
+    } catch (err) {
+      console.error('[auth] getAuthCodeUrl failed:', err.message);
+      return res.status(500).send('Failed to initiate login. Verify ENTRA_CLIENT_ID and ENTRA_CLIENT_SECRET.');
+    }
   });
+
+  // Callback supports both POST (preferred form_post mode) and legacy GET mode.
+  router.post('/callback', handleAuthCallback);
+  router.get('/callback', handleAuthCallback);
 
   // GET /auth/logout  – destroy session and redirect to Microsoft logout
   router.get('/logout', (req, res) => {

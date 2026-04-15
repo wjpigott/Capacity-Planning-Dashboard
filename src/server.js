@@ -179,6 +179,7 @@ app.use((req, res, next) => {
 
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 
 // Session — required for MSAL auth code flow state and account storage.
 // In production, prefer SQL-backed sessions when SQL is configured so auth

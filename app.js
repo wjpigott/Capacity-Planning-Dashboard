@@ -3,6 +3,7 @@ let subscriptionOptions = [];
 let managementGroupOptions = [];
 let quotaGroupOptions = [];
 let quotaRunOptions = [];
+let quotaCandidateRows = [];
 let capacityFacetRegions = [];
 let capacityFacetFamilies = [];
 let regionMatrixRows = [];
@@ -148,6 +149,10 @@ const quotaDiscoveryStatus = document.querySelector('#quotaDiscoveryStatus');
 const quotaMovementStatus = document.querySelector('#quotaMovementStatus');
 const quotaManagementGroupFilter = document.querySelector('#quotaManagementGroupFilter');
 const quotaGroupFilter = document.querySelector('#quotaGroupFilter');
+const quotaCandidateSubscriptionFilter = document.querySelector('#quotaCandidateSubscriptionFilter');
+const quotaCandidateRegionFilter = document.querySelector('#quotaCandidateRegionFilter');
+const quotaCandidateSkuFilter = document.querySelector('#quotaCandidateSkuFilter');
+const quotaCandidateClearFiltersBtn = document.querySelector('#quotaCandidateClearFiltersBtn');
 const quotaRunFilter = document.querySelector('#quotaRunFilter');
 const triggerIngestBtn = document.querySelector('#triggerIngestBtn');
 const subscriptionRefreshBtn = document.querySelector('#subscriptionRefreshBtn');
@@ -1012,7 +1017,7 @@ function renderSummary(data, summaryOverride = null) {
     <div class="card"><h3>Rows</h3><p>${rowsLabel}</p></div>
     <div class="card"><h3>Constrained Rows</h3><p>${constrained.toLocaleString()}</p></div>
     <div class="card"><h3>Available Quota</h3><p>${totalAvailQuota.toLocaleString()}</p></div>
-    <div class="card"><h3>Monthly Cost</h3><p>$${monthly.toLocaleString()}</p></div>
+    <div class="card"><h3>Reference SKU $/Mo Sum</h3><p>$${monthly.toLocaleString()}</p></div>
   `;
 }
 
@@ -1170,13 +1175,19 @@ function renderQuotaCandidates(candidates) {
     return;
   }
 
+  const scopedCandidates = getScopedQuotaCandidates(candidates);
   quotaCandidatesGridBody.innerHTML = '';
   if (!candidates || candidates.length === 0) {
     quotaCandidatesGridBody.innerHTML = '<tr><td colspan="11" style="text-align: center; padding: 20px; color: #5d7085;">No quota candidates generated for the selected scope.</td></tr>';
     return;
   }
 
-  candidates.forEach((candidate) => {
+  if (scopedCandidates.length === 0) {
+    quotaCandidatesGridBody.innerHTML = '<tr><td colspan="11" style="text-align: center; padding: 20px; color: #5d7085;">No quota candidates match the selected top filters.</td></tr>';
+    return;
+  }
+
+  scopedCandidates.forEach((candidate) => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${candidate.subscriptionName || 'n/a'}</td>
@@ -1193,6 +1204,86 @@ function renderQuotaCandidates(candidates) {
     `;
     quotaCandidatesGridBody.appendChild(tr);
   });
+}
+
+function getScopedQuotaCandidates(candidates) {
+  const rowsToFilter = Array.isArray(candidates) ? candidates : [];
+  const selectedSubscriptionId = quotaCandidateSubscriptionFilter?.value || 'all';
+  const selectedRegion = quotaCandidateRegionFilter?.value || 'all';
+  const skuFamilyTerm = String(quotaCandidateSkuFilter?.value || '').trim().toLowerCase();
+
+  return rowsToFilter.filter((candidate) => {
+    const bySubscription = selectedSubscriptionId === 'all' || String(candidate.subscriptionId || '') === selectedSubscriptionId;
+    const byRegion = selectedRegion === 'all' || String(candidate.region || '').toLowerCase() === selectedRegion.toLowerCase();
+    const familyText = String(candidate.family || '').toLowerCase();
+    const quotaNameText = String(candidate.quotaName || '').toLowerCase();
+    const bySkuFamily = !skuFamilyTerm
+      || familyText.includes(skuFamilyTerm)
+      || quotaNameText.includes(skuFamilyTerm);
+
+    return bySubscription && byRegion && bySkuFamily;
+  });
+}
+
+function renderQuotaCandidateFilterOptions(candidates) {
+  if (!quotaCandidateSubscriptionFilter || !quotaCandidateRegionFilter) {
+    return;
+  }
+
+  const rowsToUse = Array.isArray(candidates) ? candidates : [];
+  const previousSubscription = quotaCandidateSubscriptionFilter.value || 'all';
+  const previousRegion = quotaCandidateRegionFilter.value || 'all';
+
+  const subscriptionMap = new Map();
+  rowsToUse.forEach((candidate) => {
+    const subscriptionId = String(candidate.subscriptionId || '').trim();
+    if (!subscriptionId || subscriptionMap.has(subscriptionId)) {
+      return;
+    }
+    subscriptionMap.set(subscriptionId, String(candidate.subscriptionName || '').trim());
+  });
+
+  const subscriptionIds = [...subscriptionMap.keys()].sort((a, b) => a.localeCompare(b));
+  fillSelect(quotaCandidateSubscriptionFilter, subscriptionIds, 'All Subscriptions');
+  [...quotaCandidateSubscriptionFilter.options].forEach((option) => {
+    if (option.value === 'all') {
+      return;
+    }
+    const subscriptionName = subscriptionMap.get(option.value);
+    if (subscriptionName) {
+      option.textContent = `${subscriptionName} (${option.value})`;
+    }
+  });
+
+  const regions = [...new Set(rowsToUse.map((candidate) => String(candidate.region || '').trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+  fillSelect(quotaCandidateRegionFilter, regions, 'All Regions');
+
+  quotaCandidateSubscriptionFilter.value = subscriptionIds.includes(previousSubscription) ? previousSubscription : 'all';
+  quotaCandidateRegionFilter.value = regions.includes(previousRegion) ? previousRegion : 'all';
+  quotaCandidateSubscriptionFilter.disabled = subscriptionIds.length === 0;
+  quotaCandidateRegionFilter.disabled = regions.length === 0;
+}
+
+function resetQuotaCandidateFilters(resetSku = true) {
+  if (quotaCandidateSubscriptionFilter) {
+    quotaCandidateSubscriptionFilter.value = 'all';
+  }
+  if (quotaCandidateRegionFilter) {
+    quotaCandidateRegionFilter.value = 'all';
+  }
+  if (resetSku && quotaCandidateSkuFilter) {
+    quotaCandidateSkuFilter.value = '';
+  }
+}
+
+function getQuotaCandidateScopeFilters() {
+  const selectedSubscriptionId = quotaCandidateSubscriptionFilter?.value || 'all';
+  return {
+    region: quotaCandidateRegionFilter?.value || 'all',
+    family: String(quotaCandidateSkuFilter?.value || '').trim() || 'all',
+    subscriptionIds: selectedSubscriptionId === 'all' ? '' : selectedSubscriptionId
+  };
 }
 
 function renderQuotaPlan(planRows) {
@@ -1354,11 +1445,17 @@ async function loadQuotaGroups() {
     quotaGroupOptions = Array.isArray(payload.groups) ? payload.groups : [];
     renderQuotaGroupOptions(quotaGroupOptions);
     const groups = quotaGroupOptions;
+    quotaCandidateRows = [];
+    renderQuotaCandidateFilterOptions([]);
+    resetQuotaCandidateFilters();
     renderQuotaGroups(groups);
     renderQuotaCandidates([]);
     setQuotaDiscoveryStatus(`Quota discovery completed. ${groups.length} group quota(s) found for management group ${payload.managementGroupId}.`, 'success');
   } catch (error) {
     quotaGroupOptions = [];
+    quotaCandidateRows = [];
+    renderQuotaCandidateFilterOptions([]);
+    resetQuotaCandidateFilters();
     renderQuotaGroupOptions([]);
     renderQuotaGroups([]);
     renderQuotaCandidates([]);
@@ -1385,12 +1482,14 @@ async function loadQuotaCandidates() {
   setQuotaDiscoveryStatus(`Generating candidates for quota group ${groupQuotaName}...`, 'info');
 
   try {
+    const candidateFilters = getQuotaCandidateScopeFilters();
     const query = new URLSearchParams({
       managementGroupId,
       groupQuotaName,
       regionPreset: regionPresetFilter.value || 'all',
-      region: regionFilter.value || 'all',
-      family: familyFilter.value || 'all'
+      region: candidateFilters.region,
+      family: candidateFilters.family,
+      subscriptionIds: candidateFilters.subscriptionIds
     });
     const response = await fetch(`/api/quota/candidates?${query.toString()}`);
     const payload = await response.json();
@@ -1398,10 +1497,14 @@ async function loadQuotaCandidates() {
       throw new Error(payload.error || 'Failed to generate quota candidates.');
     }
 
-    const candidates = Array.isArray(payload.candidates) ? payload.candidates : [];
-    renderQuotaCandidates(candidates);
-    setQuotaDiscoveryStatus(`Candidate generation completed. ${payload.candidateCount} movable candidate row(s) found across ${payload.subscriptionCount} subscription(s).`, 'success');
+    quotaCandidateRows = Array.isArray(payload.candidates) ? payload.candidates : [];
+    renderQuotaCandidateFilterOptions(quotaCandidateRows);
+    renderQuotaCandidates(quotaCandidateRows);
+    const visibleCount = getScopedQuotaCandidates(quotaCandidateRows).length;
+    setQuotaDiscoveryStatus(`Candidate generation completed. ${payload.candidateCount} movable candidate row(s) found across ${payload.subscriptionCount} subscription(s). ${visibleCount} row(s) match the current top filters.`, 'success');
   } catch (error) {
+    quotaCandidateRows = [];
+    renderQuotaCandidateFilterOptions([]);
     renderQuotaCandidates([]);
     setQuotaDiscoveryStatus(error.message || 'Failed to generate quota candidates.', 'error');
   }
@@ -1422,11 +1525,13 @@ async function loadQuotaCandidateRuns(showStatus = false) {
   }
 
   try {
+    const candidateFilters = getQuotaCandidateScopeFilters();
     const query = new URLSearchParams({
       managementGroupId,
       groupQuotaName,
-      region: regionFilter.value || 'all',
-      family: familyFilter.value || 'all'
+      region: candidateFilters.region,
+      family: candidateFilters.family,
+      subscriptionIds: candidateFilters.subscriptionIds
     });
     const response = await fetch(`/api/quota/candidate-runs?${query.toString()}`);
     const payload = await response.json();
@@ -1465,6 +1570,7 @@ async function captureQuotaCandidateHistory() {
   setQuotaDiscoveryStatus(`Capturing candidate history for quota group ${groupQuotaName}...`, 'info');
 
   try {
+    const candidateFilters = getQuotaCandidateScopeFilters();
     const response = await fetch('/api/quota/candidates/capture', {
       method: 'POST',
       headers: {
@@ -1474,8 +1580,9 @@ async function captureQuotaCandidateHistory() {
         managementGroupId,
         groupQuotaName,
         regionPreset: regionPresetFilter.value || 'all',
-        region: regionFilter.value || 'all',
-        family: familyFilter.value || 'all'
+        region: candidateFilters.region,
+        family: candidateFilters.family,
+        subscriptionIds: candidateFilters.subscriptionIds
       })
     });
     const payload = await response.json();
@@ -1483,7 +1590,9 @@ async function captureQuotaCandidateHistory() {
       throw new Error(payload.error || 'Failed to capture quota candidate history.');
     }
 
-    renderQuotaCandidates(Array.isArray(payload.candidates) ? payload.candidates : []);
+    quotaCandidateRows = Array.isArray(payload.candidates) ? payload.candidates : [];
+    renderQuotaCandidateFilterOptions(quotaCandidateRows);
+    renderQuotaCandidates(quotaCandidateRows);
     setQuotaDiscoveryStatus(`Captured ${payload.insertedRows} candidate snapshot row(s) in analysis run ${payload.analysisRunId}.`, 'success');
     await loadQuotaCandidateRuns(true);
   } catch (error) {
@@ -1517,12 +1626,14 @@ async function loadQuotaMovePlan() {
   setQuotaMovementStatus(`Building move plan from captured analysis run ${analysisRunId}...`, 'info');
 
   try {
+    const candidateFilters = getQuotaCandidateScopeFilters();
     const query = new URLSearchParams({
       managementGroupId,
       groupQuotaName,
       analysisRunId,
-      region: regionFilter.value || 'all',
-      family: familyFilter.value || 'all'
+      region: candidateFilters.region,
+      family: candidateFilters.family,
+      subscriptionIds: candidateFilters.subscriptionIds
     });
     const response = await fetch(`/api/quota/plan?${query.toString()}`);
     const payload = await response.json();
@@ -2297,7 +2408,6 @@ async function loadCapacityRows() {
           monthlyCost: Number(payload.summary.monthlyCost || 0)
         }
       : null;
-
     const paging = payload.pagination || {};
     capacityPaging.total = Number(paging.total || 0);
     capacityPaging.pageNumber = Number(paging.pageNumber || capacityPaging.pageNumber || 1);
@@ -2470,7 +2580,10 @@ function wireButtons() {
 
 quotaManagementGroupFilter?.addEventListener('change', () => {
   quotaGroupOptions = [];
+  quotaCandidateRows = [];
   renderQuotaGroupOptions([]);
+  renderQuotaCandidateFilterOptions([]);
+  resetQuotaCandidateFilters();
   renderQuotaRunOptions([]);
   renderQuotaGroups([]);
   renderQuotaCandidates([]);
@@ -2481,6 +2594,9 @@ quotaManagementGroupFilter?.addEventListener('change', () => {
 });
 
 quotaGroupFilter?.addEventListener('change', () => {
+  quotaCandidateRows = [];
+  renderQuotaCandidateFilterOptions([]);
+  resetQuotaCandidateFilters();
   renderQuotaGroups(quotaGroupOptions);
   renderQuotaCandidates([]);
   renderQuotaPlan([]);
@@ -2495,6 +2611,23 @@ quotaRunFilter?.addEventListener('change', () => {
   if (quotaRunFilter.value) {
     setQuotaMovementStatus(`Selected analysis run ${quotaRunFilter.value}. Build Move Plan or Simulate Impact to continue.`, 'info');
   }
+});
+
+quotaCandidateSubscriptionFilter?.addEventListener('change', () => {
+  renderQuotaCandidates(quotaCandidateRows);
+});
+
+quotaCandidateRegionFilter?.addEventListener('change', () => {
+  renderQuotaCandidates(quotaCandidateRows);
+});
+
+quotaCandidateSkuFilter?.addEventListener('input', () => {
+  renderQuotaCandidates(quotaCandidateRows);
+});
+
+quotaCandidateClearFiltersBtn?.addEventListener('click', () => {
+  resetQuotaCandidateFilters();
+  renderQuotaCandidates(quotaCandidateRows);
 });
 
 regionPresetFilter.addEventListener('change', () => {

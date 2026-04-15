@@ -7,9 +7,11 @@ const { insertCapacitySnapshots, insertCapacityScoreSnapshots } = require('../st
 
 const ARM_SCOPE = 'https://management.azure.com/.default';
 const ARM_BASE = 'https://management.azure.com';
+const RETAIL_PRICING_BASE = 'https://prices.azure.com/api/retail/prices';
 const DEFAULT_ARM_MAX_RETRIES = 3;
 const DEFAULT_REGION_CONCURRENCY = 4;
 const DEFAULT_ARM_TIMEOUT_MS = 30000;
+const DEFAULT_HOURS_PER_MONTH = 730;
 
 let schedulerHandle;
 let schedulerConfig = {
@@ -225,6 +227,10 @@ function formatNetworkError(err) {
 
 function armGetPage(url, token, { forceIPv4 = false } = {}) {
   const parsedUrl = new URL(url);
+  const headers = {};
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
 
   return new Promise((resolve, reject) => {
     const request = https.request({
@@ -235,9 +241,7 @@ function armGetPage(url, token, { forceIPv4 = false } = {}) {
       method: 'GET',
       family: forceIPv4 ? 4 : undefined,
       timeout: DEFAULT_ARM_TIMEOUT_MS,
-      headers: {
-        Authorization: `Bearer ${token}`
-      }
+      headers
     }, (response) => {
       let body = '';
       response.setEncoding('utf8');
@@ -331,6 +335,100 @@ async function mapWithConcurrency(items, concurrency, worker) {
   return results;
 }
 
+function normalizeRegionName(region) {
+  return String(region || '').trim().toLowerCase();
+}
+
+function normalizeSkuName(skuName) {
+  return String(skuName || '').trim();
+}
+
+function getPricingCacheKey(region, skuName) {
+  return `${normalizeRegionName(region)}|${normalizeSkuName(skuName).toLowerCase()}`;
+}
+
+function getRetailPriceUrl(region, skuName, includeSpot) {
+  const filters = [
+    "serviceName eq 'Virtual Machines'",
+    `armRegionName eq '${normalizeRegionName(region)}'`,
+    `armSkuName eq '${normalizeSkuName(skuName)}'`,
+    "priceType eq 'Consumption'"
+  ];
+
+  if (includeSpot) {
+    filters.push("contains(meterName, 'Spot')");
+  } else {
+    filters.push("contains(productName, 'Linux')");
+    filters.push('isPrimaryMeterRegion eq true');
+  }
+
+  return `${RETAIL_PRICING_BASE}?$filter=${encodeURIComponent(filters.join(' and '))}`;
+}
+
+async function retailGetAll(url) {
+  const all = [];
+  let next = url;
+
+  while (next) {
+    const response = await armGetPageWithRetry(next, null);
+    const payload = await response.json();
+    if (Array.isArray(payload.Items)) {
+      all.push(...payload.Items);
+    }
+
+    next = payload.NextPageLink || null;
+  }
+
+  return all;
+}
+
+function pickConsumptionPrice(items) {
+  const candidate = (items || [])
+    .filter((item) => Number.isFinite(Number(item?.retailPrice)) && Number(item.retailPrice) > 0)
+    .sort((a, b) => Number(a.retailPrice) - Number(b.retailPrice))[0];
+
+  return candidate ? Number(candidate.retailPrice) : null;
+}
+
+async function getVmRetailPricing(region, skuName, cache) {
+  const cacheKey = getPricingCacheKey(region, skuName);
+  if (cache.has(cacheKey)) {
+    return cache.get(cacheKey);
+  }
+
+  const regularUrl = getRetailPriceUrl(region, skuName, false);
+  const spotUrl = getRetailPriceUrl(region, skuName, true);
+
+  try {
+    const [regularItems, spotItems] = await Promise.all([
+      retailGetAll(regularUrl),
+      retailGetAll(spotUrl)
+    ]);
+
+    const hourly = pickConsumptionPrice(regularItems);
+    const spotHourly = pickConsumptionPrice(spotItems);
+
+    const pricing = {
+      hourly,
+      monthly: Number.isFinite(hourly) ? Number((hourly * DEFAULT_HOURS_PER_MONTH).toFixed(2)) : null,
+      spotHourly,
+      spotMonthly: Number.isFinite(spotHourly) ? Number((spotHourly * DEFAULT_HOURS_PER_MONTH).toFixed(2)) : null
+    };
+
+    cache.set(cacheKey, pricing);
+    return pricing;
+  } catch {
+    const pricing = {
+      hourly: null,
+      monthly: null,
+      spotHourly: null,
+      spotMonthly: null
+    };
+    cache.set(cacheKey, pricing);
+    return pricing;
+  }
+}
+
 async function runCapacityIngestion(options = {}) {
   if (ingestStatus.inProgress) {
     throw new Error('Capacity ingestion is already running.');
@@ -353,6 +451,8 @@ async function runCapacityIngestion(options = {}) {
     const familyFilters = getFamilyFilters(options.familyFilters);
     const capturedAtUtc = new Date();
     const rows = [];
+    const pricingEnabled = String(process.env.INGEST_ENABLE_PRICING || 'true').toLowerCase() !== 'false';
+    const pricingCache = new Map();
 
     // Process subscriptions in batches to avoid ARM API rate limits
     const batchSize = 100;
@@ -390,6 +490,10 @@ async function runCapacityIngestion(options = {}) {
             const representativeSku = pickRepresentativeSku(skus, familyName);
             const quotaCurrent = Number(usage?.currentValue || 0);
             const quotaLimit = Number(usage?.limit || 0);
+            const skuName = representativeSku?.name || `${familyName}-aggregate`;
+            const pricing = (pricingEnabled && representativeSku?.name)
+              ? await getVmRetailPricing(region, representativeSku.name, pricingCache)
+              : { monthly: null };
 
             localRows.push({
               capturedAtUtc,
@@ -398,7 +502,7 @@ async function runCapacityIngestion(options = {}) {
               subscriptionId,
               subscriptionName,
               region,
-              skuName: representativeSku?.name || `${familyName}-aggregate`,
+              skuName,
               skuFamily: familyName,
               vCpu: Number(getCapabilityValue(representativeSku?.capabilities, 'vCPUs') || 0) || null,
               memoryGB: Number(getCapabilityValue(representativeSku?.capabilities, 'MemoryGB') || 0) || null,
@@ -406,7 +510,7 @@ async function runCapacityIngestion(options = {}) {
               availabilityState: computeAvailabilityState(Boolean(representativeSku), quotaCurrent, quotaLimit),
               quotaCurrent,
               quotaLimit,
-              monthlyCostEstimate: null
+              monthlyCostEstimate: pricing.monthly
             });
           }
 

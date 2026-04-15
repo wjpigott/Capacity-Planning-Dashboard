@@ -152,7 +152,7 @@
                   <th>Quota Limit</th>
                   <th>Quota Available</th>
                   <th>Utilization %</th>
-                  <th>Monthly Cost (est.)</th>
+                  <th>Reference SKU $/Mo (not spend)</th>
                 </tr>
               </thead>
               <tbody></tbody>
@@ -488,6 +488,26 @@
             <label>Quota Group
               <select id="quotaGroupFilter"></select>
             </label>
+          </div>
+        </div>
+
+        <div class="surface" style="margin-bottom: 16px;">
+          <div class="filter-section-label">Candidate Filters</div>
+          <div class="filters">
+            <label>Subscription
+              <select id="quotaCandidateSubscriptionFilter">
+                <option value="all">All Subscriptions</option>
+              </select>
+            </label>
+            <label>Region
+              <select id="quotaCandidateRegionFilter">
+                <option value="all">All Regions</option>
+              </select>
+            </label>
+            <label>SKU / Family
+              <input id="quotaCandidateSkuFilter" type="text" placeholder="Filter by family (for example: ND, HB, Standard_Dsv5)" />
+            </label>
+            <button id="quotaCandidateClearFiltersBtn" type="button">Clear Candidate Filters</button>
           </div>
         </div>
 

@@ -25,7 +25,71 @@ let livePlacementSchedulerConfig = {
 let livePlacementRefreshInProgress = false;
 
 function normalizeSkuName(value) {
-  return String(value || '').trim();
+  const trimmed = String(value || '').trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  const normalizeSuffix = (suffix) => String(suffix || '')
+    .split('_')
+    .map((segment) => {
+      const normalized = String(segment || '').trim().toLowerCase();
+      if (!normalized) {
+        return '';
+      }
+      if (/^v\d+$/.test(normalized)) {
+        return normalized;
+      }
+      return normalized.replace(/^([a-z]+)/, (match) => match.toUpperCase());
+    })
+    .filter(Boolean)
+    .join('_');
+
+  const prefixedSku = trimmed.match(/^(standard|basic|internal)(?:[_\s-]?)(.*)$/i);
+  if (prefixedSku) {
+    const prefixToken = String(prefixedSku[1] || '').toLowerCase();
+    const prefix = prefixToken === 'standard'
+      ? 'Standard'
+      : (prefixToken === 'basic' ? 'Basic' : 'Internal');
+    const rawSuffix = String(prefixedSku[2] || '').replace(/^[_\s-]+/, '');
+    const suffix = normalizeSuffix(rawSuffix);
+    return suffix ? `${prefix}_${suffix}` : prefix;
+  }
+
+  return trimmed;
+}
+
+function normalizeRecommendationContract(contract) {
+  if (!contract || typeof contract !== 'object') {
+    return contract;
+  }
+
+  const normalizeRecommendationRow = (row) => {
+    if (!row || typeof row !== 'object') {
+      return row;
+    }
+
+    return {
+      ...row,
+      sku: normalizeSkuName(row.sku)
+    };
+  };
+
+  return {
+    ...contract,
+    target: contract.target && typeof contract.target === 'object'
+      ? {
+          ...contract.target,
+          name: normalizeSkuName(contract.target.name)
+        }
+      : contract.target,
+    recommendations: Array.isArray(contract.recommendations)
+      ? contract.recommendations.map(normalizeRecommendationRow)
+      : contract.recommendations,
+    belowMinSpec: Array.isArray(contract.belowMinSpec)
+      ? contract.belowMinSpec.map(normalizeRecommendationRow)
+      : contract.belowMinSpec
+  };
 }
 
 function parseExtraSkus(rawValue) {
@@ -99,15 +163,20 @@ function resolveWorkerSharedSecret() {
   return (process.env.CAPACITY_WORKER_SHARED_SECRET || '').trim();
 }
 
-function resolveRecommendationWorkerTimeoutMs() {
-  return Math.max(
-    Number(
-      process.env.CAPACITY_RECOMMEND_WORKER_TIMEOUT_MS
-      || process.env.CAPACITY_WORKER_TIMEOUT_MS
-      || DEFAULT_RECOMMENDATION_WORKER_TIMEOUT_MS
-    ),
-    1000
+function resolveRecommendationWorkerTimeoutMs(regionCount = 1) {
+  const configuredTimeoutMs = Number(
+    process.env.CAPACITY_RECOMMEND_WORKER_TIMEOUT_MS
+    || process.env.CAPACITY_WORKER_TIMEOUT_MS
+    || 0
   );
+
+  if (Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0) {
+    return Math.max(configuredTimeoutMs, 1000);
+  }
+
+  const count = Math.max(1, Number(regionCount) || 1);
+  const dynamicTimeoutMs = DEFAULT_RECOMMENDATION_WORKER_TIMEOUT_MS + ((count - 1) * 15000);
+  return Math.min(Math.max(dynamicTimeoutMs, 1000), 600000);
 }
 
 function useWorkerFirstMode() {
@@ -312,7 +381,7 @@ async function runRemoteRecommendationLookup({ targetSku, regions, topN, minScor
   }
 
   const controller = new AbortController();
-  const timeoutMs = resolveRecommendationWorkerTimeoutMs();
+  const timeoutMs = resolveRecommendationWorkerTimeoutMs(Array.isArray(regions) ? regions.length : 1);
   const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
@@ -338,13 +407,13 @@ async function runRemoteRecommendationLookup({ targetSku, regions, topN, minScor
       throw new Error(payload?.detail || payload?.error || `Remote worker failed with status ${response.status}.`);
     }
 
-    return {
+    return normalizeRecommendationContract({
       ...(payload?.result || {}),
       diagnostics: payload?.diagnostics || {
         executionMode: 'function-app',
         workerUrl: baseUrl
       }
-    };
+    });
   } catch (error) {
     const prefix = error?.name === 'AbortError'
       ? `Remote worker timed out after ${timeoutMs}ms`
@@ -788,6 +857,8 @@ async function runRecommendationLookupLocal({ targetSku, regions, topN, minScore
     args.push('-ShowSpot');
   }
 
+  const timeoutMs = resolveRecommendationWorkerTimeoutMs(Array.isArray(regions) ? regions.length : 1);
+
   function tryCommand(commandIndex, resolve, reject) {
     if (commandIndex >= commands.length) {
       reject(new Error('Capacity recommendation failed: no supported PowerShell executable was found.'));
@@ -804,7 +875,8 @@ async function runRecommendationLookupLocal({ targetSku, regions, topN, minScore
         {
           cwd: resolveProjectRoot(),
           env,
-          maxBuffer: 2 * 1024 * 1024
+          maxBuffer: 2 * 1024 * 1024,
+          timeout: timeoutMs
         },
         (error, stdout, stderr) => {
           const stdoutText = String(stdout || '').trim();
@@ -843,7 +915,7 @@ async function runRecommendationLookupLocal({ targetSku, regions, topN, minScore
 
           const parsedStdout = parseJsonFromMixedOutput(stdout);
           if (parsedStdout) {
-            resolve(parsedStdout);
+            resolve(normalizeRecommendationContract(parsedStdout));
             return;
           }
 
@@ -852,7 +924,7 @@ async function runRecommendationLookupLocal({ targetSku, regions, topN, minScore
             .join('\n');
           const parsedCombined = parseJsonFromMixedOutput(combinedOutput);
           if (parsedCombined) {
-            resolve(parsedCombined);
+            resolve(normalizeRecommendationContract(parsedCombined));
             return;
           }
 

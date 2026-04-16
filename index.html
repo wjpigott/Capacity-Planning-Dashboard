@@ -101,7 +101,16 @@
           <div class="filters">
             <label>Region Group
               <select id="regionPresetFilter">
-                <option value="USMajor">US Commercial</option>
+                <option value="USEastWest">US East/West</option>
+                <option value="USCentral">US Central</option>
+                <option value="USMajor">US Major (Top 5)</option>
+                <option value="Europe">Europe</option>
+                <option value="AsiaPacific">Asia Pacific</option>
+                <option value="Global">Global</option>
+                <option value="USGov">US Government</option>
+                <option value="China">China</option>
+                <option value="ASR-EastWest">ASR East/West</option>
+                <option value="ASR-CentralUS">ASR Central US</option>
                 <option value="CommercialAmericas">Commercial - Americas</option>
                 <option value="CommercialEurope">Commercial - Europe</option>
                 <option value="CommercialIndiaME">Commercial - India / Middle East</option>
@@ -239,7 +248,8 @@
 
             <div class="filters" style="margin-bottom: 10px; align-items: end;">
               <label>Target SKU
-                <input id="recommendTargetSku" type="text" placeholder="Standard_D4s_v3" />
+                <input id="recommendTargetSku" name="recommendTargetSkuCanonical" type="text" list="recommendTargetSkuOptions" placeholder="Standard_D4s_v3" autocomplete="off" spellcheck="false" />
+                <datalist id="recommendTargetSkuOptions"></datalist>
               </label>
               <label>Regions (comma-separated)
                 <input id="recommendRegions" type="text" placeholder="eastus,westus2" />
@@ -608,7 +618,7 @@
               </select>
             </label>
             <label>SKU / Family
-              <input id="quotaCandidateSkuFilter" type="text" placeholder="Filter by family (for example: ND, HB, Standard_Dsv5)" />
+              <input id="quotaCandidateSkuFilter" type="text" placeholder="Filter by family (for example: ND, HB, Standard_Dsv5)" autocomplete="off" spellcheck="false" />
             </label>
             <button id="quotaCandidateClearFiltersBtn" type="button">Clear Candidate Filters</button>
           </div>

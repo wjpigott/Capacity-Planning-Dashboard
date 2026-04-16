@@ -100,15 +100,77 @@ function canonicalComputeFamilyLabel(rawFamily, skuName) {
   return '';
 }
 
+function normalizeSkuName(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  const normalizeSuffix = (suffix) => String(suffix || '')
+    .split('_')
+    .map((segment) => {
+      const normalized = String(segment || '').trim().toLowerCase();
+      if (!normalized) {
+        return '';
+      }
+      if (/^v\d+$/.test(normalized)) {
+        return normalized;
+      }
+      return normalized.replace(/^([a-z]+)/, (match) => match.toUpperCase());
+    })
+    .filter(Boolean)
+    .join('_');
+
+  const prefixedSku = trimmed.match(/^(standard|basic|internal)(?:[_\s-]?)(.*)$/i);
+  if (prefixedSku) {
+    const prefixToken = String(prefixedSku[1] || '').toLowerCase();
+    const prefix = prefixToken === 'standard'
+      ? 'Standard'
+      : (prefixToken === 'basic' ? 'Basic' : 'Internal');
+    const rawSuffix = String(prefixedSku[2] || '').replace(/^[_\s-]+/, '');
+    const suffix = normalizeSuffix(rawSuffix);
+    return suffix ? `${prefix}_${suffix}` : prefix;
+  }
+
+  return trimmed;
+}
+
+function compareSkuValues(left, right) {
+  return String(left || '').localeCompare(String(right || ''), undefined, {
+    sensitivity: 'base',
+    numeric: true
+  });
+}
+
 const FAMILY_EXTRA_SKU_MAP = {
   standardHBv3Family: ['Standard_HB120rs_v3'],
   standardHBv4Family: ['Standard_HB176rs_v4'],
   standardNDH100v5Family: ['Standard_ND96isr_H100_v5'],
-  standardNCA100v4Family: ['Standard_NC96ads_A100_v4']
+  standardNCA100v4Family: ['Standard_NC96ads_A100_v4'],
+  standardDSv5Family: [
+    'Standard_D2s_v5',
+    'Standard_D4s_v5',
+    'Standard_D8s_v5',
+    'Standard_D16s_v5',
+    'Standard_D32s_v5',
+    'Standard_D48s_v5',
+    'Standard_D64s_v5',
+    'Standard_D96s_v5'
+  ]
 };
 
 const regionPresets = {
-  USMajor: ['eastus', 'eastus2', 'centralus', 'northcentralus', 'southcentralus', 'westcentralus', 'westus', 'westus2', 'westus3'],
+  USEastWest: ['eastus', 'eastus2', 'westus', 'westus2'],
+  USCentral: ['centralus', 'northcentralus', 'southcentralus', 'westcentralus'],
+  USMajor: ['eastus', 'eastus2', 'centralus', 'westus', 'westus2'],
+  Europe: ['westeurope', 'northeurope', 'uksouth', 'francecentral', 'germanywestcentral'],
+  AsiaPacific: ['eastasia', 'southeastasia', 'japaneast', 'australiaeast', 'koreacentral'],
+  Global: ['eastus', 'westeurope', 'southeastasia', 'australiaeast', 'brazilsouth'],
+  USGov: ['usgovvirginia', 'usgovtexas', 'usgovarizona'],
+  China: ['chinaeast', 'chinanorth', 'chinaeast2', 'chinanorth2'],
+  'ASR-EastWest': ['eastus', 'westus2'],
+  'ASR-CentralUS': ['centralus', 'eastus2'],
+  // Backward-compatible presets used by existing dashboard flows.
   CommercialAmericas: ['eastus', 'eastus2', 'centralus', 'northcentralus', 'southcentralus', 'westcentralus', 'westus', 'westus2', 'westus3', 'canadacentral', 'canadaeast', 'brazilsouth'],
   CommercialEurope: ['northeurope', 'westeurope', 'uksouth', 'ukwest', 'francecentral', 'germanywestcentral', 'swedencentral', 'switzerlandnorth'],
   CommercialIndiaME: ['centralindia', 'southindia', 'westindia', 'uaenorth', 'uaecentral', 'qatarcentral', 'israelcentral'],
@@ -116,6 +178,10 @@ const regionPresets = {
   CommercialAustralia: ['australiaeast', 'australiasoutheast', 'australiacentral', 'australiacentral2'],
   AzureGovernment: ['usgovvirginia', 'usgovtexas', 'usgovarizona'],
   AzureChina: ['chinaeast', 'chinaeast2', 'chinanorth', 'chinanorth2']
+};
+
+const RECOMMENDER_FAMILY_SKU_OPTIONS = {
+  standardDSv5Family: FAMILY_EXTRA_SKU_MAP.standardDSv5Family
 };
 
 const gridBody = document.querySelector('#capacityGrid tbody');
@@ -230,6 +296,8 @@ const capacityScorePaging = {
 };
 
 let authRedirectInProgress = false;
+let lastAutoRecommendTargetSku = '';
+let lastAutoRecommendRegions = '';
 
 function detectDeploymentEnvironment(hostname = window.location.hostname) {
   const value = String(hostname || '').toLowerCase();
@@ -922,6 +990,44 @@ function formatFamilyLabel(family) {
     .replace(/^(Standard|Basic|Premium)([A-Z])/i, '$1_$2');
 }
 
+function normalizeFamilyOptionLabel(family) {
+  const raw = String(family || '').trim();
+  if (!raw) {
+    return '';
+  }
+
+  // Normalize common SKU-family prefixes first, then apply family label formatting.
+  return formatFamilyLabel(normalizeSkuName(raw));
+}
+
+function canonicalFamilyOptionKey(family) {
+  return String(normalizeFamilyOptionLabel(family) || family || '')
+    .toLowerCase()
+    .replace(/[\s_-]/g, '');
+}
+
+function buildFamilyOptions(values) {
+  const byCanonicalValue = new Map();
+  (Array.isArray(values) ? values : []).forEach((value) => {
+    const rawValue = String(value || '').trim();
+    if (!rawValue) {
+      return;
+    }
+
+    const key = canonicalFamilyOptionKey(rawValue);
+    if (!key || byCanonicalValue.has(key)) {
+      return;
+    }
+
+    byCanonicalValue.set(key, {
+      value: rawValue,
+      label: normalizeFamilyOptionLabel(rawValue)
+    });
+  });
+
+  return [...byCanonicalValue.values()].sort((left, right) => compareSkuValues(left.label, right.label));
+}
+
 function applyFamilySearch() {
   const term = (familySearch?.value || '').toLowerCase().trim();
   let firstVisible = null;
@@ -954,10 +1060,10 @@ function syncFamilyOptions() {
   all.textContent = 'All';
   familyFilter.appendChild(all);
 
-  filteredFamilies.forEach((value) => {
+  buildFamilyOptions(filteredFamilies).forEach(({ value, label }) => {
     const option = document.createElement('option');
     option.value = value;
-    option.textContent = formatFamilyLabel(value);
+    option.textContent = label;
     familyFilter.appendChild(option);
   });
 
@@ -2061,7 +2167,7 @@ function renderCapacityScores(scoreRows) {
     const liveScore = getCompactLiveScore(row.livePlacementScore);
     const liveStatus = getCompactLiveStatus(row);
     const regionText = escapeHtml(row.region || 'n/a');
-    const skuText = escapeHtml(row.sku || 'n/a');
+    const skuText = escapeHtml(normalizeSkuName(row.sku) || 'n/a');
     const familyText = escapeHtml(formatFamilyLabel(row.family) || 'n/a');
     const scoreText = escapeHtml(row.score || 'n/a');
     const liveScoreText = escapeHtml(liveScore.short);
@@ -2236,14 +2342,29 @@ function recommendationAvailabilityWeight(value) {
 }
 
 function defaultRecommendTargetSkuFromFilters() {
-  const scoped = filteredRows();
+  const selectedType = resourceTypeFilter?.value || 'all';
+  const selectedFamily = familyFilter?.value || 'all';
+  const selectedAvailability = availabilityFilter?.value || 'all';
+  const familyPreferredSkus = RECOMMENDER_FAMILY_SKU_OPTIONS[selectedFamily];
+
+  if (Array.isArray(familyPreferredSkus) && familyPreferredSkus.length > 0) {
+    return normalizeSkuName(familyPreferredSkus[0]);
+  }
+
+  const scoped = presetScopedRows(rows).filter((row) => {
+    const byFamily = selectedFamily === 'all' || row.family === selectedFamily;
+    const byAvailability = selectedAvailability === 'all' || row.availability === selectedAvailability;
+    const byType = rowMatchesSelectedResourceType(row, selectedType);
+    return byFamily && byAvailability && byType;
+  });
+
   if (!Array.isArray(scoped) || scoped.length === 0) {
     return '';
   }
 
   const bySku = new Map();
   scoped.forEach((row) => {
-    const sku = String(row?.sku || '').trim();
+    const sku = normalizeSkuName(row?.sku);
     if (!sku) {
       return;
     }
@@ -2262,20 +2383,13 @@ function defaultRecommendTargetSkuFromFilters() {
       if (b[1].count !== a[1].count) {
         return b[1].count - a[1].count;
       }
-      return a[0].localeCompare(b[0]);
+      return compareSkuValues(a[0], b[0]);
     });
 
   return ordered[0]?.[0] || '';
 }
 
 function defaultRecommendRegionsFromFilters() {
-  const scopedRegions = [...new Set(filteredRows()
-    .map((row) => String(row?.region || '').trim().toLowerCase())
-    .filter(Boolean))];
-  if (scopedRegions.length > 0) {
-    return scopedRegions.slice(0, 20).join(',');
-  }
-
   const currentRegion = String(regionFilter?.value || '').trim().toLowerCase();
   if (currentRegion && currentRegion !== 'all') {
     return currentRegion;
@@ -2286,23 +2400,98 @@ function defaultRecommendRegionsFromFilters() {
     return presetRegions.join(',');
   }
 
+  if (Array.isArray(capacityFacetRegions) && capacityFacetRegions.length > 0) {
+    return capacityFacetRegions.join(',');
+  }
+
+  const scopedRegions = [...new Set(filteredRows()
+    .map((row) => String(row?.region || '').trim().toLowerCase())
+    .filter(Boolean))];
+  if (scopedRegions.length > 0) {
+    return scopedRegions.join(',');
+  }
+
   return '';
 }
 
-function syncRecommendationInputsFromTopFilters() {
+function recommendationSkuOptionsFromTopFilters() {
+  const selectedType = resourceTypeFilter?.value || 'all';
+  const selectedFamily = familyFilter?.value || 'all';
+  const selectedAvailability = availabilityFilter?.value || 'all';
+  const options = new Set();
+
+  const scopedRows = presetScopedRows(rows).filter((row) => {
+    const byFamily = selectedFamily === 'all' || row.family === selectedFamily;
+    const byAvailability = selectedAvailability === 'all' || row.availability === selectedAvailability;
+    const byType = rowMatchesSelectedResourceType(row, selectedType);
+    return byFamily && byAvailability && byType;
+  });
+
+  scopedRows.forEach((row) => {
+    const sku = normalizeSkuName(row?.sku);
+    if (sku) {
+      options.add(sku);
+    }
+  });
+
+  const familyPreferredSkus = RECOMMENDER_FAMILY_SKU_OPTIONS[selectedFamily];
+  if (Array.isArray(familyPreferredSkus)) {
+    familyPreferredSkus.forEach((sku) => {
+      const normalizedSku = normalizeSkuName(sku);
+      if (normalizedSku) {
+        options.add(normalizedSku);
+      }
+    });
+  }
+
+  return [...options].sort((a, b) => compareSkuValues(a, b));
+}
+
+function syncRecommendationSkuOptions() {
+  if (!recommendTargetSku) {
+    return;
+  }
+
+  recommendTargetSku.setAttribute('list', 'recommendTargetSkuOptions');
+  const list = document.querySelector('#recommendTargetSkuOptions');
+  if (!list) {
+    return;
+  }
+
+  list.innerHTML = '';
+  recommendationSkuOptionsFromTopFilters().forEach((sku) => {
+    const option = document.createElement('option');
+    option.value = sku;
+    list.appendChild(option);
+  });
+}
+
+function syncRecommendationInputsFromTopFilters({ force = false } = {}) {
+  syncRecommendationSkuOptions();
+
   const targetSkuFromFilters = defaultRecommendTargetSkuFromFilters();
   const regionsFromFilters = defaultRecommendRegionsFromFilters();
 
-  if (recommendTargetSku && targetSkuFromFilters) {
+  if (
+    recommendTargetSku
+    && targetSkuFromFilters
+    && (force || !recommendTargetSku.value || recommendTargetSku.value === lastAutoRecommendTargetSku)
+  ) {
     recommendTargetSku.value = targetSkuFromFilters;
+    lastAutoRecommendTargetSku = targetSkuFromFilters;
   }
-  if (recommendRegions && regionsFromFilters) {
+  if (
+    recommendRegions
+    && regionsFromFilters
+    && (force || !recommendRegions.value || recommendRegions.value === lastAutoRecommendRegions)
+  ) {
     recommendRegions.value = regionsFromFilters;
+    lastAutoRecommendRegions = regionsFromFilters;
   }
 }
 
 function normalizeRecommendInputs() {
-  const targetSku = String(recommendTargetSku?.value || '').trim();
+  const targetSku = normalizeSkuName(recommendTargetSku?.value || '');
   const regions = parseRegionListInput(recommendRegions?.value || '');
   const topN = Math.max(1, Math.min(Number(recommendTopN?.value || 10), 25));
   const minScore = Math.max(0, Math.min(Number(recommendMinScore?.value || 50), 100));
@@ -2375,7 +2564,7 @@ function renderRecommendations(payload) {
       const targetStatus = targetAvailability.length > 0
         ? targetAvailability.map((row) => `${row.region}: ${row.capacity}`).join(' | ')
         : 'No target region status returned.';
-      recommendTargetSummary.textContent = `Target ${target.name} | ${target.vCPU ?? 'n/a'} vCPU | ${target.memoryGB ?? 'n/a'} GiB | ${target.arch || 'n/a'} | ${target.disk || 'n/a'} | Status: ${targetStatus}`;
+      recommendTargetSummary.textContent = `Target ${normalizeSkuName(target.name)} | ${target.vCPU ?? 'n/a'} vCPU | ${target.memoryGB ?? 'n/a'} GiB | ${target.arch || 'n/a'} | ${target.disk || 'n/a'} | Status: ${targetStatus}`;
     } else {
       recommendTargetSummary.textContent = '';
     }
@@ -2393,10 +2582,11 @@ function renderRecommendations(payload) {
   }
 
   recommendations.forEach((row) => {
+    const normalizedSku = normalizeSkuName(row.sku);
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${row.rank ?? ''}</td>
-      <td>${row.sku || 'n/a'}</td>
+      <td>${normalizedSku || 'n/a'}</td>
       <td>${row.region || 'n/a'}</td>
       <td>${row.vCPU ?? 'n/a'}</td>
       <td>${row.memGiB ?? 'n/a'}</td>
@@ -2494,7 +2684,11 @@ function renderCharts(data) {
   const bySku = new Map();
   scopedRows.forEach((row) => {
     const available = row.quotaLimit - row.quotaCurrent;
-    bySku.set(row.sku, (bySku.get(row.sku) || 0) + available);
+    const normalizedSku = normalizeSkuName(row.sku);
+    if (!normalizedSku) {
+      return;
+    }
+    bySku.set(normalizedSku, (bySku.get(normalizedSku) || 0) + available);
   });
   const skuItems = [...bySku.entries()]
     .map(([sku, value]) => ({ label: sku, value }))
@@ -2708,7 +2902,12 @@ async function loadDerivedAnalyticsRows() {
 
   const response = await fetch(`/api/capacity?${query.toString()}`);
   const payload = response.ok ? await response.json() : { rows: [] };
-  analyticsRows = Array.isArray(payload.rows) ? payload.rows : [];
+  analyticsRows = Array.isArray(payload.rows)
+    ? payload.rows.map((row) => ({
+        ...row,
+        sku: normalizeSkuName(row?.sku)
+      }))
+    : [];
   return analyticsRows;
 }
 
@@ -2850,7 +3049,12 @@ async function loadCapacityRows() {
       throw new Error(`HTTP ${response.status}`);
     }
     const payload = await response.json();
-    rows = Array.isArray(payload.data) ? payload.data : [];
+    rows = Array.isArray(payload.data)
+      ? payload.data.map((row) => ({
+          ...row,
+          sku: normalizeSkuName(row?.sku)
+        }))
+      : [];
     capacityFacetRegions = Array.isArray(payload.facets?.regions) ? payload.facets.regions : [];
     capacityFacetFamilies = Array.isArray(payload.facets?.families) ? payload.facets.families : [];
     capacityGridSummary = payload.summary
@@ -2880,6 +3084,7 @@ async function loadCapacityRows() {
 
   syncRegionOptions();
   syncFamilyOptions();
+  syncRecommendationInputsFromTopFilters();
   renderGrid();
 
   const activeView = getActiveReportViewKey();
@@ -2967,11 +3172,23 @@ function wireButtons() {
   document.getElementById('simulateBtn').addEventListener('click', simulateQuotaImpact);
   triggerIngestBtn.addEventListener('click', triggerCapacityIngest);
   runRecommendBtn?.addEventListener('click', loadRecommendationView);
-  regionPresetFilter?.addEventListener('change', syncRecommendationInputsFromTopFilters);
-  regionFilter?.addEventListener('change', syncRecommendationInputsFromTopFilters);
-  familyFilter?.addEventListener('change', syncRecommendationInputsFromTopFilters);
-  availabilityFilter?.addEventListener('change', syncRecommendationInputsFromTopFilters);
-  resourceTypeFilter?.addEventListener('change', syncRecommendationInputsFromTopFilters);
+  recommendTargetSku?.addEventListener('input', () => {
+    const caretPos = recommendTargetSku.selectionStart;
+    const normalized = normalizeSkuName(recommendTargetSku.value || '');
+    if (normalized && normalized !== recommendTargetSku.value) {
+      recommendTargetSku.value = normalized;
+      if (typeof caretPos === 'number') {
+        const nextPos = Math.min(caretPos, normalized.length);
+        recommendTargetSku.setSelectionRange(nextPos, nextPos);
+      }
+    }
+  });
+  recommendTargetSku?.addEventListener('blur', () => {
+    const normalized = normalizeSkuName(recommendTargetSku.value || '');
+    if (normalized) {
+      recommendTargetSku.value = normalized;
+    }
+  });
   refreshLivePlacementBtn?.addEventListener('click', refreshLivePlacementScores);
   document.getElementById('applyBtn').addEventListener('click', () => {
     const ok = confirm('Apply quota movements is a write operation. Continue?');

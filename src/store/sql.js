@@ -2,6 +2,41 @@ const sql = require('mssql');
 
 let cachedPool;
 
+function normalizeSkuName(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  const normalizeSuffix = (suffix) => String(suffix || '')
+    .split('_')
+    .map((segment) => {
+      const normalized = String(segment || '').trim().toLowerCase();
+      if (!normalized) {
+        return '';
+      }
+      if (/^v\d+$/.test(normalized)) {
+        return normalized;
+      }
+      return normalized.replace(/^([a-z]+)/, (match) => match.toUpperCase());
+    })
+    .filter(Boolean)
+    .join('_');
+
+  const prefixedSku = trimmed.match(/^(standard|basic|internal)(?:[_\s-]?)(.*)$/i);
+  if (prefixedSku) {
+    const prefixToken = String(prefixedSku[1] || '').toLowerCase();
+    const prefix = prefixToken === 'standard'
+      ? 'Standard'
+      : (prefixToken === 'basic' ? 'Basic' : 'Internal');
+    const rawSuffix = String(prefixedSku[2] || '').replace(/^[_\s-]+/, '');
+    const suffix = normalizeSuffix(rawSuffix);
+    return suffix ? `${prefix}_${suffix}` : prefix;
+  }
+
+  return trimmed;
+}
+
 async function getSqlPool() {
   const server = process.env.SQL_SERVER || process.env.Sql__Server;
   const database = process.env.SQL_DATABASE || process.env.Sql__Database;
@@ -67,13 +102,14 @@ async function insertCapacitySnapshots(rows) {
   try {
     for (const row of rows) {
       const request = new sql.Request(transaction);
+      const normalizedSkuName = normalizeSkuName(row.skuName);
       request.input('capturedAtUtc', sql.DateTime2, row.capturedAtUtc || new Date());
       request.input('sourceType', sql.NVarChar(50), row.sourceType || 'live-azure-ingest');
       request.input('subscriptionKey', sql.NVarChar(64), row.subscriptionKey || 'legacy-data');
       request.input('subscriptionId', sql.NVarChar(64), row.subscriptionId || 'legacy-data');
       request.input('subscriptionName', sql.NVarChar(256), row.subscriptionName || 'Legacy data');
       request.input('region', sql.NVarChar(64), row.region);
-      request.input('skuName', sql.NVarChar(128), row.skuName);
+      request.input('skuName', sql.NVarChar(128), normalizedSkuName);
       request.input('skuFamily', sql.NVarChar(128), row.skuFamily);
       request.input('vCpu', sql.Int, row.vCpu ?? null);
       request.input('memoryGB', sql.Decimal(10, 2), row.memoryGB ?? null);
@@ -296,9 +332,10 @@ async function insertCapacityScoreSnapshots(rows) {
   try {
     for (const row of rows) {
       const request = new sql.Request(transaction);
+      const normalizedSkuName = normalizeSkuName(row.sku);
       request.input('capturedAtUtc', sql.DateTime2, row.capturedAtUtc || new Date());
       request.input('region', sql.NVarChar(64), row.region);
-      request.input('skuName', sql.NVarChar(128), row.sku);
+      request.input('skuName', sql.NVarChar(128), normalizedSkuName);
       request.input('skuFamily', sql.NVarChar(128), row.family);
       request.input('subscriptionCount', sql.Int, row.subscriptionCount ?? 0);
       request.input('okRows', sql.Int, row.okRows ?? 0);
@@ -1102,10 +1139,11 @@ async function saveLivePlacementSnapshots(rows = []) {
   try {
     for (const row of rows) {
       const request = new sql.Request(transaction);
+      const normalizedSkuName = normalizeSkuName(row.sku);
       request.input('capturedAtUtc', sql.DateTime2, row.capturedAtUtc || new Date());
       request.input('desiredCount', sql.Int, Math.max(Number(row.desiredCount || 1), 1));
       request.input('region', sql.NVarChar(64), row.region);
-      request.input('skuName', sql.NVarChar(128), row.sku);
+      request.input('skuName', sql.NVarChar(128), normalizedSkuName);
       request.input('livePlacementScore', sql.NVarChar(64), row.livePlacementScore || 'N/A');
       request.input('livePlacementAvailable', sql.Bit, typeof row.livePlacementAvailable === 'boolean' ? row.livePlacementAvailable : null);
       request.input('livePlacementRestricted', sql.Bit, typeof row.livePlacementRestricted === 'boolean' ? row.livePlacementRestricted : null);

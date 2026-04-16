@@ -28,6 +28,48 @@ const CANONICAL_COMPUTE_FAMILY_PATTERNS = [
   ['A', /^(A|BASICA)/]
 ];
 
+function normalizeSkuName(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  const normalizeSuffix = (suffix) => String(suffix || '')
+    .split('_')
+    .map((segment) => {
+      const normalized = String(segment || '').trim().toLowerCase();
+      if (!normalized) {
+        return '';
+      }
+      if (/^v\d+$/.test(normalized)) {
+        return normalized;
+      }
+      return normalized.replace(/^([a-z]+)/, (match) => match.toUpperCase());
+    })
+    .filter(Boolean)
+    .join('_');
+
+  const prefixedSku = trimmed.match(/^(standard|basic|internal)(?:[_\s-]?)(.*)$/i);
+  if (prefixedSku) {
+    const prefixToken = String(prefixedSku[1] || '').toLowerCase();
+    const prefix = prefixToken === 'standard'
+      ? 'Standard'
+      : (prefixToken === 'basic' ? 'Basic' : 'Internal');
+    const rawSuffix = String(prefixedSku[2] || '').replace(/^[_\s-]+/, '');
+    const suffix = normalizeSuffix(rawSuffix);
+    return suffix ? `${prefix}_${suffix}` : prefix;
+  }
+
+  return trimmed;
+}
+
+function normalizeCapacityRow(row) {
+  return {
+    ...row,
+    sku: normalizeSkuName(row?.sku)
+  };
+}
+
 function applyRegionPreset(rows, regionPreset) {
   if (!regionPreset || regionPreset === 'all' || regionPreset === 'custom') {
     return rows;
@@ -172,7 +214,7 @@ async function getCapacityRows(filters) {
   const pool = await getSqlPool();
 
   if (!pool) {
-    return applyFilters(applyRegionPreset(mockRows, filters.regionPreset), filters);
+    return applyFilters(applyRegionPreset(mockRows.map(normalizeCapacityRow), filters.regionPreset), filters);
   }
 
   const request = pool.request();
@@ -186,7 +228,7 @@ async function getCapacityRows(filters) {
   query += appendCommonSqlFilters(filters, request);
 
   const result = await request.query(query);
-  const rows = result.recordset.map((r) => ({
+  const rows = result.recordset.map((r) => normalizeCapacityRow({
     capturedAtUtc: r.capturedAtUtc,
     subscriptionKey: r.subscriptionKey || 'legacy-data',
     subscriptionId: r.subscriptionId || 'legacy-data',
@@ -216,7 +258,7 @@ async function getCapacityRowsPaginated(filters) {
   const pool = await getSqlPool();
 
   if (!pool) {
-    const allRows = applyFilters(applyRegionPreset(mockRows, filters.regionPreset), filters);
+    const allRows = applyFilters(applyRegionPreset(mockRows.map(normalizeCapacityRow), filters.regionPreset), filters);
     const total = allRows.length;
     const pagedRows = allRows.slice(offset, offset + pageSize);
     const facets = {
@@ -271,7 +313,7 @@ async function getCapacityRowsPaginated(filters) {
   
   // Apply in-memory filters (including resourceType) for accuracy
   const allRows = applyFilters(
-    result.recordset.map((r) => ({
+    result.recordset.map((r) => normalizeCapacityRow({
       capturedAtUtc: r.capturedAtUtc,
       subscriptionKey: r.subscriptionKey || 'legacy-data',
       subscriptionId: r.subscriptionId || 'legacy-data',

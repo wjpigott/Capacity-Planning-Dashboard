@@ -95,6 +95,7 @@ Status legend:
 - [x] Resource Type filter (Compute / Disk / Other / All) scopes the SKU Family dropdown
 - [x] SKU Family live search text input with filtered results dropdown alongside it
 - [x] SKU family labels formatted for readability (`Standard_Dasv7` instead of `StandardDasv7Family`)
+- [x] SKU Family dropdown canonicalization (case-insensitive dedupe + normalized casing/sort for easier lookup)
 - [x] Quota Insights tab tables for subscription summary + trends
 - [x] Chart views for region availability and top SKU available quota
 - [x] Derived High/Medium/Low regional SKU capacity score view in reporting
@@ -212,6 +213,8 @@ Verification checks after deploy:
 
 - `curl.exe -i -s https://app-capdash-dev-cap001.azurewebsites.net/`
 - `curl.exe -i -s https://app-capdash-dev-cap001.azurewebsites.net/api/auth/me`
+
+For auth-specific outage recovery, runtime drift, and safe restore steps, use [docs/AUTH-RECOVERY-RUNBOOK.md](docs/AUTH-RECOVERY-RUNBOOK.md).
 
 Expected behavior:
 

@@ -177,6 +177,7 @@ const ingestErrorValue = document.querySelector('#ingestErrorValue');
 const operationHistoryBody = document.querySelector('#operationHistoryBody');
 const operationHistoryContainer = document.querySelector('#operationHistoryContainer');
 const topbarReportTitle = document.querySelector('#topbarReportTitle');
+const environmentBadge = document.querySelector('#environmentBadge');
 const capacityPageInfo = document.querySelector('#capacityPageInfo');
 const capacityPageSize = document.querySelector('#capacityPageSize');
 const capacityPrevPage = document.querySelector('#capacityPrevPage');
@@ -229,6 +230,40 @@ const capacityScorePaging = {
 };
 
 let authRedirectInProgress = false;
+
+function detectDeploymentEnvironment(hostname = window.location.hostname) {
+  const value = String(hostname || '').toLowerCase();
+
+  if (value.includes('-test-') || value.includes('test') || value.includes('demo')) {
+    return { key: 'test', label: 'TEST / DEMO' };
+  }
+
+  if (value.includes('-dev-') || value.includes('dev')) {
+    return { key: 'dev', label: 'DEV' };
+  }
+
+  if (value.includes('-prod-') || value.includes('prod')) {
+    return { key: 'prod', label: 'PROD' };
+  }
+
+  return { key: 'default', label: '' };
+}
+
+function applyDeploymentTheme() {
+  const environment = detectDeploymentEnvironment();
+  document.body.dataset.environment = environment.key;
+
+  if (!environmentBadge) {
+    return;
+  }
+
+  if (environment.label) {
+    environmentBadge.textContent = environment.label;
+    environmentBadge.hidden = false;
+  } else {
+    environmentBadge.hidden = true;
+  }
+}
 
 function redirectToLoginOnce() {
   if (authRedirectInProgress) {
@@ -3098,6 +3133,7 @@ capacityScoreDesiredCount?.addEventListener('change', () => {
 wireTabs();
 wireViewTabs();
 wireButtons();
+applyDeploymentTheme();
 if (capacityPageSize) {
   capacityPaging.pageSize = Math.max(10, Math.min(Number(capacityPageSize.value || 50), 500));
 }

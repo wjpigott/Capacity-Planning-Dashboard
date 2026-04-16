@@ -4,13 +4,32 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Capacity Planning Dashboard</title>
-  <link rel="stylesheet" href="styles.css" />
+  <script>
+    (function () {
+      var host = String(window.location.hostname || '').toLowerCase();
+      var environment = 'default';
+
+      if (host.indexOf('-test-') !== -1 || host.indexOf('test') !== -1 || host.indexOf('demo') !== -1) {
+        environment = 'test';
+      } else if (host.indexOf('-dev-') !== -1 || host.indexOf('dev') !== -1) {
+        environment = 'dev';
+      } else if (host.indexOf('-prod-') !== -1 || host.indexOf('prod') !== -1) {
+        environment = 'prod';
+      }
+
+      document.documentElement.setAttribute('data-environment', environment);
+    })();
+  </script>
+  <link rel="stylesheet" href="styles.css?v=20260416-theme2" />
 </head>
 <body class="auth-pending">
   <header class="topbar">
     <div class="topbar-row">
       <div>
-        <h1 id="topbarReportTitle">Capacity Planning Dashboard - Capacity Grid</h1>
+        <div class="topbar-title-row">
+          <h1 id="topbarReportTitle">Capacity Planning Dashboard - Capacity Grid</h1>
+          <span id="environmentBadge" class="environment-badge" hidden></span>
+        </div>
         <p>Native Azure MVP for capacity, quota, and planning workflows</p>
       </div>
       <div id="topbarUserInfo" class="topbar-user-info"></div>
@@ -795,6 +814,6 @@
     </main>
   </div>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=20260416-theme2"></script>
 </body>
 </html>

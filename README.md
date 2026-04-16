@@ -91,6 +91,7 @@ Status legend:
 - [x] Capacity Explorer tab with filters and grid
 - [x] Region group defaulting (`USMajor`)
 - [x] Subscription checkbox list with auto-select on first load
+- [ ] Move subscriptions into a flyout filter section on the right-hand side of the screen
 - [x] Resource Type filter (Compute / Disk / Other / All) scopes the SKU Family dropdown
 - [x] SKU Family live search text input with filtered results dropdown alongside it
 - [x] SKU family labels formatted for readability (`Standard_Dasv7` instead of `StandardDasv7Family`)
@@ -240,6 +241,29 @@ Use script-based deployment with Central US default:
 	-ResourceGroupName "<rg-name>" \
 	-Environment dev \
 	-WorkloadSuffix "cap001" \
+	-WebReaderSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
+	-WorkerRbacSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
+	-SqlEntraAdminLogin "<entra-upn>" \
+	-SqlEntraAdminObjectId "<entra-object-id>" \
+	-SubscriptionId "<subscription-id>"
+```
+
+Stable demo environment:
+
+- Treat `dev` as change-heavy and `test` as the stable demo environment.
+- Use the same naming pattern with the environment token changed to `test`, for example `app-capdash-test-cap001` and `func-capdash-test-cap001-appsvc`.
+- Use `./infra/test.bicepparam` plus a dedicated resource group such as `CapacityDashboard-Test` when deploying the demo environment.
+
+Example:
+
+```powershell
+./scripts/deploy-infra.ps1 \
+	-ResourceGroupName "CapacityDashboard-Test" \
+	-Environment test \
+	-WorkloadSuffix "cap001" \
+	-ParameterFile "./infra/test.bicepparam" \
+	-WebReaderSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
+	-WorkerRbacSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
 	-SqlEntraAdminLogin "<entra-upn>" \
 	-SqlEntraAdminObjectId "<entra-object-id>" \
 	-SubscriptionId "<subscription-id>"
@@ -250,6 +274,32 @@ Notes:
 - SQL is configured with Microsoft Entra admin and AAD-only authentication.
 - `SqlAdminPassword` is optional; when omitted, the script generates a strong random value for server bootstrap.
 - The Bicep template now also provisions a Function App plus storage account for the PowerShell 7 worker host.
+- `-ParameterFile` lets you keep environment defaults in a `.bicepparam` file while still overriding secure/runtime values from the command line.
+- `-WebReaderSubscriptionIds` grants the dashboard web app `Reader` on the listed subscriptions so subscription discovery can see every target subscription.
+- `-WorkerRbacSubscriptionIds` triggers subscription-level RBAC assignment for the worker identity (`Compute Recommendations Role`, `Cost Management Reader`, `Billing Reader`) in the same deployment.
+- `-AuthEnabled` plus `-EntraTenantId`, `-EntraClientId`, `-EntraClientSecret`, and optional `-AdminGroupId` configure the built-in Entra sign-in flow used by the dashboard API.
+
+Example with Entra sign-in enabled:
+
+```powershell
+./scripts/deploy-infra.ps1 \
+	-ResourceGroupName "CapacityDashboard-Test" \
+	-Environment test \
+	-WorkloadSuffix "cap001" \
+	-ParameterFile "./infra/test.bicepparam" \
+	-WebReaderSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
+	-WorkerRbacSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
+	-AuthEnabled $true \
+	-EntraTenantId "<tenant-id>" \
+	-EntraClientId "<app-registration-client-id>" \
+	-EntraClientSecret "<app-registration-client-secret>" \
+	-AdminGroupId "<entra-group-object-id>" \
+	-SqlEntraAdminLogin "<entra-upn>" \
+	-SqlEntraAdminObjectId "<entra-object-id>" \
+	-SubscriptionId "<subscription-id>"
+```
+
+Current Bicep deployment gaps for a fuller blue-green model are tracked in `infra/README.md`.
 
 ## Worker deployment
 
@@ -272,8 +322,8 @@ Hosted worker guidance:
 - Grant the worker identity storage data-plane access on the host storage account.
 - The default infrastructure path uses a dedicated App Service plan for the worker instead of Flex Consumption.
 - Enable PowerShell managed dependencies in `host.json` so `requirements.psd1` can restore Az modules on the worker.
-- NOTE: live placement also requires Azure RBAC on every subscription the worker will query. The Function App managed identity needs the built-in `Compute Recommendations Role`, or a custom role that includes `Microsoft.Compute/locations/placementScores/generate/action`. This does not need to be assigned on every subscription in the tenant, only on the subscriptions in scope for live placement. If many target subscriptions share a management group, assign it there instead of one-by-one at each subscription.
-- NOTE: pricing enrichment in Capacity Recommender requires the Function App managed identity to have both `Billing Reader` and `Cost Management Reader` on the billing scope used for pricing APIs. Without these roles, recommender runs may still succeed but will log warnings and fall back to retail pricing behavior.
+- NOTE: when `-WorkerRbacSubscriptionIds` is provided during infra deployment, these worker subscription roles are assigned automatically. If omitted, assign them manually.
+- NOTE: some organizations require billing-account-scope assignments for billing APIs; those billing-scope assignments are outside this resource-group deployment and may still require manual/central platform automation.
 
 Current worker endpoints:
 

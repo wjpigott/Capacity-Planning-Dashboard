@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.42.1.51946",
-      "templateHash": "10409130530575048010"
+      "templateHash": "2558327547642918639"
     }
   },
   "parameters": {
@@ -60,11 +60,82 @@
         "description": "Microsoft Entra administrator object ID for Azure SQL"
       }
     },
+    "vnetAddressPrefix": {
+      "type": "string",
+      "defaultValue": "10.90.0.0/16",
+      "metadata": {
+        "description": "Address prefix for the virtual network used by App Service integration and private endpoints"
+      }
+    },
+    "appServiceIntegrationSubnetPrefix": {
+      "type": "string",
+      "defaultValue": "10.90.1.0/24",
+      "metadata": {
+        "description": "Address prefix for the App Service integration subnet"
+      }
+    },
+    "privateEndpointSubnetPrefix": {
+      "type": "string",
+      "defaultValue": "10.90.2.0/24",
+      "metadata": {
+        "description": "Address prefix for the private endpoint subnet"
+      }
+    },
+    "sqlPublicNetworkAccess": {
+      "type": "string",
+      "defaultValue": "Disabled",
+      "allowedValues": [
+        "Enabled",
+        "Disabled"
+      ],
+      "metadata": {
+        "description": "SQL server public network access mode"
+      }
+    },
+    "keyVaultPublicNetworkAccess": {
+      "type": "string",
+      "defaultValue": "Disabled",
+      "allowedValues": [
+        "Enabled",
+        "Disabled"
+      ],
+      "metadata": {
+        "description": "Key Vault public network access mode"
+      }
+    },
     "workerSharedSecret": {
       "type": "securestring",
       "defaultValue": "",
       "metadata": {
         "description": "Optional shared secret used between the dashboard web app and the worker function app"
+      }
+    },
+    "workerSubscriptionRbacSubscriptionIds": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional subscription IDs where the worker managed identity should receive subscription-level RBAC roles for live placement and pricing lookups."
+      }
+    },
+    "assignWorkerComputeRecommendationsRole": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Assign Compute Recommendations Role on each subscription listed in workerSubscriptionRbacSubscriptionIds."
+      }
+    },
+    "assignWorkerCostManagementReaderRole": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Assign Cost Management Reader on each subscription listed in workerSubscriptionRbacSubscriptionIds."
+      }
+    },
+    "assignWorkerBillingReaderRole": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Assign Billing Reader on each subscription listed in workerSubscriptionRbacSubscriptionIds."
       }
     }
   },
@@ -78,9 +149,56 @@
     "logAnalyticsName": "[format('log-capdash-{0}-{1}', parameters('environment'), parameters('workloadSuffix'))]",
     "keyVaultName": "[format('kv-capdash-{0}-{1}', parameters('environment'), parameters('workloadSuffix'))]",
     "sqlServerName": "[format('sql-capdash-{0}-{1}', parameters('environment'), parameters('workloadSuffix'))]",
-    "sqlDatabaseName": "[format('sqldb-capdash-{0}', parameters('environment'))]"
+    "sqlDatabaseName": "[format('sqldb-capdash-{0}', parameters('environment'))]",
+    "vnetName": "[format('vnet-capdash-{0}-{1}', parameters('environment'), parameters('workloadSuffix'))]",
+    "appServiceIntegrationSubnetName": "snet-appsvc-integration",
+    "privateEndpointSubnetName": "snet-private-endpoints",
+    "sqlPrivateEndpointName": "[format('pep-sql-capdash-{0}-{1}', parameters('environment'), parameters('workloadSuffix'))]",
+    "sqlPrivateDnsZoneName": "[format('privatelink{0}', environment().suffixes.sqlServerHostname)]",
+    "sqlPrivateDnsZoneVnetLinkName": "[format('pdz-link-capdash-{0}-{1}', parameters('environment'), parameters('workloadSuffix'))]",
+    "keyVaultPrivateEndpointName": "[format('pep-kv-capdash-{0}-{1}', parameters('environment'), parameters('workloadSuffix'))]",
+    "keyVaultDnsSuffixRaw": "[environment().suffixes.keyvaultDns]",
+    "keyVaultDnsSuffix": "[if(startsWith(variables('keyVaultDnsSuffixRaw'), '.'), substring(variables('keyVaultDnsSuffixRaw'), 1), variables('keyVaultDnsSuffixRaw'))]",
+    "keyVaultPrivateDnsZoneName": "[if(startsWith(variables('keyVaultDnsSuffix'), 'vaultcore.'), format('privatelink.{0}', variables('keyVaultDnsSuffix')), replace(variables('keyVaultDnsSuffix'), 'vault.', 'privatelink.vaultcore.'))]",
+    "keyVaultPrivateDnsZoneVnetLinkName": "[format('pdz-link-kv-capdash-{0}-{1}', parameters('environment'), parameters('workloadSuffix'))]"
   },
   "resources": [
+    {
+      "type": "Microsoft.Network/virtualNetworks",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('vnetName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "[parameters('vnetAddressPrefix')]"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "[variables('appServiceIntegrationSubnetName')]",
+            "properties": {
+              "addressPrefix": "[parameters('appServiceIntegrationSubnetPrefix')]",
+              "delegations": [
+                {
+                  "name": "webapp-delegation",
+                  "properties": {
+                    "serviceName": "Microsoft.Web/serverFarms"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "[variables('privateEndpointSubnetName')]",
+            "properties": {
+              "addressPrefix": "[parameters('privateEndpointSubnetPrefix')]",
+              "privateEndpointNetworkPolicies": "Disabled"
+            }
+          }
+        ]
+      }
+    },
     {
       "type": "Microsoft.OperationalInsights/workspaces",
       "apiVersion": "2023-09-01",
@@ -165,6 +283,7 @@
       "properties": {
         "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
         "httpsOnly": true,
+        "virtualNetworkSubnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('appServiceIntegrationSubnetName'))]",
         "siteConfig": {
           "ftpsState": "Disabled",
           "minTlsVersion": "1.2",
@@ -197,6 +316,14 @@
             {
               "name": "CAPACITY_WORKER_SHARED_SECRET",
               "value": "[parameters('workerSharedSecret')]"
+            },
+            {
+              "name": "WEBSITE_DNS_SERVER",
+              "value": "168.63.129.16"
+            },
+            {
+              "name": "WEBSITE_VNET_ROUTE_ALL",
+              "value": "1"
             }
           ]
         }
@@ -204,7 +331,21 @@
       "dependsOn": [
         "[resourceId('Microsoft.Insights/components', variables('appInsightsName'))]",
         "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]",
-        "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]"
+        "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/sites/networkConfig",
+      "apiVersion": "2023-12-01",
+      "name": "[format('{0}/{1}', variables('webAppName'), 'virtualNetwork')]",
+      "properties": {
+        "subnetResourceId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('appServiceIntegrationSubnetName'))]",
+        "swiftSupported": true
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]",
+        "[resourceId('Microsoft.Web/sites', variables('webAppName'))]"
       ]
     },
     {
@@ -219,6 +360,7 @@
       "properties": {
         "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('workerPlanName'))]",
         "httpsOnly": true,
+        "virtualNetworkSubnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('appServiceIntegrationSubnetName'))]",
         "siteConfig": {
           "ftpsState": "Disabled",
           "minTlsVersion": "1.2",
@@ -253,6 +395,14 @@
             {
               "name": "WORKER_SHARED_SECRET",
               "value": "[parameters('workerSharedSecret')]"
+            },
+            {
+              "name": "WEBSITE_DNS_SERVER",
+              "value": "168.63.129.16"
+            },
+            {
+              "name": "WEBSITE_VNET_ROUTE_ALL",
+              "value": "1"
             }
           ]
         }
@@ -260,7 +410,21 @@
       "dependsOn": [
         "[resourceId('Microsoft.Insights/components', variables('appInsightsName'))]",
         "[resourceId('Microsoft.Storage/storageAccounts', variables('functionStorageName'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]",
         "[resourceId('Microsoft.Web/serverfarms', variables('workerPlanName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/sites/networkConfig",
+      "apiVersion": "2023-12-01",
+      "name": "[format('{0}/{1}', variables('functionAppName'), 'virtualNetwork')]",
+      "properties": {
+        "subnetResourceId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('appServiceIntegrationSubnetName'))]",
+        "swiftSupported": true
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
       ]
     },
     {
@@ -277,7 +441,7 @@
         "enableRbacAuthorization": true,
         "enableSoftDelete": true,
         "softDeleteRetentionInDays": 90,
-        "publicNetworkAccess": "Enabled"
+        "publicNetworkAccess": "[parameters('keyVaultPublicNetworkAccess')]"
       }
     },
     {
@@ -286,19 +450,152 @@
       "name": "[variables('sqlServerName')]",
       "location": "[parameters('location')]",
       "properties": {
-        "administratorLogin": "[parameters('sqlAdminLogin')]",
-        "administratorLoginPassword": "[parameters('sqlAdminPassword')]",
         "administrators": {
           "administratorType": "ActiveDirectory",
+          "azureADOnlyAuthentication": true,
           "login": "[parameters('sqlEntraAdminLogin')]",
+          "principalType": "User",
           "sid": "[parameters('sqlEntraAdminObjectId')]",
-          "tenantId": "[tenant().tenantId]",
-          "azureADOnlyAuthentication": true
+          "tenantId": "[tenant().tenantId]"
         },
         "version": "12.0",
-        "publicNetworkAccess": "Enabled",
+        "publicNetworkAccess": "[parameters('sqlPublicNetworkAccess')]",
         "minimalTlsVersion": "1.2"
       }
+    },
+    {
+      "type": "Microsoft.Network/privateDnsZones",
+      "apiVersion": "2020-06-01",
+      "name": "[variables('sqlPrivateDnsZoneName')]",
+      "location": "global"
+    },
+    {
+      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+      "apiVersion": "2020-06-01",
+      "name": "[format('{0}/{1}', variables('sqlPrivateDnsZoneName'), variables('sqlPrivateDnsZoneVnetLinkName'))]",
+      "location": "global",
+      "properties": {
+        "registrationEnabled": false,
+        "virtualNetwork": {
+          "id": "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateDnsZones', variables('sqlPrivateDnsZoneName'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/privateEndpoints",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('sqlPrivateEndpointName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "subnet": {
+          "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('privateEndpointSubnetName'))]"
+        },
+        "privateLinkServiceConnections": [
+          {
+            "name": "sqlServerConnection",
+            "properties": {
+              "privateLinkServiceId": "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]",
+              "groupIds": [
+                "sqlServer"
+              ]
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+      "apiVersion": "2023-09-01",
+      "name": "[format('{0}/{1}', variables('sqlPrivateEndpointName'), 'default')]",
+      "properties": {
+        "privateDnsZoneConfigs": [
+          {
+            "name": "sql-private-dns",
+            "properties": {
+              "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', variables('sqlPrivateDnsZoneName'))]"
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateDnsZones', variables('sqlPrivateDnsZoneName'))]",
+        "[resourceId('Microsoft.Network/privateEndpoints', variables('sqlPrivateEndpointName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/privateDnsZones",
+      "apiVersion": "2020-06-01",
+      "name": "[variables('keyVaultPrivateDnsZoneName')]",
+      "location": "global"
+    },
+    {
+      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+      "apiVersion": "2020-06-01",
+      "name": "[format('{0}/{1}', variables('keyVaultPrivateDnsZoneName'), variables('keyVaultPrivateDnsZoneVnetLinkName'))]",
+      "location": "global",
+      "properties": {
+        "registrationEnabled": false,
+        "virtualNetwork": {
+          "id": "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateDnsZones', variables('keyVaultPrivateDnsZoneName'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/privateEndpoints",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('keyVaultPrivateEndpointName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "subnet": {
+          "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('privateEndpointSubnetName'))]"
+        },
+        "privateLinkServiceConnections": [
+          {
+            "name": "keyVaultConnection",
+            "properties": {
+              "privateLinkServiceId": "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+              "groupIds": [
+                "vault"
+              ]
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+      "apiVersion": "2023-09-01",
+      "name": "[format('{0}/{1}', variables('keyVaultPrivateEndpointName'), 'default')]",
+      "properties": {
+        "privateDnsZoneConfigs": [
+          {
+            "name": "kv-private-dns",
+            "properties": {
+              "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', variables('keyVaultPrivateDnsZoneName'))]"
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateDnsZones', variables('keyVaultPrivateDnsZoneName'))]",
+        "[resourceId('Microsoft.Network/privateEndpoints', variables('keyVaultPrivateEndpointName'))]"
+      ]
     },
     {
       "type": "Microsoft.Sql/servers/databases",
@@ -390,6 +687,116 @@
         "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]",
         "[resourceId('Microsoft.Storage/storageAccounts', variables('functionStorageName'))]"
       ]
+    },
+    {
+      "copy": {
+        "name": "workerSubscriptionRbacAssignments",
+        "count": "[length(parameters('workerSubscriptionRbacSubscriptionIds'))]"
+      },
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('worker-sub-rbac-{0}', uniqueString(parameters('workerSubscriptionRbacSubscriptionIds')[copyIndex()], resourceId('Microsoft.Web/sites', variables('functionAppName'))))]",
+      "subscriptionId": "[parameters('workerSubscriptionRbacSubscriptionIds')[copyIndex()]]",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "principalId": {
+            "value": "[reference(resourceId('Microsoft.Web/sites', variables('functionAppName')), '2023-12-01', 'full').identity.principalId]"
+          },
+          "assignComputeRecommendationsRole": {
+            "value": "[parameters('assignWorkerComputeRecommendationsRole')]"
+          },
+          "assignCostManagementReaderRole": {
+            "value": "[parameters('assignWorkerCostManagementReaderRole')]"
+          },
+          "assignBillingReaderRole": {
+            "value": "[parameters('assignWorkerBillingReaderRole')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "9829786107100640877"
+            }
+          },
+          "parameters": {
+            "principalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Principal ID of the worker managed identity that requires access."
+              }
+            },
+            "assignComputeRecommendationsRole": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "Assign Compute Recommendations Role at this subscription scope."
+              }
+            },
+            "assignCostManagementReaderRole": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "Assign Cost Management Reader at this subscription scope."
+              }
+            },
+            "assignBillingReaderRole": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "Assign Billing Reader at this subscription scope."
+              }
+            }
+          },
+          "variables": {
+            "roleDefinitions": [
+              {
+                "enabled": "[parameters('assignComputeRecommendationsRole')]",
+                "roleName": "ComputeRecommendationsRole",
+                "roleDefinitionId": "e82342c9-ac7f-422b-af64-e426d2e12b2d"
+              },
+              {
+                "enabled": "[parameters('assignCostManagementReaderRole')]",
+                "roleName": "CostManagementReader",
+                "roleDefinitionId": "72fafb9e-0641-4937-9268-a91bfd8191a3"
+              },
+              {
+                "enabled": "[parameters('assignBillingReaderRole')]",
+                "roleName": "BillingReader",
+                "roleDefinitionId": "fa23ad8b-c56e-40d8-ac0c-ce449e1d2c64"
+              }
+            ]
+          },
+          "resources": [
+            {
+              "copy": {
+                "name": "workerSubscriptionRoles",
+                "count": "[length(variables('roleDefinitions'))]"
+              },
+              "condition": "[variables('roleDefinitions')[copyIndex()].enabled]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "name": "[guid(subscription().id, parameters('principalId'), variables('roleDefinitions')[copyIndex()].roleName)]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('roleDefinitions')[copyIndex()].roleDefinitionId)]",
+                "principalId": "[parameters('principalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]"
+      ]
     }
   ],
   "outputs": {
@@ -432,6 +839,18 @@
     "keyVaultName": {
       "type": "string",
       "value": "[variables('keyVaultName')]"
+    },
+    "virtualNetworkName": {
+      "type": "string",
+      "value": "[variables('vnetName')]"
+    },
+    "sqlPrivateEndpointName": {
+      "type": "string",
+      "value": "[variables('sqlPrivateEndpointName')]"
+    },
+    "keyVaultPrivateEndpointName": {
+      "type": "string",
+      "value": "[variables('keyVaultPrivateEndpointName')]"
     }
   }
 }

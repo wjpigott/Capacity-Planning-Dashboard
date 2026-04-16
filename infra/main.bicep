@@ -56,6 +56,40 @@ param keyVaultPublicNetworkAccess string = 'Disabled'
 @description('Optional shared secret used between the dashboard web app and the worker function app')
 param workerSharedSecret string = ''
 
+@description('Optional subscription IDs where the dashboard web app managed identity should receive Reader access for subscription discovery and read-only ARM queries.')
+param webReaderSubscriptionIds array = []
+
+@description('Optional subscription IDs where the worker managed identity should receive subscription-level RBAC roles for live placement and pricing lookups.')
+param workerSubscriptionRbacSubscriptionIds array = []
+
+@description('Assign Compute Recommendations Role on each subscription listed in workerSubscriptionRbacSubscriptionIds.')
+param assignWorkerComputeRecommendationsRole bool = true
+
+@description('Assign Cost Management Reader on each subscription listed in workerSubscriptionRbacSubscriptionIds.')
+param assignWorkerCostManagementReaderRole bool = true
+
+@description('Assign Billing Reader on each subscription listed in workerSubscriptionRbacSubscriptionIds.')
+param assignWorkerBillingReaderRole bool = true
+
+@description('Enable Microsoft Entra sign-in for the dashboard app routes.')
+param authEnabled bool = false
+
+@description('Microsoft Entra tenant ID used by the dashboard auth flow.')
+param entraTenantId string = ''
+
+@description('Microsoft Entra application (client) ID used by the dashboard auth flow.')
+param entraClientId string = ''
+
+@secure()
+@description('Microsoft Entra application client secret used by the dashboard auth flow.')
+param entraClientSecret string = ''
+
+@description('Optional redirect URI for the dashboard auth callback. Defaults to the Azure Web App callback URL when omitted.')
+param authRedirectUri string = ''
+
+@description('Optional Entra group object ID whose members should receive admin access in the dashboard.')
+param adminGroupId string = ''
+
 var appServicePlanName = 'asp-capdash-${environment}-${workloadSuffix}'
 var workerPlanName = 'asp-capdash-worker-${environment}-${workloadSuffix}'
 var webAppName = 'app-capdash-${environment}-${workloadSuffix}'
@@ -73,8 +107,15 @@ var sqlPrivateEndpointName = 'pep-sql-capdash-${environment}-${workloadSuffix}'
 var sqlPrivateDnsZoneName = 'privatelink${az.environment().suffixes.sqlServerHostname}'
 var sqlPrivateDnsZoneVnetLinkName = 'pdz-link-capdash-${environment}-${workloadSuffix}'
 var keyVaultPrivateEndpointName = 'pep-kv-capdash-${environment}-${workloadSuffix}'
-var keyVaultPrivateDnsZoneName = replace(az.environment().suffixes.keyvaultDns, 'vault.', 'privatelink.vaultcore.')
+var keyVaultDnsSuffixRaw = az.environment().suffixes.keyvaultDns
+var keyVaultDnsSuffix = startsWith(keyVaultDnsSuffixRaw, '.') ? substring(keyVaultDnsSuffixRaw, 1) : keyVaultDnsSuffixRaw
+var keyVaultPrivateDnsZoneName = startsWith(keyVaultDnsSuffix, 'vaultcore.')
+  ? 'privatelink.${keyVaultDnsSuffix}'
+  : replace(keyVaultDnsSuffix, 'vault.', 'privatelink.vaultcore.')
 var keyVaultPrivateDnsZoneVnetLinkName = 'pdz-link-kv-capdash-${environment}-${workloadSuffix}'
+var effectiveAuthRedirectUri = empty(authRedirectUri)
+  ? 'https://${webAppName}.azurewebsites.net/auth/callback'
+  : authRedirectUri
 
 resource vnet 'Microsoft.Network/virtualNetworks@2023-09-01' = {
   name: vnetName
@@ -230,6 +271,42 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
           value: workerSharedSecret
         }
         {
+          name: 'NODE_ENV'
+          value: 'production'
+        }
+        {
+          name: 'WEBSITE_NODE_DEFAULT_VERSION'
+          value: '~20'
+        }
+        {
+          name: 'AUTH_ENABLED'
+          value: string(authEnabled)
+        }
+        {
+          name: 'ENTRA_TENANT_ID'
+          value: entraTenantId
+        }
+        {
+          name: 'ENTRA_CLIENT_ID'
+          value: entraClientId
+        }
+        {
+          name: 'ENTRA_CLIENT_SECRET'
+          value: entraClientSecret
+        }
+        {
+          name: 'AUTH_REDIRECT_URI'
+          value: effectiveAuthRedirectUri
+        }
+        {
+          name: 'ADMIN_GROUP_ID'
+          value: adminGroupId
+        }
+        {
+          name: 'SESSION_STORE_SQL_ENABLED'
+          value: authEnabled ? 'true' : 'false'
+        }
+        {
           name: 'WEBSITE_DNS_SERVER'
           value: '168.63.129.16'
         }
@@ -339,14 +416,13 @@ resource sqlServer 'Microsoft.Sql/servers@2023-08-01-preview' = {
   name: sqlServerName
   location: location
   properties: {
-    administratorLogin: sqlAdminLogin
-    administratorLoginPassword: sqlAdminPassword
     administrators: {
       administratorType: 'ActiveDirectory'
+      azureADOnlyAuthentication: true
       login: sqlEntraAdminLogin
+      principalType: 'User'
       sid: sqlEntraAdminObjectId
       tenantId: tenant().tenantId
-      azureADOnlyAuthentication: true
     }
     version: '12.0'
     publicNetworkAccess: sqlPublicNetworkAccess
@@ -522,6 +598,25 @@ resource workerToFunctionStorageTableRole 'Microsoft.Authorization/roleAssignmen
     principalType: 'ServicePrincipal'
   }
 }
+
+module workerSubscriptionRbacAssignments './modules/worker-subscription-rbac.bicep' = [for targetSubscriptionId in workerSubscriptionRbacSubscriptionIds: {
+  name: 'worker-sub-rbac-${uniqueString(targetSubscriptionId, functionApp.id)}'
+  scope: subscription(targetSubscriptionId)
+  params: {
+    principalId: functionApp.identity.principalId
+    assignComputeRecommendationsRole: assignWorkerComputeRecommendationsRole
+    assignCostManagementReaderRole: assignWorkerCostManagementReaderRole
+    assignBillingReaderRole: assignWorkerBillingReaderRole
+  }
+}]
+
+module webSubscriptionReaderAssignments './modules/webSubscriptionReader.bicep' = [for targetSubscriptionId in webReaderSubscriptionIds: {
+  name: 'web-sub-reader-${uniqueString(targetSubscriptionId, webApp.id)}'
+  scope: subscription(targetSubscriptionId)
+  params: {
+    principalId: webApp.identity.principalId
+  }
+}]
 
 output webAppName string = webApp.name
 output webAppUrl string = 'https://${webApp.properties.defaultHostName}'

@@ -2548,6 +2548,31 @@ function buildRecommendationErrorMessage(payload) {
   return `${base} (${parts.join('; ')})`;
 }
 
+function normalizeRecommendationCapacityState(value) {
+  const normalized = String(value || '').trim().toUpperCase();
+  if (!normalized) {
+    return 'N/A';
+  }
+
+  if (normalized.includes('OK') || normalized.includes('AVAILABLE')) {
+    return 'OK';
+  }
+  if (normalized.includes('LIMIT')) {
+    return 'LIMITED';
+  }
+  if (normalized.includes('CONSTRAINED') || normalized.includes('BLOCKED') || normalized.includes('UNAVAILABLE')) {
+    return 'CONSTRAINED';
+  }
+
+  return 'N/A';
+}
+
+function renderRecommendationCapacityBadge(value) {
+  const state = normalizeRecommendationCapacityState(value);
+  const text = String(value || 'n/a').trim() || 'n/a';
+  return `<span class="badge ${state}">${escapeHtml(text)}</span>`;
+}
+
 function renderRecommendations(payload) {
   if (!recommendGridBody) {
     return;
@@ -2594,7 +2619,7 @@ function renderRecommendations(payload) {
       <td>${row.cpu || 'n/a'}</td>
       <td>${row.disk || 'n/a'}</td>
       <td>${row.purpose || 'n/a'}</td>
-      <td>${row.capacity || 'n/a'}</td>
+      <td>${renderRecommendationCapacityBadge(row.capacity)}</td>
       <td>${row.zonesOK ?? 'n/a'}</td>
       <td>${row.priceHr != null ? `$${Number(row.priceHr).toFixed(2)}` : 'n/a'}</td>
       <td>${row.priceMo != null ? `$${Number(row.priceMo).toFixed(0)}` : 'n/a'}</td>

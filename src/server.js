@@ -1,9 +1,24 @@
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs');
 const path = require('path');
-require('dotenv').config();
-// Load local overrides — gitignored, safe to customise for local dev
-require('dotenv').config({ path: path.resolve(__dirname, '..', '.env.local'), override: true });
+const ExcelJS = require('exceljs');
+const dotenv = require('dotenv');
+
+const initialEnvKeys = new Set(Object.keys(process.env));
+dotenv.config();
+
+// Load local overrides — gitignored, safe to customise for local dev.
+// Precedence is: explicit shell env > .env.local > .env.
+const localEnvPath = path.resolve(__dirname, '..', '.env.local');
+if (fs.existsSync(localEnvPath)) {
+  const localEnv = dotenv.parse(fs.readFileSync(localEnvPath));
+  Object.entries(localEnv).forEach(([key, value]) => {
+    if (!initialEnvKeys.has(key)) {
+      process.env[key] = value;
+    }
+  });
+}
 
 const session = require('express-session');
 const MSSQLStore = require('connect-mssql-v2');
@@ -81,6 +96,267 @@ function normalizeBoolean(value, fallback = false) {
 
   const raw = String(value).trim().toLowerCase();
   return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on';
+}
+
+const CAPACITY_EXPORT_STATUS_META = {
+  OK: {
+    fill: 'FFC6EFCE',
+    font: 'FF006100',
+    description: 'Ready to deploy. No restrictions.'
+  },
+  LIMITED: {
+    fill: 'FFFFEB9C',
+    font: 'FF9C6500',
+    description: "Your subscription can't use this. Request access via support ticket."
+  },
+  CONSTRAINED: {
+    fill: 'FFFCE4D6',
+    font: 'FF9C6500',
+    description: 'Azure is low on hardware. Try a different zone or wait.'
+  },
+  PARTIAL: {
+    fill: 'FFFFF2CC',
+    font: 'FF9C6500',
+    description: 'Some zones work, others are blocked. No zone redundancy.'
+  },
+  RESTRICTED: {
+    fill: 'FFFFC7CE',
+    font: 'FF9C0006',
+    description: 'Cannot deploy. Pick a different region or SKU.'
+  },
+  DEFAULT: {
+    fill: 'FFF3F2F1',
+    font: 'FF605E5C',
+    description: 'Status not classified.'
+  }
+};
+
+function getCapacityFiltersFromQuery(query = {}) {
+  return {
+    regionPreset: query.regionPreset,
+    subscriptionIds: query.subscriptionIds,
+    region: query.region,
+    family: query.family,
+    availability: query.availability,
+    resourceType: query.resourceType
+  };
+}
+
+function normalizeCapacityExportFormat(rawFormat) {
+  return String(rawFormat || 'csv').trim().toLowerCase() === 'xlsx' ? 'xlsx' : 'csv';
+}
+
+function buildCapacityExportRows(rows = []) {
+  return rows.map((row) => {
+    const quotaCurrent = Number(row.quotaCurrent || 0);
+    const quotaLimit = Number(row.quotaLimit || 0);
+
+    return {
+      capturedAtUtc: row.capturedAtUtc ? new Date(row.capturedAtUtc).toISOString() : '',
+      subscriptionName: row.subscriptionName || 'Legacy data',
+      subscriptionId: row.subscriptionId || 'legacy-data',
+      subscriptionKey: row.subscriptionKey || 'legacy-data',
+      region: row.region || '',
+      sku: row.sku || '',
+      family: row.family || '',
+      availability: row.availability || '',
+      quotaCurrent,
+      quotaLimit,
+      quotaAvailable: quotaLimit - quotaCurrent,
+      vCpu: Number(row.vCpu || 0),
+      memoryGB: Number(row.memoryGB || 0),
+      monthlyCost: Number(row.monthlyCost || 0),
+      zonesCsv: row.zonesCsv || ''
+    };
+  });
+}
+
+function buildCapacityExportSummary(rows = [], filters = {}) {
+  const regions = [...new Set(rows.map((row) => row.region).filter(Boolean))].sort();
+  const families = [...new Set(rows.map((row) => row.family).filter(Boolean))].sort();
+  const subscriptions = [...new Set(rows.map((row) => row.subscriptionId).filter(Boolean))];
+  const selectedSubscriptions = String(filters.subscriptionIds || '').split(',').map((value) => value.trim()).filter(Boolean);
+
+  return [
+    { metric: 'Generated At (UTC)', value: new Date().toISOString() },
+    { metric: 'Rows Exported', value: rows.length },
+    { metric: 'Regions in Export', value: regions.length },
+    { metric: 'Families in Export', value: families.length },
+    { metric: 'Subscriptions in Export', value: subscriptions.length },
+    { metric: 'Constrained Rows', value: rows.filter((row) => row.availability === 'CONSTRAINED').length },
+    { metric: 'Limited Rows', value: rows.filter((row) => row.availability === 'LIMITED').length },
+    { metric: 'Total Available Quota', value: rows.reduce((sum, row) => sum + Number(row.quotaAvailable || 0), 0) },
+    { metric: 'Estimated Monthly Cost', value: rows.reduce((sum, row) => sum + Number(row.monthlyCost || 0), 0) },
+    { metric: 'Region Preset', value: filters.regionPreset || 'all' },
+    { metric: 'Region Filter', value: filters.region || 'all' },
+    { metric: 'Family Filter', value: filters.family || 'all' },
+    { metric: 'Availability Filter', value: filters.availability || 'all' },
+    { metric: 'Resource Type Filter', value: filters.resourceType || 'all' },
+    { metric: 'Selected Subscription Count', value: selectedSubscriptions.length }
+  ];
+}
+
+function escapeCsvValue(value) {
+  const text = String(value == null ? '' : value);
+  if (!/[",\n]/.test(text)) {
+    return text;
+  }
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function buildCapacityCsv(exportRows = []) {
+  const headers = [
+    'capturedAtUtc',
+    'subscriptionName',
+    'subscriptionId',
+    'subscriptionKey',
+    'region',
+    'sku',
+    'family',
+    'availability',
+    'quotaCurrent',
+    'quotaLimit',
+    'quotaAvailable',
+    'vCpu',
+    'memoryGB',
+    'monthlyCost',
+    'zonesCsv'
+  ];
+
+  const lines = [headers.join(',')];
+  exportRows.forEach((row) => {
+    lines.push(headers.map((header) => escapeCsvValue(row[header])).join(','));
+  });
+
+  return `${lines.join('\r\n')}\r\n`;
+}
+
+function styleWorksheetHeader(worksheet, lastColumn) {
+  const headerRow = worksheet.getRow(1);
+  headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+
+  for (let column = 1; column <= lastColumn; column += 1) {
+    const cell = headerRow.getCell(column);
+    cell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF0078D4' }
+    };
+    cell.border = {
+      top: { style: 'thin', color: { argb: 'FFD1D1D1' } },
+      left: { style: 'thin', color: { argb: 'FFD1D1D1' } },
+      bottom: { style: 'thin', color: { argb: 'FFD1D1D1' } },
+      right: { style: 'thin', color: { argb: 'FFD1D1D1' } }
+    };
+  }
+}
+
+async function buildCapacityWorkbook({ exportRows, filters }) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Capacity Dashboard';
+  workbook.created = new Date();
+  workbook.modified = new Date();
+
+  const summarySheet = workbook.addWorksheet('Summary', { views: [{ state: 'frozen', ySplit: 1 }] });
+  summarySheet.columns = [
+    { header: 'Metric', key: 'metric', width: 28 },
+    { header: 'Value', key: 'value', width: 36 }
+  ];
+  buildCapacityExportSummary(exportRows, filters).forEach((row) => summarySheet.addRow(row));
+  styleWorksheetHeader(summarySheet, 2);
+
+  summarySheet.eachRow((row, rowNumber) => {
+    if (rowNumber > 1 && rowNumber % 2 === 0) {
+      row.eachCell((cell) => {
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFF8F9FB' }
+        };
+      });
+    }
+  });
+
+  const detailSheet = workbook.addWorksheet('Capacity Details', { views: [{ state: 'frozen', ySplit: 1 }] });
+  detailSheet.columns = [
+    { header: 'Captured At (UTC)', key: 'capturedAtUtc', width: 24 },
+    { header: 'Subscription Name', key: 'subscriptionName', width: 28 },
+    { header: 'Subscription ID', key: 'subscriptionId', width: 38 },
+    { header: 'Subscription Key', key: 'subscriptionKey', width: 20 },
+    { header: 'Region', key: 'region', width: 18 },
+    { header: 'SKU', key: 'sku', width: 24 },
+    { header: 'Family', key: 'family', width: 18 },
+    { header: 'Availability', key: 'availability', width: 16 },
+    { header: 'Quota Current', key: 'quotaCurrent', width: 14 },
+    { header: 'Quota Limit', key: 'quotaLimit', width: 14 },
+    { header: 'Quota Available', key: 'quotaAvailable', width: 16 },
+    { header: 'vCPU', key: 'vCpu', width: 10 },
+    { header: 'Memory GB', key: 'memoryGB', width: 12 },
+    { header: 'Monthly Cost', key: 'monthlyCost', width: 14 },
+    { header: 'Zones', key: 'zonesCsv', width: 18 }
+  ];
+  exportRows.forEach((row) => detailSheet.addRow(row));
+  styleWorksheetHeader(detailSheet, detailSheet.columns.length);
+  detailSheet.autoFilter = 'A1:O1';
+
+  ['quotaCurrent', 'quotaLimit', 'quotaAvailable', 'vCpu', 'memoryGB'].forEach((key) => {
+    detailSheet.getColumn(key).numFmt = '#,##0';
+  });
+  detailSheet.getColumn('monthlyCost').numFmt = '$#,##0.00';
+
+  detailSheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) {
+      return;
+    }
+
+    if (rowNumber % 2 === 0) {
+      row.eachCell((cell) => {
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFF8F9FB' }
+        };
+      });
+    }
+
+    const availabilityCell = row.getCell('availability');
+    const statusMeta = CAPACITY_EXPORT_STATUS_META[String(availabilityCell.value || '').toUpperCase()] || CAPACITY_EXPORT_STATUS_META.DEFAULT;
+    availabilityCell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: statusMeta.fill }
+    };
+    availabilityCell.font = { bold: true, color: { argb: statusMeta.font } };
+    availabilityCell.alignment = { horizontal: 'center' };
+  });
+
+  const legendSheet = workbook.addWorksheet('Legend');
+  legendSheet.columns = [
+    { header: 'Status', key: 'status', width: 18 },
+    { header: 'Meaning', key: 'meaning', width: 68 }
+  ];
+  Object.entries(CAPACITY_EXPORT_STATUS_META)
+    .filter(([status]) => status !== 'DEFAULT')
+    .forEach(([status, meta]) => legendSheet.addRow({ status, meaning: meta.description }));
+  styleWorksheetHeader(legendSheet, 2);
+
+  legendSheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) {
+      return;
+    }
+
+    const statusCell = row.getCell('status');
+    const statusMeta = CAPACITY_EXPORT_STATUS_META[String(statusCell.value || '').toUpperCase()] || CAPACITY_EXPORT_STATUS_META.DEFAULT;
+    statusCell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: statusMeta.fill }
+    };
+    statusCell.font = { bold: true, color: { argb: statusMeta.font } };
+  });
+
+  return workbook.xlsx.writeBuffer();
 }
 
 function getDefaultSchedulerSettings() {
@@ -353,17 +629,34 @@ app.get('/api/auth/me', (req, res) => {
 
 app.get('/api/capacity', async (req, res) => {
   try {
-    const rows = await getCapacityRows({
-      regionPreset: req.query.regionPreset,
-      subscriptionIds: req.query.subscriptionIds,
-      region: req.query.region,
-      family: req.query.family,
-      availability: req.query.availability,
-      resourceType: req.query.resourceType
-    });
+    const rows = await getCapacityRows(getCapacityFiltersFromQuery(req.query));
     res.json({ rows });
   } catch (err) {
     res.status(500).json({ error: 'Failed to retrieve capacity rows', detail: err.message });
+  }
+});
+
+app.get('/api/capacity/export', async (req, res) => {
+  try {
+    const filters = getCapacityFiltersFromQuery(req.query);
+    const format = normalizeCapacityExportFormat(req.query.format);
+    const rows = await getCapacityRows(filters);
+    const exportRows = buildCapacityExportRows(rows);
+    const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+
+    if (format === 'xlsx') {
+      const workbookBuffer = await buildCapacityWorkbook({ exportRows, filters });
+      res.setHeader('Content-Disposition', `attachment; filename="capacity-dashboard-${timestamp}.xlsx"`);
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      return res.send(Buffer.from(workbookBuffer));
+    }
+
+    const csv = buildCapacityCsv(exportRows);
+    res.setHeader('Content-Disposition', `attachment; filename="capacity-dashboard-${timestamp}.csv"`);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    return res.send(csv);
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to export capacity rows', detail: err.message });
   }
 });
 

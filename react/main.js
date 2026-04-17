@@ -101,6 +101,21 @@ async function fetchJson(url, options) {
   return payload;
 }
 
+function getFilenameFromDisposition(headerValue, fallbackName) {
+  const value = String(headerValue || '');
+  const utf8Match = value.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match && utf8Match[1]) {
+    return decodeURIComponent(utf8Match[1]);
+  }
+
+  const plainMatch = value.match(/filename="?([^";]+)"?/i);
+  if (plainMatch && plainMatch[1]) {
+    return plainMatch[1];
+  }
+
+  return fallbackName;
+}
+
 function formatNumber(value) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric.toLocaleString() : 'n/a';
@@ -582,6 +597,7 @@ function App() {
   const [trendRows, setTrendRows] = useState([]);
   const [familyRows, setFamilyRows] = useState([]);
   const [capacityScores, setCapacityScores] = useState({ rows: [], pagination: { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false }, subscriptionSummary: [] });
+  const [exportBusyFormat, setExportBusyFormat] = useState('');
   const [recommendState, setRecommendState] = useState({ targetSku: '', autoTargetSku: '', regions: '', autoRegions: '', topN: 10, minScore: 50, showPricing: true, showSpot: false, result: null, status: { tone: 'info', message: 'Run the recommender to populate alternatives.' }, busy: false });
   const [quotaState, setQuotaState] = useState({ managementGroups: [], selectedManagementGroup: '', quotaGroups: [], selectedQuotaGroup: 'all', candidates: [], quotaRuns: [], candidateFilters: { subscriptionId: 'all', region: 'all', family: '' }, status: { tone: 'info', message: 'Quota tools ready.' }, busy: { discover: false, generate: false, capture: false, refresh: false } });
 
@@ -769,6 +785,47 @@ function App() {
     setSelectedSubscriptionIds([]);
   }
 
+  async function downloadCapacityExport(format) {
+    const normalizedFormat = String(format || 'csv').toLowerCase() === 'xlsx' ? 'xlsx' : 'csv';
+    setExportBusyFormat(normalizedFormat);
+    try {
+      const query = new URLSearchParams({ ...queryFilters, format: normalizedFormat });
+      const response = await fetch(`/api/capacity/export?${query.toString()}`, {
+        credentials: 'same-origin'
+      });
+
+      if (!response.ok) {
+        let errorMessage = `Export failed (${response.status})`;
+        try {
+          const payload = await response.json();
+          errorMessage = payload.error || payload.detail || errorMessage;
+        } catch {
+          const text = await response.text();
+          if (text) {
+            errorMessage = text;
+          }
+        }
+        throw new Error(errorMessage);
+      }
+
+      const blob = await response.blob();
+      const filename = getFilenameFromDisposition(response.headers.get('content-disposition'), `capacity-dashboard-export.${normalizedFormat}`);
+      const objectUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(objectUrl);
+      setAppStatus({ tone: 'success', message: `Downloaded ${filename}.` });
+    } catch (error) {
+      setAppStatus({ tone: 'error', message: error.message || 'Failed to export capacity data.' });
+    } finally {
+      setExportBusyFormat('');
+    }
+  }
+
   async function runRecommendation() {
     if (!recommendState.targetSku) {
       setRecommendState((current) => ({ ...current, status: { tone: 'warn', message: 'Enter a target SKU to run recommendations.' } }));
@@ -878,7 +935,7 @@ function App() {
   })();
 
   return (
-    <div className="rx-shell">
+    <div className={classNames('rx-shell', !drawerOpen && 'is-drawer-collapsed')}>
       <aside className="rx-sidebar">
         <div className="rx-sidebar__header">
           <div>
@@ -904,6 +961,10 @@ function App() {
             <p>Right-side flyout keeps high-cardinality filters like subscriptions out of the main content flow.</p>
           </div>
           <div className="rx-topbar__actions">
+            {activeView === 'capacity-grid' ? <>
+              <button className="rx-button rx-button--secondary" type="button" disabled={Boolean(exportBusyFormat)} onClick={() => downloadCapacityExport('csv')}>{exportBusyFormat === 'csv' ? 'Exporting CSV...' : 'Export CSV'}</button>
+              <button className="rx-button rx-button--secondary" type="button" disabled={Boolean(exportBusyFormat)} onClick={() => downloadCapacityExport('xlsx')}>{exportBusyFormat === 'xlsx' ? 'Exporting Excel...' : 'Export Excel'}</button>
+            </> : null}
             <div className="rx-user-chip">
               <strong>{auth?.name || 'Loading user...'}</strong>
               <small>{auth?.username || 'No Entra context yet'}</small>

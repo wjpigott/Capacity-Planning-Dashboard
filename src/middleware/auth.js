@@ -185,11 +185,13 @@ function isAdmin(account) {
  * API/internal paths return 401 JSON; browser paths redirect to /auth/login.
  */
 function requireAuth(req, res, next) {
+  console.log(`[auth:requireAuth] path=${req.path}, AUTH_ENABLED=${AUTH_ENABLED}, hasAccount=${!!getAccountFromSession(req)}`);
   if (!AUTH_ENABLED) return next();
-  if (getAccountFromSession(req)) return next();
+ if (getAccountFromSession(req)) return next();
   if (req.path.startsWith('/api/') || req.path.startsWith('/internal/')) {
     return res.status(401).json({ ok: false, error: 'Authentication required.' });
   }
+  console.log(`[auth:requireAuth] redirecting ${req.path} to /auth/login`);
   req.session.returnTo = req.originalUrl;
   return res.redirect('/auth/login');
 }

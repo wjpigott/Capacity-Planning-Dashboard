@@ -188,6 +188,7 @@ $items = @(
 	'styles.css',
 	'package.json',
 	'package-lock.json',
+	'react',
 	'src',
 	'sql',
 	'scripts',

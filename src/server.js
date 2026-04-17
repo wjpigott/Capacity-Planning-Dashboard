@@ -292,6 +292,22 @@ app.use('/api', (req, res, next) => {
   return res.status(401).json({ ok: false, error: 'Authentication required.' });
 });
 
+function isReactPrototypeHostAllowed(hostname = '') {
+  const value = String(hostname || '').toLowerCase();
+  return value.includes('localhost')
+    || value.includes('127.0.0.1')
+    || value.includes('-dev-')
+    || value.includes('dev');
+}
+
+app.use('/react', (req, res, next) => {
+  if (isReactPrototypeHostAllowed(req.hostname)) {
+    return next();
+  }
+
+  return res.status(404).type('text/plain').send('React prototype is available in dev only.');
+});
+
 app.use(express.static(path.resolve(__dirname, '..')));
 
 function requireIngestKey(req, res, next) {
@@ -774,6 +790,18 @@ app.post('/internal/db/ensure-phase3-schema', requireIngestKey, async (_, res) =
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
+});
+
+app.get('/react', (_, res) => {
+  res.sendFile(path.resolve(__dirname, '..', 'react', 'index.html'));
+});
+
+app.get('/react/*', (req, res, next) => {
+  if (path.extname(req.path)) {
+    return next();
+  }
+
+  return res.sendFile(path.resolve(__dirname, '..', 'react', 'index.html'));
 });
 
 app.get('*', (_, res) => {

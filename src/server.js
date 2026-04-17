@@ -576,6 +576,35 @@ function isReactPrototypeHostAllowed(hostname = '') {
     || value.includes('dev');
 }
 
+function sendReactAuthGate(res) {
+  return res.status(401).type('html').send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign In Required</title>
+  <style>
+    body { margin: 0; font-family: Segoe UI, Arial, sans-serif; background: #f4f7fb; color: #16324f; }
+    .wrap { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    .card { max-width: 560px; background: #fff; border: 1px solid #d7e1ea; border-radius: 12px; padding: 32px; box-shadow: 0 10px 30px rgba(0, 44, 88, 0.08); text-align: center; }
+    h1 { margin: 8px 0 12px; font-size: 28px; }
+    p { margin: 0 0 16px; line-height: 1.5; color: #52667a; }
+    a { display: inline-block; padding: 12px 18px; border-radius: 999px; background: #005a9c; color: #fff; text-decoration: none; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div style="letter-spacing: .12em; text-transform: uppercase; font-size: 12px; font-weight: 700; color: #005a9c;">Access Restricted</div>
+      <h1>You do not have access</h1>
+      <p>Sign in to use the React dashboard experience.</p>
+      <a href="/auth/login">Sign In</a>
+    </div>
+  </div>
+</body>
+</html>`);
+}
+
 app.use('/react', (req, res, next) => {
   if (isReactPrototypeHostAllowed(req.hostname)) {
     return next();
@@ -584,7 +613,9 @@ app.use('/react', (req, res, next) => {
   return res.status(404).type('text/plain').send('React prototype is available in dev only.');
 });
 
-app.use(express.static(path.resolve(__dirname, '..')));
+app.use(express.static(path.resolve(__dirname, '..'), {
+  index: false
+}));
 
 function requireIngestKey(req, res, next) {
   const expected = process.env.INGEST_API_KEY;
@@ -1085,13 +1116,21 @@ app.post('/internal/db/ensure-phase3-schema', requireIngestKey, async (_, res) =
   }
 });
 
-app.get('/react', (_, res) => {
+app.get('/react', (req, res) => {
+  if (AUTH_ENABLED && !getAccountFromSession(req)) {
+    return sendReactAuthGate(res);
+  }
+
   res.sendFile(path.resolve(__dirname, '..', 'react', 'index.html'));
 });
 
 app.get('/react/*', (req, res, next) => {
   if (path.extname(req.path)) {
     return next();
+  }
+
+  if (AUTH_ENABLED && !getAccountFromSession(req)) {
+    return sendReactAuthGate(res);
   }
 
   return res.sendFile(path.resolve(__dirname, '..', 'react', 'index.html'));

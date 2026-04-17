@@ -585,6 +585,7 @@ function QuotaDiscoveryView(props) {
 
 function App() {
   const [auth, setAuth] = useState(null);
+  const [authResolved, setAuthResolved] = useState(false);
   const [appStatus, setAppStatus] = useState({ tone: 'info', message: 'Loading React experience...' });
   const [activeView, setActiveView] = useState('capacity-grid');
   const [drawerOpen, setDrawerOpen] = useState(true);
@@ -695,6 +696,8 @@ function App() {
         setAppStatus({ tone: 'success', message: 'React v2 playground loaded. Use the right-side flyout to manage large filter sets.' });
       } catch (error) {
         setAppStatus({ tone: 'error', message: error.message || 'Failed to initialize React experience.' });
+      } finally {
+        setAuthResolved(true);
       }
     }
     initialize();
@@ -896,6 +899,31 @@ function App() {
     return subscriptionOptions.filter((option) => !term || String(option.subscriptionName || '').toLowerCase().includes(term) || String(option.subscriptionId || '').toLowerCase().includes(term));
   }, [subscriptionOptions, subscriptionSearch]);
 
+  if (!authResolved) {
+    return (
+      <div className="rx-access-gate">
+        <section className="rx-panel rx-access-gate__panel">
+          <div className="rx-kicker">Checking Access</div>
+          <h1>Loading</h1>
+          <p>Verifying your session for the React dashboard.</p>
+        </section>
+      </div>
+    );
+  }
+
+  if (auth?.authEnabled && auth.isAuthenticated === false) {
+    return (
+      <div className="rx-access-gate">
+        <section className="rx-panel rx-access-gate__panel">
+          <div className="rx-kicker">Access Restricted</div>
+          <h1>You do not have access</h1>
+          <p>This React dashboard is only available to authenticated users.</p>
+          <a className="rx-link-button" href="/auth/login">Sign In</a>
+        </section>
+      </div>
+    );
+  }
+
   const viewContent = (() => {
     if (activeView === 'capacity-grid') {
       return <DataTable key="capacity-grid" title="Capacity Grid" subtitle="Server-paged capacity observations using the shared API contract." columns={[{ key: 'subscriptionName', label: 'Subscription' }, { key: 'region', label: 'Region' }, { key: 'sku', label: 'SKU', render: (row) => normalizeSkuName(row.sku) || 'n/a' }, { key: 'family', label: 'Family', render: (row) => formatFamilyLabel(row.family) || 'n/a' }, { key: 'availability', label: 'Availability', render: (row) => <StatusPill value={row.availability} /> }, { key: 'quotaCurrent', label: 'Current', render: (row) => formatNumber(row.quotaCurrent) }, { key: 'quotaLimit', label: 'Limit', render: (row) => formatNumber(row.quotaLimit) }, { key: 'available', label: 'Available', render: (row) => formatNumber(Number(row.quotaLimit || 0) - Number(row.quotaCurrent || 0)) }]} rows={capacityData.rows} emptyMessage="No capacity rows returned for the current filters." />;
@@ -969,6 +997,7 @@ function App() {
               <strong>{auth?.name || 'Loading user...'}</strong>
               <small>{auth?.username || 'No Entra context yet'}</small>
             </div>
+            {auth?.authEnabled && auth?.isAuthenticated ? <a className="rx-link-button rx-link-button--muted" href="/auth/logout">Logout</a> : null}
             <button className="rx-button rx-button--secondary" type="button" onClick={() => setDrawerOpen((current) => !current)}>{drawerOpen ? 'Hide Filters' : 'Show Filters'}</button>
           </div>
         </header>

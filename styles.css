@@ -90,9 +90,20 @@ body.auth-pending::before {
   flex-shrink: 0;
 }
 
+.topbar-user-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .topbar-username {
   font-size: 13px;
   color: rgba(255,255,255,0.85);
+}
+
+.topbar-userid {
+  font-size: 11px;
+  color: rgba(255,255,255,0.68);
 }
 
 .topbar-logout {
@@ -191,6 +202,10 @@ body.auth-pending::before {
 }
 
 .nav-item.hidden {
+  display: none;
+}
+
+[data-admin-only="true"].hidden {
   display: none;
 }
 

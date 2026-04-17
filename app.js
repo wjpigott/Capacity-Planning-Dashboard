@@ -721,9 +721,18 @@ function applyAdminAccess(auth) {
 function updateTopbarUser(auth) {
   const el = document.getElementById('topbarUserInfo');
   if (!el) return;
+  if (!(auth?.authEnabled && auth?.isAuthenticated && auth?.name)) {
+    el.innerHTML = '';
+    return;
+  }
+
+  const username = String(auth?.username || '').trim();
   if (auth?.authEnabled && auth?.isAuthenticated && auth?.name) {
     el.innerHTML = `
-      <span class="topbar-username">${auth.name}</span>
+      <span class="topbar-user-meta">
+        <span class="topbar-username">${auth.name}</span>
+        ${username ? `<span class="topbar-userid">${username}</span>` : ''}
+      </span>
       <a href="/auth/logout" class="topbar-logout">Sign out</a>
     `;
   }

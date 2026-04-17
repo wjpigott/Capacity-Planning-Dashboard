@@ -38,7 +38,7 @@ Status legend:
 | --- | --- | --- |
 | Platform and infrastructure | `[x]` | App Service, SQL, Key Vault, App Insights, Log Analytics deployed via Bicep |
 | Worker execution host | `[~]` | Azure Functions PowerShell 7 worker runs on a dedicated App Service plan with managed-identity host storage; live placement worker still needs module restore validation |
-| Security and identity | `[~]` | Entra admin + AAD-only SQL auth, managed identity runtime access, no raw subscription IDs stored in snapshots; Entra RBAC for Admin sections pending |
+| Security and identity | `[x]` | Entra admin + AAD-only SQL auth, managed identity runtime access, no raw subscription IDs stored in snapshots; Entra sign-in and admin group gating are enabled via `ADMIN_GROUP_ID` |
 | Live ingestion pipeline | `[x]` | Internal ingestion endpoint + scheduler; family filtering is optional (omit `INGEST_QUOTA_FAMILY_FILTERS` to ingest all families) + SQL snapshot writes |
 | API and analytics | `[~]` | Capacity API, subscription catalog, family summary, masked subscription summary, and trend APIs complete; quota-group APIs still placeholder |
 | UX and dashboard | `[~]` | Capacity grid, filters (region, resource type, SKU family search, availability, subscription), sidebar report navigation, analytics tables, and chart views complete; export/workflow pages still pending |
@@ -62,7 +62,7 @@ Status legend:
 - [x] App identity granted SQL read/write roles for ingestion and read APIs
 - [x] Internal ingestion endpoints protected by `INGEST_API_KEY`
 - [x] Subscription identities masked (`subscriptionKey`) in stored analytics rows
-- [ ] Entra ID RBAC — code support is in place via App Service auth headers and `/api/auth/me`, but platform enablement is still pending: enable App Service Authentication, register/assign the `CapacityAdmin` app role, and set `ADMIN_RBAC_MODE=enforce`
+- [x] Entra sign-in and admin group gating enabled via dashboard auth flow and `ADMIN_GROUP_ID`
 
 #### Live ingestion pipeline
 
@@ -409,8 +409,12 @@ Required app settings:
 - `INGEST_SUBSCRIPTION_IDS` (optional comma-separated list; if omitted, enabled subscriptions are auto-discovered)
 - `INGEST_ON_STARTUP` (`true`/`false`, fallback default when SQL schedule settings are not present)
 - `INGEST_INTERVAL_MINUTES` (`0` disables scheduling, fallback default when SQL schedule settings are not present)
-- `ADMIN_RBAC_MODE` (`off` by default; set to `enforce` after App Service Authentication is enabled)
-- `ADMIN_ROLE_NAME` (`CapacityAdmin` by default)
+- `AUTH_ENABLED` (`true` enables the dashboard Entra sign-in flow)
+- `ENTRA_TENANT_ID` (tenant ID used for Microsoft Entra sign-in)
+- `ENTRA_CLIENT_ID` (app registration/client ID for the dashboard)
+- `ENTRA_CLIENT_SECRET` (app registration client secret for the dashboard)
+- `AUTH_REDIRECT_URI` (OAuth callback URI, for example `https://app-capdash-dev-cap001.azurewebsites.net/auth/callback`)
+- `ADMIN_GROUP_ID` (Object ID of the Entra security group whose members can access Admin sections)
 - `QUOTA_MANAGEMENT_GROUP_ID` (required for live quota discovery)
 - `CAPACITY_WORKER_BASE_URL` (optional Function App base URL for worker-first live placement execution)
 - `CAPACITY_WORKER_SHARED_SECRET` (optional shared secret header value for worker calls)
@@ -653,7 +657,7 @@ Planned data/API direction:
 - Required RBAC for each ingested subscription:
 	- At minimum, permission to read `Microsoft.Compute/locations/usages` and SKU metadata (Reader role at subscription scope is sufficient for current read APIs).
 - Internal ingestion APIs are gated by `INGEST_API_KEY`.
-- Admin UI RBAC support reads App Service Authentication headers (`x-ms-client-principal`) when present. Enforce it only after Easy Auth is enabled and the `CapacityAdmin` app role is assigned.
+- Admin access is enforced by the dashboard auth middleware using the signed-in user's Entra group claims. Set `ADMIN_GROUP_ID` to the Object ID of the Entra security group allowed to see Admin sections and call admin-only APIs.
 
 ## SQL migration
 

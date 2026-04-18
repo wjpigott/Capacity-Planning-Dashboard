@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const { randomUUID } = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const ExcelJS = require('exceljs');
@@ -44,6 +45,7 @@ const {
 } = require('./services/livePlacementService');
 const { getQuotaCandidates, captureQuotaCandidateSnapshots } = require('./services/quotaCandidateService');
 const { buildQuotaMovePlan, getQuotaCandidateRunHistory, simulateQuotaMovePlan } = require('./services/quotaPlanService');
+const { applyQuotaMovePlan } = require('./services/quotaApplyService');
 const {
   runCapacityIngestion,
   getIngestionStatus,
@@ -68,6 +70,8 @@ const { applyIndexes } = require('./maintenance/applyPerformanceIndexes');
 
 const app = express();
 const port = process.env.PORT || 3000;
+const QUOTA_APPLY_JOB_TTL_MS = 6 * 60 * 60 * 1000;
+const quotaApplyJobs = new Map();
 
 const DASHBOARD_SETTING_KEYS = {
   ingestIntervalMinutes: 'schedule.ingest.intervalMinutes',
@@ -96,6 +100,109 @@ function normalizeBoolean(value, fallback = false) {
 
   const raw = String(value).trim().toLowerCase();
   return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on';
+}
+
+function cleanupQuotaApplyJobs() {
+  const expiresBefore = Date.now() - QUOTA_APPLY_JOB_TTL_MS;
+  for (const [jobId, job] of quotaApplyJobs.entries()) {
+    const completedAt = job.completedAtUtc ? new Date(job.completedAtUtc).getTime() : 0;
+    if (completedAt && completedAt < expiresBefore) {
+      quotaApplyJobs.delete(jobId);
+    }
+  }
+}
+
+function buildQuotaApplyFilters(body = {}) {
+  return {
+    managementGroupId: body.managementGroupId,
+    groupQuotaName: body.groupQuotaName,
+    analysisRunId: body.analysisRunId,
+    donorSubscriptionId: body.donorSubscriptionId,
+    recipientSubscriptionId: body.recipientSubscriptionId,
+    selectedSku: body.selectedSku,
+    transferAmount: body.transferAmount,
+    region: body.region,
+    family: body.family,
+    maxChanges: body.maxChanges
+  };
+}
+
+function serializeQuotaApplyJob(job) {
+  return {
+    ok: true,
+    queued: job.status === 'queued' || job.status === 'running',
+    jobId: job.jobId,
+    status: job.status,
+    createdAtUtc: job.createdAtUtc,
+    startedAtUtc: job.startedAtUtc,
+    completedAtUtc: job.completedAtUtc,
+    error: job.error || null,
+    result: job.result || null,
+    ...(job.result || {})
+  };
+}
+
+function queueQuotaApplyJob(filters) {
+  cleanupQuotaApplyJobs();
+
+  const createdAtUtc = new Date().toISOString();
+  const job = {
+    jobId: randomUUID(),
+    status: 'queued',
+    createdAtUtc,
+    startedAtUtc: null,
+    completedAtUtc: null,
+    filters,
+    result: null,
+    error: null
+  };
+
+  quotaApplyJobs.set(job.jobId, job);
+
+  setImmediate(async () => {
+    const startedAt = Date.now();
+    job.status = 'running';
+    job.startedAtUtc = new Date(startedAt).toISOString();
+
+    try {
+      const result = await applyQuotaMovePlan(filters);
+      job.status = 'completed';
+      job.completedAtUtc = new Date().toISOString();
+      job.result = result;
+
+      await logDashboardOperation({
+        type: 'quota-apply',
+        name: 'Quota Apply',
+        status: result.failureCount > 0 ? 'failed' : 'success',
+        triggerSource: 'manual',
+        startedAtUtc: job.startedAtUtc,
+        completedAtUtc: job.completedAtUtc,
+        durationMs: Date.now() - startedAt,
+        rowsAffected: Number.isFinite(result.submittedChangeCount) ? result.submittedChangeCount : null,
+        subscriptionCount: Array.isArray(result.applyResults) ? new Set(result.applyResults.map((row) => row.subscriptionId).filter(Boolean)).size : null,
+        note: `${filters.managementGroupId || 'unknown'} / ${filters.groupQuotaName || 'unknown'}`,
+        errorMessage: result.failureCount > 0 ? `Quota apply completed with ${result.failureCount} failed submission(s).` : null
+      });
+    } catch (err) {
+      job.status = 'failed';
+      job.completedAtUtc = new Date().toISOString();
+      job.error = err.message;
+
+      await logDashboardOperation({
+        type: 'quota-apply',
+        name: 'Quota Apply',
+        status: 'failed',
+        triggerSource: 'manual',
+        startedAtUtc: job.startedAtUtc || job.createdAtUtc,
+        completedAtUtc: job.completedAtUtc,
+        durationMs: Date.now() - startedAt,
+        note: `${filters.managementGroupId || 'unknown'} / ${filters.groupQuotaName || 'unknown'}`,
+        errorMessage: err.message
+      });
+    }
+  });
+
+  return job;
 }
 
 const CAPACITY_EXPORT_STATUS_META = {
@@ -787,6 +894,10 @@ app.get('/api/quota/plan', requireAdmin, async (req, res) => {
       managementGroupId: req.query.managementGroupId,
       groupQuotaName: req.query.groupQuotaName,
       analysisRunId: req.query.analysisRunId,
+      donorSubscriptionId: req.query.donorSubscriptionId,
+      recipientSubscriptionId: req.query.recipientSubscriptionId,
+      selectedSku: req.query.selectedSku,
+      transferAmount: req.query.transferAmount,
       region: req.query.region,
       family: req.query.family
     });
@@ -803,6 +914,10 @@ app.post('/api/quota/simulate', requireAdmin, async (req, res) => {
       managementGroupId: req.body?.managementGroupId,
       groupQuotaName: req.body?.groupQuotaName,
       analysisRunId: req.body?.analysisRunId,
+      donorSubscriptionId: req.body?.donorSubscriptionId,
+      recipientSubscriptionId: req.body?.recipientSubscriptionId,
+      selectedSku: req.body?.selectedSku,
+      transferAmount: req.body?.transferAmount,
       region: req.body?.region,
       family: req.body?.family
     });
@@ -811,6 +926,35 @@ app.post('/api/quota/simulate', requireAdmin, async (req, res) => {
     const status = err.message.includes('required') || err.message.includes('Run Capture History first') ? 400 : 500;
     res.status(status).json({ ok: false, error: err.message, impactRows: [] });
   }
+});
+
+app.post('/api/quota/apply', requireAdmin, async (req, res) => {
+  const filters = buildQuotaApplyFilters(req.body);
+
+  if (req.body?.async === true) {
+    const job = queueQuotaApplyJob(filters);
+    res.json(serializeQuotaApplyJob(job));
+    return;
+  }
+
+  try {
+    const result = await applyQuotaMovePlan(filters);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    const status = err.message.includes('required') || err.message.includes('Build a plan first') || err.message.includes('No plan rows') ? 400 : 500;
+    res.status(status).json({ ok: false, error: err.message, applyResults: [] });
+  }
+});
+
+app.get('/api/quota/apply/jobs/:jobId', requireAdmin, (req, res) => {
+  cleanupQuotaApplyJobs();
+  const job = quotaApplyJobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ ok: false, error: 'Quota apply job was not found or has expired.' });
+    return;
+  }
+
+  res.json(serializeQuotaApplyJob(job));
 });
 
 app.get('/api/subscriptions', async (req, res) => {

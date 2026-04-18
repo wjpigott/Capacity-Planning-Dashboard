@@ -3,6 +3,41 @@ const { getCapacityRows } = require('./capacityService');
 const { listQuotaGroups } = require('./quotaDiscoveryService');
 const { insertQuotaCandidateSnapshots } = require('../store/sql');
 
+function normalizeSkuName(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  const normalizeSuffix = (suffix) => String(suffix || '')
+    .split('_')
+    .map((segment) => {
+      const normalized = String(segment || '').trim().toLowerCase();
+      if (!normalized) {
+        return '';
+      }
+      if (/^v\d+$/.test(normalized)) {
+        return normalized;
+      }
+      return normalized.replace(/^([a-z]+)/, (match) => match.toUpperCase());
+    })
+    .filter(Boolean)
+    .join('_');
+
+  const prefixedSku = trimmed.match(/^(standard|basic|internal)(?:[_\s-]?)(.*)$/i);
+  if (prefixedSku) {
+    const prefixToken = String(prefixedSku[1] || '').toLowerCase();
+    const prefix = prefixToken === 'standard'
+      ? 'Standard'
+      : (prefixToken === 'basic' ? 'Basic' : 'Internal');
+    const rawSuffix = String(prefixedSku[2] || '').replace(/^[_\s-]+/, '');
+    const suffix = normalizeSuffix(rawSuffix);
+    return suffix ? `${prefix}_${suffix}` : prefix;
+  }
+
+  return trimmed;
+}
+
 function getSafetyBuffer(quotaLimit) {
   return Math.max(5, Math.round(Number(quotaLimit || 0) * 0.1));
 }
@@ -62,13 +97,18 @@ async function getQuotaCandidates(filters = {}) {
         sourceCapturedAtUtc: row.capturedAtUtc || null,
         subscriptionKey: row.subscriptionKey || row.subscriptionId,
         quotaCurrent: 0,
-        quotaLimit: 0
+        quotaLimit: 0,
+        skuNames: new Set()
       });
     }
 
     const entry = grouped.get(key);
     entry.quotaCurrent += Number(row.quotaCurrent || 0);
     entry.quotaLimit += Number(row.quotaLimit || 0);
+    const normalizedSku = normalizeSkuName(row.sku);
+    if (normalizedSku) {
+      entry.skuNames.add(normalizedSku);
+    }
     if (row.capturedAtUtc && (!entry.sourceCapturedAtUtc || new Date(row.capturedAtUtc) > new Date(entry.sourceCapturedAtUtc))) {
       entry.sourceCapturedAtUtc = row.capturedAtUtc;
     }
@@ -89,6 +129,8 @@ async function getQuotaCandidates(filters = {}) {
         ...entry,
         analysisRunId,
         capturedAtUtc: capturedAtUtc.toISOString(),
+        skuList: [...entry.skuNames].sort(),
+        skuCount: entry.skuNames.size,
         quotaAvailable,
         safetyBuffer,
         suggestedMovable,
@@ -126,6 +168,8 @@ async function captureQuotaCandidateSnapshots(filters = {}) {
     subscriptionName: candidate.subscriptionName,
     region: candidate.region,
     quotaName: candidate.family,
+    skuList: Array.isArray(candidate.skuList) ? candidate.skuList.join(', ') : '',
+    skuCount: Number(candidate.skuCount || 0),
     availabilityState: candidate.availability,
     quotaCurrent: candidate.quotaCurrent,
     quotaLimit: candidate.quotaLimit,

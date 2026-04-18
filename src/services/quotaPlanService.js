@@ -28,15 +28,238 @@ function availabilityRank(value) {
   return 2;
 }
 
+function parseSkuList(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || '').trim()).filter(Boolean);
+  }
+
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function resolveSelectedSku(filters = {}, recipient = null, donor = null) {
+  const requestedSku = String(filters.selectedSku || '').trim();
+  const scopedSkus = parseSkuList(recipient?.skuList || donor?.skuList || '');
+
+  if (requestedSku && scopedSkus.includes(requestedSku)) {
+    return requestedSku;
+  }
+
+  return scopedSkus.length === 1 ? scopedSkus[0] : requestedSku;
+}
+
+function buildApplyMetadata(donor, transferAmount) {
+  const donorQuotaCurrent = Number(donor?.quotaCurrent || 0);
+  const donorQuotaLimit = Number(donor?.quotaLimit || 0);
+  const safeTransferAmount = Math.max(0, Number(transferAmount || 0));
+
+  return {
+    donorQuotaCurrent,
+    donorQuotaLimit,
+    currentGroupLimit: donorQuotaLimit,
+    proposedLimit: Math.max(0, donorQuotaLimit - safeTransferAmount),
+    readyToApply: safeTransferAmount > 0,
+    planStatus: safeTransferAmount > 0 ? 'Ready' : 'NoMovableQuota'
+  };
+}
+
+function buildDonorScopedQuotaMovePlan(snapshotRows, filters = {}) {
+  const donorSubscriptionId = String(filters.donorSubscriptionId || '').trim();
+  const requestedRegion = String(filters.region || '').trim();
+  const requestedQuotaName = String(filters.quotaName || filters.family || '').trim();
+
+  if (!donorSubscriptionId) {
+    throw new Error('donorSubscriptionId is required. Select a donor subscription before building a move plan.');
+  }
+
+  if (!requestedRegion || requestedRegion === 'all') {
+    throw new Error('region is required for donor-scoped quota moves. Select a quota row from Quota Discovery first.');
+  }
+
+  if (!requestedQuotaName || requestedQuotaName === 'all') {
+    throw new Error('family is required for donor-scoped quota moves. Select a quota row from Quota Discovery first.');
+  }
+
+  const donor = snapshotRows.find((row) => row.subscriptionId === donorSubscriptionId);
+  if (!donor) {
+    throw new Error(`The selected donor subscription '${donorSubscriptionId}' was not found for the requested quota scope.`);
+  }
+
+  const donorMovable = Number(donor.suggestedMovable || 0);
+  if (donorMovable <= 0) {
+    throw new Error('The selected donor has no movable quota for the chosen region and quota family.');
+  }
+
+  const requestedTransferAmount = Number(filters.transferAmount || donorMovable);
+  if (!Number.isFinite(requestedTransferAmount) || requestedTransferAmount <= 0) {
+    throw new Error('transferAmount must be a positive number of cores to move.');
+  }
+
+  const selectedSku = resolveSelectedSku(filters, null, donor);
+  const scopedSkuList = parseSkuList(donor.skuList || '');
+  const transferAmount = Math.min(donorMovable, Math.round(requestedTransferAmount));
+
+  return {
+    sourceAnalysisRunId: donor.analysisRunId,
+    sourceCapturedAtUtc: donor.capturedAtUtc,
+    managementGroupId: donor.managementGroupId,
+    groupQuotaName: donor.groupQuotaName,
+    donorSubscriptionId: donor.subscriptionId,
+    donorSubscriptionName: donor.subscriptionName,
+    recipientSubscriptionId: null,
+    recipientSubscriptionName: 'Group Quota Pool',
+    requestedSku: selectedSku,
+    requestedTransferAmount,
+    planRowCount: transferAmount > 0 ? 1 : 0,
+    totalPlannedQuota: transferAmount,
+    unresolvedRecipientCount: 0,
+    planRows: transferAmount > 0 ? [{
+      sourceAnalysisRunId: donor.analysisRunId,
+      sourceCapturedAtUtc: donor.capturedAtUtc,
+      managementGroupId: donor.managementGroupId,
+      groupQuotaName: donor.groupQuotaName,
+      region: donor.region,
+      quotaName: donor.quotaName,
+      selectedSku,
+      skuList: scopedSkuList.join(', '),
+      skuCount: scopedSkuList.length,
+      donorSubscriptionId: donor.subscriptionId,
+      donorSubscriptionName: donor.subscriptionName,
+      recipientSubscriptionId: null,
+      recipientSubscriptionName: 'Group Quota Pool',
+      transferAmount,
+      donorAvailableBefore: donor.quotaAvailable,
+      donorRemainingMovable: Math.max(0, donorMovable - transferAmount),
+      ...buildApplyMetadata(donor, transferAmount),
+      recipientAvailableBefore: 0,
+      recipientNeededQuota: transferAmount,
+      recipientRemainingNeed: 0,
+      recipientAvailabilityState: 'GROUP_QUOTA'
+    }] : []
+  };
+}
+
+function buildScopedQuotaMovePlan(snapshotRows, filters = {}) {
+  const donorSubscriptionId = String(filters.donorSubscriptionId || '').trim();
+  const recipientSubscriptionId = String(filters.recipientSubscriptionId || '').trim();
+  const requestedRegion = String(filters.region || '').trim();
+  const requestedQuotaName = String(filters.quotaName || filters.family || '').trim();
+
+  if (!recipientSubscriptionId) {
+    throw new Error('recipientSubscriptionId is required for targeted quota moves. Select a recipient candidate from Quota Discovery first.');
+  }
+
+  if (!requestedRegion || requestedRegion === 'all') {
+    throw new Error('region is required for targeted quota moves. Select a recipient candidate from Quota Discovery first.');
+  }
+
+  if (!requestedQuotaName || requestedQuotaName === 'all') {
+    throw new Error('family is required for targeted quota moves. Select a recipient candidate from Quota Discovery first.');
+  }
+
+  const donor = snapshotRows.find((row) => row.subscriptionId === donorSubscriptionId);
+  if (!donor) {
+    throw new Error(`The selected donor subscription '${donorSubscriptionId}' was not found for the requested recipient scope.`);
+  }
+
+  const recipient = snapshotRows.find((row) => row.subscriptionId === recipientSubscriptionId);
+  if (!recipient) {
+    throw new Error(`The selected recipient subscription '${recipientSubscriptionId}' was not found for the requested scope.`);
+  }
+
+  if (donor.subscriptionId === recipient.subscriptionId) {
+    throw new Error('The donor and recipient subscriptions must be different.');
+  }
+
+  const donorMovable = Number(donor.suggestedMovable || 0);
+  if (donorMovable <= 0) {
+    throw new Error('The selected donor has no movable quota for the chosen region and quota family.');
+  }
+
+  const recipientNeed = getRecipientNeed(recipient);
+  if (recipientNeed <= 0) {
+    throw new Error('The selected recipient does not currently need additional quota in this scope.');
+  }
+
+  const requestedTransferAmount = Number(filters.transferAmount || recipientNeed);
+  if (!Number.isFinite(requestedTransferAmount) || requestedTransferAmount <= 0) {
+    throw new Error('transferAmount must be a positive number of cores to move.');
+  }
+
+  const selectedSku = resolveSelectedSku(filters, recipient, donor);
+  const scopedSkuList = parseSkuList(recipient.skuList || donor.skuList || '');
+  const transferAmount = Math.min(donorMovable, Math.round(requestedTransferAmount));
+  const remainingNeed = Math.max(0, recipientNeed - transferAmount);
+
+  return {
+    sourceAnalysisRunId: recipient.analysisRunId,
+    sourceCapturedAtUtc: recipient.capturedAtUtc,
+    managementGroupId: recipient.managementGroupId,
+    groupQuotaName: recipient.groupQuotaName,
+    donorSubscriptionId: donor.subscriptionId,
+    donorSubscriptionName: donor.subscriptionName,
+    recipientSubscriptionId: recipient.subscriptionId,
+    recipientSubscriptionName: recipient.subscriptionName,
+    requestedSku: selectedSku,
+    requestedTransferAmount,
+    planRowCount: transferAmount > 0 ? 1 : 0,
+    totalPlannedQuota: transferAmount,
+    unresolvedRecipientCount: remainingNeed > 0 ? 1 : 0,
+    planRows: transferAmount > 0 ? [{
+      sourceAnalysisRunId: recipient.analysisRunId,
+      sourceCapturedAtUtc: recipient.capturedAtUtc,
+      managementGroupId: recipient.managementGroupId,
+      groupQuotaName: recipient.groupQuotaName,
+      region: recipient.region,
+      quotaName: recipient.quotaName,
+      selectedSku,
+      skuList: scopedSkuList.join(', '),
+      skuCount: scopedSkuList.length,
+      donorSubscriptionId: donor.subscriptionId,
+      donorSubscriptionName: donor.subscriptionName,
+      recipientSubscriptionId: recipient.subscriptionId,
+      recipientSubscriptionName: recipient.subscriptionName,
+      transferAmount,
+      donorAvailableBefore: donor.quotaAvailable,
+      donorRemainingMovable: Math.max(0, donorMovable - transferAmount),
+      ...buildApplyMetadata(donor, transferAmount),
+      recipientAvailableBefore: recipient.quotaAvailable,
+      recipientNeededQuota: recipientNeed,
+      recipientRemainingNeed: remainingNeed,
+      recipientAvailabilityState: recipient.availabilityState
+    }] : []
+  };
+}
+
 async function buildQuotaMovePlan(filters = {}) {
   const snapshotRows = await getQuotaCandidateSnapshots(filters);
   if (!snapshotRows.length) {
     throw new Error('No captured candidate snapshots found for the selected scope. Run Capture History first.');
   }
 
+  if (filters.recipientSubscriptionId) {
+    return buildScopedQuotaMovePlan(snapshotRows, filters);
+  }
+
+  if (filters.donorSubscriptionId && filters.transferAmount && filters.region && filters.family) {
+    return buildDonorScopedQuotaMovePlan(snapshotRows, filters);
+  }
+
+  const donorSubscriptionId = String(filters.donorSubscriptionId || '').trim();
+  if (!donorSubscriptionId) {
+    throw new Error('donorSubscriptionId is required. Select a donor subscription before building a move plan.');
+  }
+
   const sourceAnalysisRunId = snapshotRows[0].analysisRunId;
   const sourceCapturedAtUtc = snapshotRows[0].capturedAtUtc;
   const grouped = new Map();
+
+  const donorSubscription = snapshotRows.find((row) => row.subscriptionId === donorSubscriptionId);
+  if (!donorSubscription) {
+    throw new Error(`The selected donor subscription '${donorSubscriptionId}' was not found in the captured run.`);
+  }
 
   for (const row of snapshotRows) {
     const key = [row.region, row.quotaName].join('|');
@@ -52,7 +275,7 @@ async function buildQuotaMovePlan(filters = {}) {
 
   for (const entries of grouped.values()) {
     const donors = entries
-      .filter((entry) => Number(entry.suggestedMovable || 0) > 0)
+      .filter((entry) => entry.subscriptionId === donorSubscriptionId && Number(entry.suggestedMovable || 0) > 0)
       .map((entry) => ({
         ...entry,
         remainingMovable: Number(entry.suggestedMovable || 0)
@@ -101,6 +324,8 @@ async function buildQuotaMovePlan(filters = {}) {
           groupQuotaName: recipient.groupQuotaName,
           region: recipient.region,
           quotaName: recipient.quotaName,
+          skuList: recipient.skuList || donor.skuList || '',
+          skuCount: Number(recipient.skuCount || donor.skuCount || 0),
           donorSubscriptionId: donor.subscriptionId,
           donorSubscriptionName: donor.subscriptionName,
           recipientSubscriptionId: recipient.subscriptionId,
@@ -108,6 +333,7 @@ async function buildQuotaMovePlan(filters = {}) {
           transferAmount: plannedAmount,
           donorAvailableBefore: donor.quotaAvailable,
           donorRemainingMovable: donor.remainingMovable,
+          ...buildApplyMetadata(donor, plannedAmount),
           recipientAvailableBefore: recipient.quotaAvailable,
           recipientNeededQuota: recipient.neededQuota,
           recipientRemainingNeed: remainingNeed,
@@ -126,6 +352,8 @@ async function buildQuotaMovePlan(filters = {}) {
     sourceCapturedAtUtc,
     managementGroupId: filters.managementGroupId,
     groupQuotaName: filters.groupQuotaName,
+    donorSubscriptionId,
+    donorSubscriptionName: donorSubscription.subscriptionName,
     planRowCount: planRows.length,
     totalPlannedQuota,
     unresolvedRecipientCount,
@@ -158,6 +386,8 @@ async function simulateQuotaMovePlan(filters = {}) {
       subscriptionName: row.subscriptionName,
       region: row.region,
       quotaName: row.quotaName,
+      skuList: row.skuList || '',
+      skuCount: Number(row.skuCount || 0),
       availabilityStateBefore: row.availabilityState,
       quotaAvailableBefore: Number(row.quotaAvailable || 0),
       quotaAvailableAfter: Number(row.quotaAvailable || 0),
@@ -180,6 +410,20 @@ async function simulateQuotaMovePlan(filters = {}) {
       const recipient = impactByKey.get(recipientKey);
       recipient.quotaAvailableAfter += Number(move.transferAmount || 0);
       recipient.delta += Number(move.transferAmount || 0);
+    } else if (!move.recipientSubscriptionId) {
+      impactByKey.set([`group-pool:${move.groupQuotaName}`, move.region, move.quotaName].join('|'), {
+        subscriptionId: '',
+        subscriptionName: `${move.groupQuotaName} (Group Quota Pool)`,
+        region: move.region,
+        quotaName: move.quotaName,
+        skuList: move.skuList || '',
+        skuCount: Number(move.skuCount || 0),
+        availabilityStateBefore: 'GROUP_QUOTA',
+        quotaAvailableBefore: 0,
+        quotaAvailableAfter: Number(move.transferAmount || 0),
+        safetyBuffer: 0,
+        delta: Number(move.transferAmount || 0)
+      });
     }
   }
 

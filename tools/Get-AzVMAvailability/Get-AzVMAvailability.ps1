@@ -1469,6 +1469,46 @@ function Invoke-QuotaApiPagedGet {
     return @($items)
 }
 
+    function Invoke-QuotaGroupApplyFromPlan {
+        param(
+            [Parameter(Mandatory = $true)][string]$PlanFile,
+            [Parameter(Mandatory = $true)][string]$ManagementGroupId,
+            [Parameter(Mandatory = $true)][string]$GroupQuotaName,
+            [Parameter(Mandatory = $true)][string]$ReportPath,
+            [Parameter(Mandatory = $true)][string]$ArmUrl,
+            [Parameter(Mandatory = $true)][string]$ApiVersion,
+            [Parameter(Mandatory = $true)][int]$ApplyMaxChanges,
+            [Parameter(Mandatory = $true)][int]$RetryCount,
+            [Parameter(Mandatory = $true)][bool]$ForceConfirm,
+            [Parameter(Mandatory = $true)][bool]$EmitJson
+        )
+
+        $applyScript = Join-Path $PSScriptRoot 'Apply-QuotaGroupMove.ps1'
+        if (-not (Test-Path -LiteralPath $applyScript -PathType Leaf)) {
+            throw "Quota-group apply script not found: $applyScript"
+        }
+
+        $applyParams = @{
+            PlanFile                     = $PlanFile
+            QuotaGroupManagementGroupName = $ManagementGroupId
+            QuotaGroupName               = $GroupQuotaName
+            QuotaGroupReportPath         = $ReportPath
+            ArmUrl                       = $ArmUrl
+            QuotaApiVersion              = $ApiVersion
+            QuotaGroupApplyMaxChanges    = $ApplyMaxChanges
+            MaxRetries                   = $RetryCount
+        }
+        if ($ForceConfirm) {
+            $applyParams['QuotaGroupForceConfirm'] = $true
+        }
+        if ($EmitJson) {
+            $applyParams['JsonOutput'] = $true
+        }
+
+        Write-Verbose "Delegating quota-group apply to Apply-QuotaGroupMove.ps1"
+        & $applyScript @applyParams
+    }
+
 function Get-QuotaGroupCatalog {
     param(
         [Parameter(Mandatory = $true)][string]$ArmUrl,
@@ -5330,105 +5370,7 @@ if ($QuotaGroupDiscover -or $QuotaGroupPlan -or $QuotaGroupApply) {
             }
 
             if ($QuotaGroupApply) {
-                $readyRows = @($movePlan.Rows | Where-Object { $_.ReadyToApply })
-                if ($readyRows.Count -eq 0) {
-                    Write-Warning "No plan rows are ReadyToApply. Skipping apply."
-                }
-                else {
-                    $rowsToApply = @($readyRows | Select-Object -First $QuotaGroupApplyMaxChanges)
-                    if (-not $QuotaGroupForceConfirm) {
-                        Write-Host "About to apply quota allocation changes for $($rowsToApply.Count) row(s) to group '$selectedGroupQuota' in management group '$selectedMgmtGroup'." -ForegroundColor Yellow
-                        $confirm = Read-Host "Type APPLY to continue"
-                        if ($confirm -ne 'APPLY') {
-                            throw "Quota-group apply canceled by user."
-                        }
-                    }
-
-                    $applyResults = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    $submittedChangeCount = 0
-                    $submittedRequestedCores = [double]0
-                    $grouped = $rowsToApply | Group-Object SubscriptionId, Region
-                    foreach ($g in $grouped) {
-                        $sample = $g.Group[0]
-                        $requestedCores = [double](@($g.Group | Measure-Object -Property SuggestedMovable -Sum).Sum)
-                        $patchBody = @{
-                            properties = @{
-                                value = @(
-                                    $g.Group | ForEach-Object {
-                                        @{
-                                            properties = @{
-                                                resourceName = ([string]$_.QuotaName).ToLowerInvariant()
-                                                limit        = [int64][math]::Round([double]$_.ProposedLimit, 0)
-                                            }
-                                        }
-                                    }
-                                )
-                            }
-                        }
-
-                        $patchUri = "$armUrl/providers/Microsoft.Management/managementGroups/$selectedMgmtGroup/subscriptions/$($sample.SubscriptionId)/providers/Microsoft.Quota/groupQuotas/$selectedGroupQuota/resourceProviders/Microsoft.Compute/quotaAllocations/$($sample.Region)?api-version=$quotaApiVersion"
-
-                        try {
-                            [void](Invoke-WithRetry -ScriptBlock {
-                                    Invoke-QuotaApiRequest -Method PATCH -Uri $patchUri -BearerToken $quotaBearerToken -Body $patchBody
-                                } -MaxRetries $MaxRetries -OperationName "Quota group batch apply ($($sample.SubscriptionId)/$($sample.Region), $(@($g.Group).Count) families)")
-                            $submittedChangeCount += @($g.Group).Count
-                            $submittedRequestedCores += $requestedCores
-                            $applyResults.Add([pscustomobject]@{ SubscriptionId = $sample.SubscriptionId; Region = $sample.Region; QuotaName = '*batch*'; RowsSubmitted = @($g.Group).Count; RequestedCores = $requestedCores; Status = 'Submitted'; Error = '' })
-                        }
-                        catch {
-                            $batchError = $_.Exception.Message
-                            Write-Warning "Quota-group batch apply failed for subscription '$($sample.SubscriptionId)' region '$($sample.Region)'. Retrying each quota family individually. Error: $batchError"
-
-                            $applyResults.Add([pscustomobject]@{ SubscriptionId = $sample.SubscriptionId; Region = $sample.Region; QuotaName = '*batch*'; RowsSubmitted = @($g.Group).Count; RequestedCores = $requestedCores; Status = 'BatchFailed'; Error = $batchError })
-
-                            foreach ($row in $g.Group) {
-                                $singleRequestedCores = [double]$row.SuggestedMovable
-                                $singlePatchBody = @{
-                                    properties = @{
-                                        value = @(
-                                            @{
-                                                properties = @{
-                                                    resourceName = ([string]$row.QuotaName).ToLowerInvariant()
-                                                    limit        = [int64][math]::Round([double]$row.ProposedLimit, 0)
-                                                }
-                                            }
-                                        )
-                                    }
-                                }
-
-                                try {
-                                    [void](Invoke-WithRetry -ScriptBlock {
-                                            Invoke-QuotaApiRequest -Method PATCH -Uri $patchUri -BearerToken $quotaBearerToken -Body $singlePatchBody
-                                        } -MaxRetries $MaxRetries -OperationName "Quota group single apply ($($sample.SubscriptionId)/$($sample.Region)/$([string]$row.QuotaName))")
-                                    $submittedChangeCount += 1
-                                    $submittedRequestedCores += $singleRequestedCores
-                                    $applyResults.Add([pscustomobject]@{ SubscriptionId = $sample.SubscriptionId; Region = $sample.Region; QuotaName = [string]$row.QuotaName; RowsSubmitted = 1; RequestedCores = $singleRequestedCores; Status = 'SubmittedSingle'; Error = '' })
-                                }
-                                catch {
-                                    $applyResults.Add([pscustomobject]@{ SubscriptionId = $sample.SubscriptionId; Region = $sample.Region; QuotaName = [string]$row.QuotaName; RowsSubmitted = 1; RequestedCores = $singleRequestedCores; Status = 'FailedSingle'; Error = $_.Exception.Message })
-                                }
-                            }
-                        }
-                    }
-
-                    $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-                    $applyFile = Join-Path $QuotaGroupReportPath "AzVMAvailability-QuotaGroupApply-$timestamp.csv"
-                    $applyResults | Export-Csv -Path $applyFile -NoTypeInformation -Encoding UTF8
-                    Write-Host "Quota-group apply report: $applyFile" -ForegroundColor Green
-
-                    $failureCount = @($applyResults | Where-Object { $_.Status -in @('BatchFailed', 'FailedSingle') }).Count
-                    if ($submittedChangeCount -gt 0) {
-                        Write-Host ("Quota-group apply summary: submitted {0} change(s), requested move of {1} core(s) to group '{2}'." -f $submittedChangeCount, ([int64][math]::Round($submittedRequestedCores, 0)), $selectedGroupQuota) -ForegroundColor Green
-                    }
-                    else {
-                        Write-Warning ("Quota-group apply summary: no quota changes were submitted for group '{0}'." -f $selectedGroupQuota)
-                    }
-
-                    if ($failureCount -gt 0) {
-                        Write-Warning ("Quota-group apply summary: {0} submission batch(es) failed. See apply report for details." -f $failureCount)
-                    }
-                }
+                Invoke-QuotaGroupApplyFromPlan -PlanFile $movePlan.Path -ManagementGroupId $selectedMgmtGroup -GroupQuotaName $selectedGroupQuota -ReportPath $QuotaGroupReportPath -ArmUrl $armUrl -ApiVersion $quotaApiVersion -ApplyMaxChanges $QuotaGroupApplyMaxChanges -RetryCount $MaxRetries -ForceConfirm $QuotaGroupForceConfirm.IsPresent -EmitJson $JsonOutput.IsPresent
             }
         }
     }

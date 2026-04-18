@@ -45,9 +45,9 @@ This dashboard should call backend APIs only. Do not expose ARM credentials, sub
 ## Controlled Write APIs
 
 - `POST /api/quota/apply`
-  - Requires approval policy and write identity
-  - Body: approved plan rows
-  - Returns operation id
+  - Body: managementGroupId, groupQuotaName, analysisRunId, donorSubscriptionId, recipientSubscriptionId, selectedSku, transferAmount, region, family
+  - Rebuilds the selected move plan on the server, generates an apply-ready quota-group CSV, and invokes the dedicated `Apply-QuotaGroupMove.ps1` entry point
+  - Returns the updated plan summary plus: applyPlanFile, applyReportFile, submittedChangeCount, submittedRequestedCores, failureCount, and applyResults
 
 - `GET /api/quota/requests/{requestId}`
   - Returns async request state from Microsoft.Quota request endpoints

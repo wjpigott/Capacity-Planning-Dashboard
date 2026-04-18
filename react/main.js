@@ -101,6 +101,30 @@ async function fetchJson(url, options) {
   return payload;
 }
 
+function delay(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function waitForQuotaApplyJob(jobId, options) {
+  const timeoutMs = Number(options && options.timeoutMs) > 0 ? Number(options.timeoutMs) : 10 * 60 * 1000;
+  const pollIntervalMs = Number(options && options.pollIntervalMs) > 0 ? Number(options.pollIntervalMs) : 3000;
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const payload = await fetchJson(`/api/quota/apply/jobs/${encodeURIComponent(jobId)}`);
+    if (payload.status === 'completed') {
+      return payload;
+    }
+    if (payload.status === 'failed') {
+      throw new Error(payload.error || 'Quota apply job failed.');
+    }
+
+    await delay(pollIntervalMs);
+  }
+
+  throw new Error('Quota apply did not finish before the client polling timeout elapsed. Check operation history and retry if needed.');
+}
+
 function getFilenameFromDisposition(headerValue, fallbackName) {
   const value = String(headerValue || '');
   const utf8Match = value.match(/filename\*=UTF-8''([^;]+)/i);
@@ -124,6 +148,19 @@ function formatNumber(value) {
 function formatMoney(value, digits = 0) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? `$${numeric.toFixed(digits)}` : 'n/a';
+}
+
+function formatTimestamp(value) {
+  if (!value) return 'Never';
+  const timestamp = new Date(value);
+  return Number.isNaN(timestamp.getTime()) ? 'Never' : timestamp.toLocaleString();
+}
+
+function formatDuration(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return 'n/a';
+  if (numeric < 1000) return `${numeric} ms`;
+  return `${(numeric / 1000).toFixed(1)} s`;
 }
 
 function compareSkuValues(left, right) {
@@ -446,6 +483,39 @@ function Banner({ tone, message }) {
   return <div className={classNames('rx-banner', `rx-banner--${tone || 'info'}`)}>{message}</div>;
 }
 
+function getQuotaRecipientNeed(row) {
+  const quotaAvailable = Number(row?.quotaAvailable || 0);
+  const safetyBuffer = Number(row?.safetyBuffer || 0);
+  const shortfall = Math.max(0, safetyBuffer - quotaAvailable);
+
+  if (shortfall > 0) {
+    return shortfall;
+  }
+
+  if ((row?.availability === 'CONSTRAINED' || row?.availabilityState === 'CONSTRAINED' || row?.availability === 'LIMITED' || row?.availabilityState === 'LIMITED') && quotaAvailable <= 0) {
+    return Math.max(1, Math.min(5, safetyBuffer || 1));
+  }
+
+  return 0;
+}
+
+function normalizeSkuList(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || '').trim()).filter(Boolean);
+  }
+
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function normalizeSearchText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+}
+
 function DataTable({ title, subtitle, columns, rows, emptyMessage, tableClassName, sectionClassName }) {
   return (
     <section className={classNames('rx-panel', 'rx-panel--table', sectionClassName)}>
@@ -464,7 +534,18 @@ function DataTable({ title, subtitle, columns, rows, emptyMessage, tableClassNam
             {rows.length === 0 ? (
               <tr><td className="rx-empty" colSpan={columns.length}>{emptyMessage}</td></tr>
             ) : rows.map((row, index) => (
-              <tr key={row.id || row.analysisRunId || row.groupQuotaName || row.subscriptionId || row.sku || index}>
+              <tr key={[
+                row.id,
+                row.analysisRunId,
+                row.groupQuotaName,
+                row.subscriptionId,
+                row.region,
+                row.family,
+                row.quotaName,
+                row.sku,
+                row.subscriptionName,
+                index
+              ].filter((value) => value !== undefined && value !== null && value !== '').join('|')}>
                 {columns.map((column) => <td key={column.key} className={column.cellClassName}>{column.render ? column.render(row) : (row[column.key] == null ? 'n/a' : row[column.key])}</td>)}
               </tr>
             ))}
@@ -513,6 +594,68 @@ function SubscriptionPicker({ options, selectedIds, search, onSearch, onToggle, 
   );
 }
 
+function AdminIngestionView(props) {
+  const {
+    status,
+    schedule,
+    runtime,
+    selectedRegionPreset,
+    actions,
+    onScheduleChange,
+    busy,
+    viewStatus
+  } = props;
+
+  const summary = status?.lastSummary || {};
+  const regions = Array.isArray(summary.regions) && summary.regions.length ? summary.regions.join(', ') : 'n/a';
+  const families = Array.isArray(summary.familyFilters) && summary.familyFilters.length ? summary.familyFilters.join(', ') : 'n/a';
+  const stateLabel = status?.inProgress ? 'Running' : (status?.lastError ? 'Failed' : (status?.lastSuccessUtc ? 'Healthy' : 'Idle'));
+
+  return (
+    <div className="rx-view-stack">
+      <Banner tone={viewStatus.tone} message={viewStatus.message} />
+      <section className="rx-panel">
+        <div className="rx-panel__header"><div><h2>Capacity Ingestion</h2><p>Trigger ingestion runs and manage the background scheduler used by the dashboard.</p></div></div>
+        <div className="rx-inline-actions">
+          <span className="rx-selected-count">Using region preset: {selectedRegionPreset || 'all'}</span>
+          <button className="rx-button" type="button" onClick={actions.triggerIngest} disabled={busy.trigger || status?.inProgress}>{busy.trigger || status?.inProgress ? 'Ingest Running...' : 'Run Capacity Ingestion'}</button>
+          <button className="rx-button rx-button--secondary" type="button" onClick={actions.refreshStatus} disabled={busy.refreshStatus}>{busy.refreshStatus ? 'Refreshing...' : 'Refresh Status'}</button>
+          <button className="rx-button rx-button--secondary" type="button" onClick={actions.refreshSchedule} disabled={busy.refreshSchedule}>{busy.refreshSchedule ? 'Loading Settings...' : 'Reload Scheduler Settings'}</button>
+        </div>
+      </section>
+      <section className="rx-panel rx-panel--compact rx-panel--muted">
+        <div className="rx-panel__header"><div><h2>Current Status</h2><p>Latest ingestion health and the most recent run summary.</p></div></div>
+        <div className="rx-summary-grid">
+          <article className="rx-metric-card"><span>State</span><strong>{stateLabel}</strong></article>
+          <article className="rx-metric-card"><span>Last Run</span><strong>{formatTimestamp(status?.lastRunUtc)}</strong></article>
+          <article className="rx-metric-card"><span>Last Success</span><strong>{formatTimestamp(status?.lastSuccessUtc)}</strong></article>
+          <article className="rx-metric-card"><span>Duration</span><strong>{formatDuration(status?.lastDurationMs)}</strong></article>
+          <article className="rx-metric-card"><span>Inserted Rows</span><strong>{formatNumber(status?.lastInsertedRows || 0)}</strong></article>
+          <article className="rx-metric-card"><span>Score Rows</span><strong>{formatNumber(summary.insertedScoreRows || 0)}</strong></article>
+          <article className="rx-metric-card"><span>Subscriptions</span><strong>{formatNumber(summary.subscriptionCount || 0)}</strong></article>
+          <article className="rx-metric-card"><span>Regions</span><strong>{regions}</strong></article>
+          <article className="rx-metric-card"><span>Families</span><strong>{families}</strong></article>
+          <article className="rx-metric-card"><span>Last Error</span><strong>{status?.lastError || 'None'}</strong></article>
+        </div>
+      </section>
+      <section className="rx-panel">
+        <div className="rx-panel__header"><div><h2>Scheduler Settings</h2><p>Persisted settings are stored in SQL and applied to the runtime scheduler when saved.</p></div></div>
+        <div className="rx-field-grid rx-field-grid--filters">
+          <label className="rx-field"><span>Ingest Interval (minutes)</span><input className="rx-input" type="number" min="0" step="1" value={schedule.ingest.intervalMinutes} onChange={(event) => onScheduleChange('ingest', 'intervalMinutes', Number(event.target.value || 0))} /></label>
+          <label className="rx-field"><span>Live Placement Interval (minutes)</span><input className="rx-input" type="number" min="0" step="1" value={schedule.livePlacement.intervalMinutes} onChange={(event) => onScheduleChange('livePlacement', 'intervalMinutes', Number(event.target.value || 0))} /></label>
+          <label className="rx-check"><input type="checkbox" checked={schedule.ingest.runOnStartup} onChange={(event) => onScheduleChange('ingest', 'runOnStartup', event.target.checked)} />Run ingest on startup</label>
+          <label className="rx-check"><input type="checkbox" checked={schedule.livePlacement.runOnStartup} onChange={(event) => onScheduleChange('livePlacement', 'runOnStartup', event.target.checked)} />Run live placement on startup</label>
+        </div>
+        <div className="rx-inline-actions">
+          <span className="rx-selected-count">Runtime ingest interval: {formatNumber(runtime.ingest.intervalMinutes)} min</span>
+          <span className="rx-selected-count">Runtime live placement interval: {formatNumber(runtime.livePlacement.intervalMinutes)} min</span>
+          <button className="rx-button" type="button" onClick={actions.saveSchedule} disabled={busy.saveSchedule}>{busy.saveSchedule ? 'Saving...' : 'Save Scheduler Settings'}</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function QuotaDiscoveryView(props) {
   const {
     managementGroups,
@@ -524,6 +667,9 @@ function QuotaDiscoveryView(props) {
     candidates,
     candidateFilters,
     setCandidateFilters,
+    selectedMoveCandidate,
+    onSelectMoveCandidate,
+    onOpenMovePlanner,
     quotaRuns,
     actions,
     busy,
@@ -531,12 +677,18 @@ function QuotaDiscoveryView(props) {
   } = props;
 
   const filteredCandidates = useMemo(() => {
-    const familyTerm = String(candidateFilters.family || '').trim().toLowerCase();
+    const familyTerm = normalizeSearchText(candidateFilters.family || '');
     return candidates.filter((row) => {
+      const recipientNeed = getQuotaRecipientNeed(row);
+      const movableQuota = Number(row.movableQuota || row.suggestedMovable || 0);
       const bySub = candidateFilters.subscriptionId === 'all' || row.subscriptionId === candidateFilters.subscriptionId;
       const byRegion = candidateFilters.region === 'all' || row.region === candidateFilters.region;
-      const byFamily = !familyTerm || `${row.family || ''} ${row.quotaName || ''}`.toLowerCase().includes(familyTerm);
-      return bySub && byRegion && byFamily;
+      const byIntent = candidateFilters.intent === 'all'
+        || (candidateFilters.intent === 'need' && recipientNeed > 0)
+        || (candidateFilters.intent === 'donor' && movableQuota > 0);
+      const searchableText = normalizeSearchText(`${row.family || ''} ${row.quotaName || ''} ${normalizeSkuList(row.skuList).join(' ')}`);
+      const byFamily = !familyTerm || searchableText.includes(familyTerm);
+      return bySub && byRegion && byIntent && byFamily;
     });
   }, [candidates, candidateFilters]);
 
@@ -550,6 +702,15 @@ function QuotaDiscoveryView(props) {
     return [...map.entries()].map(([subscriptionId, subscriptionName]) => ({ subscriptionId, subscriptionName }));
   }, [candidates]);
   const regionOptions = useMemo(() => [...new Set(candidates.map((candidate) => candidate.region).filter(Boolean))].sort(), [candidates]);
+
+  const formatSkuList = (row) => {
+    const raw = normalizeSkuList(row?.skuList).join(', ');
+    return raw || 'n/a';
+  };
+
+  const selectedCandidateLabel = selectedMoveCandidate
+    ? `${selectedMoveCandidate.subscriptionName} | ${selectedMoveCandidate.region} | ${selectedMoveCandidate.quotaName} | ${selectedMoveCandidate.mode === 'donor' ? 'Donor' : 'Recipient'}`
+    : 'No move target selected';
 
   return (
     <div className="rx-view-stack">
@@ -572,13 +733,112 @@ function QuotaDiscoveryView(props) {
         <div className="rx-field-grid rx-field-grid--filters">
           <label className="rx-field"><span>Subscription</span><select value={candidateFilters.subscriptionId} onChange={(event) => setCandidateFilters({ ...candidateFilters, subscriptionId: event.target.value })}><option value="all">All Subscriptions</option>{subscriptionOptions.map((option) => <option key={option.subscriptionId} value={option.subscriptionId}>{option.subscriptionName} ({option.subscriptionId})</option>)}</select></label>
           <label className="rx-field"><span>Region</span><select value={candidateFilters.region} onChange={(event) => setCandidateFilters({ ...candidateFilters, region: event.target.value })}><option value="all">All Regions</option>{regionOptions.map((region) => <option key={region} value={region}>{region}</option>)}</select></label>
+          <label className="rx-field"><span>Intent</span><select value={candidateFilters.intent} onChange={(event) => setCandidateFilters({ ...candidateFilters, intent: event.target.value })}><option value="all">All rows</option><option value="donor">Can donate</option><option value="need">Needs quota</option></select></label>
           <label className="rx-field rx-field--wide"><span>SKU / Family</span><input className="rx-input" value={candidateFilters.family} onChange={(event) => setCandidateFilters({ ...candidateFilters, family: event.target.value })} placeholder="Search family or quota name" /></label>
-          <button className="rx-button rx-button--secondary" type="button" onClick={() => setCandidateFilters({ subscriptionId: 'all', region: 'all', family: '' })}>Clear</button>
+          <button className="rx-button rx-button--secondary" type="button" onClick={() => setCandidateFilters({ subscriptionId: 'all', region: 'all', family: '', intent: 'all' })}>Clear</button>
+        </div>
+        <div className="rx-inline-actions">
+          <span className="rx-selected-count">Filtered candidates: {formatNumber(filteredCandidates.length)}</span>
+          <span className="rx-selected-count">Move target: {selectedCandidateLabel}</span>
+          <button className="rx-button rx-button--secondary" type="button" onClick={onOpenMovePlanner} disabled={!selectedMoveCandidate}>Open Move Planner</button>
         </div>
       </section>
       <DataTable title="Discovered Quota Groups" columns={[{ key: 'managementGroupId', label: 'Management Group' }, { key: 'groupQuotaName', label: 'Quota Group' }, { key: 'displayName', label: 'Display Name' }, { key: 'groupType', label: 'Group Type' }, { key: 'provisioningState', label: 'Provisioning State' }, { key: 'subscriptionCount', label: 'Subscriptions', render: (row) => formatNumber(row.subscriptionCount) }]} rows={quotaGroups} emptyMessage="No quota groups discovered yet." />
-      <DataTable title="Quota Candidates" columns={[{ key: 'subscriptionName', label: 'Subscription', render: (row) => row.subscriptionName || row.subscriptionId || 'n/a' }, { key: 'region', label: 'Region' }, { key: 'family', label: 'Family' }, { key: 'availability', label: 'Availability', render: (row) => <StatusPill value={row.availability} /> }, { key: 'quotaCurrent', label: 'Current', render: (row) => formatNumber(row.quotaCurrent) }, { key: 'quotaLimit', label: 'Limit', render: (row) => formatNumber(row.quotaLimit) }, { key: 'quotaAvailable', label: 'Available', render: (row) => formatNumber(row.quotaAvailable) }, { key: 'movableQuota', label: 'Movable', render: (row) => formatNumber(row.movableQuota || row.suggestedMovable) }, { key: 'status', label: 'Status', render: (row) => <StatusPill value={row.status} /> }]} rows={filteredCandidates} emptyMessage="Generate candidates to populate this table." />
-      <DataTable title="Captured Runs" columns={[{ key: 'analysisRunId', label: 'Run ID' }, { key: 'capturedAtUtc', label: 'Captured At' }, { key: 'candidateCount', label: 'Rows', render: (row) => formatNumber(row.candidateCount) }]} rows={quotaRuns} emptyMessage="No captured runs yet." />
+      <DataTable title="Quota Candidates" subtitle="Use the first column to pick a donor or recipient row for quota movement." columns={[{ key: 'moveAction', label: 'Select', render: (row) => { const recipientNeed = getQuotaRecipientNeed(row); const movableQuota = Number(row.movableQuota || row.suggestedMovable || 0); const disabled = recipientNeed <= 0 && movableQuota <= 0; const isSelected = selectedMoveCandidate && selectedMoveCandidate.subscriptionId === row.subscriptionId && selectedMoveCandidate.region === row.region && selectedMoveCandidate.quotaName === (row.family || row.quotaName); const buttonLabel = disabled ? 'No Action' : (isSelected ? 'Selected' : (movableQuota > 0 ? 'Pick Donor' : 'Pick Need')); return <button className="rx-button rx-button--secondary" type="button" disabled={disabled} onClick={() => onSelectMoveCandidate(row)}>{buttonLabel}</button>; } }, { key: 'subscriptionName', label: 'Subscription', render: (row) => row.subscriptionName || row.subscriptionId || 'n/a' }, { key: 'region', label: 'Region' }, { key: 'family', label: 'Family' }, { key: 'skuList', label: 'SKUs', render: (row) => formatSkuList(row) }, { key: 'skuCount', label: 'SKU Count', render: (row) => formatNumber(row.skuCount || 0) }, { key: 'availability', label: 'Availability', render: (row) => <StatusPill value={row.availability} /> }, { key: 'quotaCurrent', label: 'Current', render: (row) => formatNumber(row.quotaCurrent) }, { key: 'quotaLimit', label: 'Limit', render: (row) => formatNumber(row.quotaLimit) }, { key: 'quotaAvailable', label: 'Available', render: (row) => formatNumber(row.quotaAvailable) }, { key: 'recipientNeed', label: 'Need', render: (row) => formatNumber(getQuotaRecipientNeed(row)) }, { key: 'movableQuota', label: 'Movable', render: (row) => formatNumber(row.movableQuota || row.suggestedMovable) }, { key: 'status', label: 'Status', render: (row) => <StatusPill value={row.status || row.candidateStatus} /> }]} rows={filteredCandidates} emptyMessage="Generate candidates to populate this table." />
+      <DataTable title="Captured Runs" columns={[{ key: 'analysisRunId', label: 'Run ID' }, { key: 'capturedAtUtc', label: 'Captured At' }, { key: 'rowCount', label: 'Rows', render: (row) => formatNumber(row.rowCount || row.candidateCount || 0) }, { key: 'subscriptionCount', label: 'Subscriptions', render: (row) => formatNumber(row.subscriptionCount || 0) }, { key: 'movableCandidateCount', label: 'Movable Rows', render: (row) => formatNumber(row.movableCandidateCount || 0) }]} rows={quotaRuns} emptyMessage="No captured runs yet." />
+    </div>
+  );
+}
+
+function QuotaMovementView(props) {
+  const {
+    selectedManagementGroup,
+    selectedQuotaGroup,
+    quotaRuns,
+    selectedAnalysisRunId,
+    donorOptions,
+    selectedDonorSubscriptionId,
+    selectedMoveCandidate,
+    onSelectedSkuChange,
+    requestedTransferAmount,
+    onRequestedTransferAmountChange,
+    onAnalysisRunChange,
+    onDonorSubscriptionChange,
+    planRows,
+    impactRows,
+    applyResults,
+    summary,
+    actions,
+    busy,
+    status
+  } = props;
+
+  const selectedRun = useMemo(() => quotaRuns.find((run) => run.analysisRunId === selectedAnalysisRunId) || null, [quotaRuns, selectedAnalysisRunId]);
+  const formatSkuList = (row) => String(row?.skuList || '').trim() || 'n/a';
+  const selectedSkuOptions = useMemo(() => normalizeSkuList(selectedMoveCandidate?.skuList || []), [selectedMoveCandidate]);
+  const moveTargetNeed = getQuotaRecipientNeed(selectedMoveCandidate);
+  const moveBasisValue = selectedMoveCandidate?.mode === 'donor'
+    ? Number(selectedMoveCandidate?.movableQuota || 0)
+    : moveTargetNeed;
+  const effectiveDonorSubscriptionId = selectedMoveCandidate?.mode === 'donor'
+    ? selectedMoveCandidate?.donorSubscriptionId
+    : selectedDonorSubscriptionId;
+  const movePlannerReady = Boolean(selectedMoveCandidate && selectedAnalysisRunId && effectiveDonorSubscriptionId && selectedQuotaGroup !== 'all' && Number(requestedTransferAmount || 0) > 0);
+  const needsRunSelection = !selectedAnalysisRunId;
+  const needsPlanBuild = Boolean(selectedAnalysisRunId && movePlannerReady && !planRows.length);
+  const canSimulate = Boolean(movePlannerReady && planRows.length);
+  const canApply = Boolean(movePlannerReady && planRows.length && impactRows.length);
+  const step3Active = Boolean((busy.simulate || canSimulate) && !canApply && !busy.apply);
+  const step4Active = Boolean(busy.apply || canApply || applyResults.length);
+  const donorHelpText = !selectedMoveCandidate
+    ? 'Pick a recipient in Quota Discovery first.'
+    : selectedMoveCandidate.mode === 'donor'
+      ? 'This move is scoped from the selected donor row into the group quota pool.'
+    : (donorOptions.length > 0
+      ? `${formatNumber(donorOptions.length)} donor subscription(s) available for this region and quota family.`
+      : 'No donor subscriptions found for the selected region and quota family in the current candidate set.');
+
+  return (
+    <div className="rx-view-stack">
+      <Banner tone={status.tone} message={status.message} />
+      <section className="rx-panel">
+        <div className="rx-panel__header"><div><h2>Quota Move Planner</h2><p>Build and simulate candidate moves from previously captured quota snapshots.</p></div></div>
+        <div className="rx-field-grid">
+          <label className="rx-field"><span>Management Group</span><input className="rx-input" value={selectedManagementGroup || 'No management group selected'} readOnly /></label>
+          <label className="rx-field"><span>Quota Group</span><input className="rx-input" value={selectedQuotaGroup === 'all' ? 'Select a quota group in Quota Discovery' : selectedQuotaGroup} readOnly /></label>
+          <label className="rx-field rx-field--wide"><span>Captured Run</span><select value={selectedAnalysisRunId} onChange={(event) => onAnalysisRunChange(event.target.value)} disabled={!quotaRuns.length}><option value="">Select captured run</option>{quotaRuns.map((run) => <option key={run.analysisRunId} value={run.analysisRunId}>{run.capturedAtUtc || run.analysisRunId} ({formatNumber(run.rowCount || run.candidateCount || 0)} rows)</option>)}</select></label>
+          <label className="rx-field rx-field--wide"><span>Selected Scope</span><input className="rx-input" value={selectedMoveCandidate ? `${selectedMoveCandidate.subscriptionName} | ${selectedMoveCandidate.region} | ${selectedMoveCandidate.quotaName} | ${selectedMoveCandidate.mode === 'donor' ? 'Donor' : 'Recipient'}` : 'Pick a quota row in Quota Discovery'} readOnly /></label>
+          <label className="rx-field"><span>{selectedMoveCandidate?.mode === 'donor' ? 'Movable Quota' : 'Recipient Need'}</span><input className="rx-input" value={selectedMoveCandidate ? formatNumber(moveBasisValue) : '0'} readOnly /></label>
+          <label className="rx-field"><span>SKU In Scope</span><select value={selectedMoveCandidate?.selectedSku || ''} onChange={(event) => onSelectedSkuChange(event.target.value)} disabled={!selectedMoveCandidate || !selectedSkuOptions.length}><option value="">Any SKU in family</option>{selectedSkuOptions.map((sku) => <option key={sku} value={sku}>{sku}</option>)}</select></label>
+          <label className="rx-field"><span>Cores To Move</span><input className="rx-input" type="number" min="1" step="1" value={requestedTransferAmount} onChange={(event) => onRequestedTransferAmountChange(event.target.value)} disabled={!selectedMoveCandidate} /></label>
+          <label className="rx-field rx-field--wide"><span>Donor Subscription</span><select value={effectiveDonorSubscriptionId || ''} onChange={(event) => onDonorSubscriptionChange(event.target.value)} disabled={selectedMoveCandidate?.mode === 'donor' || !donorOptions.length}><option value="">Select donor subscription</option>{donorOptions.map((option) => <option key={option.subscriptionId} value={option.subscriptionId}>{option.subscriptionName} ({formatNumber(option.suggestedMovable)} movable)</option>)}</select></label>
+        </div>
+        <div className="rx-inline-actions">
+          <button className={classNames('rx-button', needsRunSelection ? '' : 'rx-button--secondary')} type="button" onClick={actions.refreshRuns} disabled={busy.refreshRuns || selectedQuotaGroup === 'all'}>{busy.refreshRuns ? 'Loading Runs...' : 'Step 1: Load Captured Runs'}</button>
+          <button className={classNames('rx-button', needsPlanBuild ? '' : 'rx-button--secondary')} type="button" onClick={actions.buildPlan} disabled={busy.plan || !movePlannerReady}>{busy.plan ? 'Building Plan...' : 'Step 2: Build Move Plan'}</button>
+          <button className={classNames('rx-button', step3Active ? '' : 'rx-button--secondary')} type="button" onClick={actions.simulatePlan} disabled={busy.simulate || !movePlannerReady || !planRows.length}>{busy.simulate ? 'Simulating...' : 'Step 3: Simulate Impact'}</button>
+          <button className={classNames('rx-button', step4Active ? '' : 'rx-button--secondary')} type="button" onClick={actions.applyPlan} disabled={busy.apply || !canApply}>{busy.apply ? 'Applying...' : 'Step 4: Apply Move'}</button>
+          {selectedRun ? <span className="rx-selected-count">Selected run captured {selectedRun.capturedAtUtc || 'n/a'}</span> : null}
+          {selectedMoveCandidate?.selectedSku ? <span className="rx-selected-count">Scoped SKU: {selectedMoveCandidate.selectedSku}</span> : <span className="rx-selected-count">Scoped SKU: Any in quota family</span>}
+          <span className="rx-selected-count">{donorHelpText}</span>
+        </div>
+      </section>
+      <DataTable title="Planned Quota Moves" columns={[{ key: 'region', label: 'Region' }, { key: 'quotaName', label: 'Quota Family' }, { key: 'selectedSku', label: 'Selected SKU', render: (row) => row.selectedSku || 'n/a' }, { key: 'skuList', label: 'SKUs In Scope', render: (row) => formatSkuList(row) }, { key: 'donorSubscriptionName', label: 'Donor' }, { key: 'recipientSubscriptionName', label: 'Recipient' }, { key: 'transferAmount', label: 'Transfer', render: (row) => formatNumber(row.transferAmount) }, { key: 'donorAvailableBefore', label: 'Donor Before', render: (row) => formatNumber(row.donorAvailableBefore) }, { key: 'donorRemainingMovable', label: 'Donor Left', render: (row) => formatNumber(row.donorRemainingMovable) }, { key: 'recipientNeededQuota', label: 'Recipient Need', render: (row) => formatNumber(row.recipientNeededQuota) }, { key: 'recipientRemainingNeed', label: 'Need Left', render: (row) => formatNumber(row.recipientRemainingNeed) }, { key: 'recipientAvailabilityState', label: 'Recipient State', render: (row) => <StatusPill value={row.recipientAvailabilityState} /> }]} rows={planRows} emptyMessage="Pick a recipient in Quota Discovery, then build a scoped move plan here." />
+      <DataTable title="Simulation Impact" columns={[{ key: 'role', label: 'Role' }, { key: 'subscriptionName', label: 'Subscription' }, { key: 'region', label: 'Region' }, { key: 'quotaName', label: 'Quota Family' }, { key: 'skuList', label: 'SKUs In Scope', render: (row) => formatSkuList(row) }, { key: 'delta', label: 'Delta', render: (row) => formatNumber(row.delta) }, { key: 'quotaAvailableBefore', label: 'Before', render: (row) => formatNumber(row.quotaAvailableBefore) }, { key: 'quotaAvailableAfter', label: 'After', render: (row) => formatNumber(row.quotaAvailableAfter) }, { key: 'gapBefore', label: 'Gap Before', render: (row) => formatNumber(row.gapBefore) }, { key: 'gapAfter', label: 'Gap After', render: (row) => formatNumber(row.gapAfter) }, { key: 'projectedState', label: 'Projected', render: (row) => <StatusPill value={row.projectedState} /> }]} rows={impactRows} emptyMessage="Run simulation after building a plan to see recipient and donor impacts." />
+      <DataTable title="Apply Results" columns={[{ key: 'subscriptionId', label: 'Subscription Id' }, { key: 'region', label: 'Region' }, { key: 'quotaName', label: 'Quota Family' }, { key: 'rowsSubmitted', label: 'Rows', render: (row) => formatNumber(row.rowsSubmitted) }, { key: 'requestedCores', label: 'Requested Cores', render: (row) => formatNumber(row.requestedCores) }, { key: 'status', label: 'Status', render: (row) => <StatusPill value={row.status} /> }, { key: 'error', label: 'Error' }]} rows={applyResults} emptyMessage="Apply results will appear here after Step 4 completes." />
+      <section className="rx-panel rx-panel--compact rx-panel--muted">
+        <div className="rx-panel__header"><div><h2>Plan Summary</h2><p>High-level movement totals from the selected captured run.</p></div></div>
+        <div className="rx-summary-grid">
+          <article className="rx-metric-card"><span>Planned Moves</span><strong>{formatNumber(summary.planRowCount || 0)}</strong></article>
+          <article className="rx-metric-card"><span>Total Planned Quota</span><strong>{formatNumber(summary.totalPlannedQuota || 0)}</strong></article>
+          <article className="rx-metric-card"><span>Unresolved Recipients</span><strong>{formatNumber(summary.unresolvedRecipientCount || 0)}</strong></article>
+          <article className="rx-metric-card"><span>Resolved Recipients</span><strong>{formatNumber(summary.recipientResolvedCount || 0)}</strong></article>
+          <article className="rx-metric-card"><span>At-Risk Donors</span><strong>{formatNumber(summary.atRiskDonorCount || 0)}</strong></article>
+          <article className="rx-metric-card"><span>Impacted Rows</span><strong>{formatNumber(summary.impactedRowCount || 0)}</strong></article>
+          <article className="rx-metric-card"><span>Submitted Changes</span><strong>{formatNumber(summary.submittedChangeCount || 0)}</strong></article>
+          <article className="rx-metric-card"><span>Apply Failures</span><strong>{formatNumber(summary.failureCount || 0)}</strong></article>
+        </div>
+      </section>
     </div>
   );
 }
@@ -600,7 +860,8 @@ function App() {
   const [capacityScores, setCapacityScores] = useState({ rows: [], pagination: { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false }, subscriptionSummary: [] });
   const [exportBusyFormat, setExportBusyFormat] = useState('');
   const [recommendState, setRecommendState] = useState({ targetSku: '', autoTargetSku: '', regions: '', autoRegions: '', topN: 10, minScore: 50, showPricing: true, showSpot: false, result: null, status: { tone: 'info', message: 'Run the recommender to populate alternatives.' }, busy: false });
-  const [quotaState, setQuotaState] = useState({ managementGroups: [], selectedManagementGroup: '', quotaGroups: [], selectedQuotaGroup: 'all', candidates: [], quotaRuns: [], candidateFilters: { subscriptionId: 'all', region: 'all', family: '' }, status: { tone: 'info', message: 'Quota tools ready.' }, busy: { discover: false, generate: false, capture: false, refresh: false } });
+  const [adminState, setAdminState] = useState({ status: null, schedule: { ingest: { intervalMinutes: 0, runOnStartup: false }, livePlacement: { intervalMinutes: 0, runOnStartup: false } }, runtime: { ingest: { intervalMinutes: 0, runOnStartup: false }, livePlacement: { intervalMinutes: 0, runOnStartup: false } }, statusMessage: { tone: 'info', message: 'Data ingestion tools ready.' }, busy: { refreshStatus: false, trigger: false, refreshSchedule: false, saveSchedule: false } });
+  const [quotaState, setQuotaState] = useState({ managementGroups: [], selectedManagementGroup: '', quotaGroups: [], selectedQuotaGroup: 'all', candidates: [], quotaRuns: [], selectedAnalysisRunId: '', selectedDonorSubscriptionId: '', selectedMoveCandidate: null, requestedTransferAmount: 0, planRows: [], impactRows: [], applyResults: [], planSummary: {}, candidateFilters: { subscriptionId: 'all', region: 'all', family: '', intent: 'all' }, status: { tone: 'info', message: 'Quota tools ready.' }, busy: { discover: false, generate: false, capture: false, refresh: false, refreshRuns: false, plan: false, simulate: false, apply: false } });
 
   const queryFilters = useMemo(() => ({
     regionPreset: filters.regionPreset,
@@ -759,13 +1020,79 @@ function App() {
       if (!auth?.canAccessAdmin || !quotaState.selectedManagementGroup) return;
       try {
         const payload = await fetchJson(`/api/quota/groups?managementGroupId=${encodeURIComponent(quotaState.selectedManagementGroup)}`);
-        setQuotaState((current) => ({ ...current, quotaGroups: Array.isArray(payload.groups) ? payload.groups : [] }));
+        setQuotaState((current) => ({ ...current, quotaGroups: Array.isArray(payload.groups) ? payload.groups : [], selectedQuotaGroup: 'all', selectedAnalysisRunId: '', selectedDonorSubscriptionId: '', planRows: [], impactRows: [], applyResults: [], planSummary: {} }));
       } catch (error) {
         setQuotaState((current) => ({ ...current, quotaGroups: [], selectedQuotaGroup: 'all', status: { tone: 'error', message: error.message || 'Failed to load quota groups.' } }));
       }
     }
     loadQuotaGroups();
   }, [auth, quotaState.selectedManagementGroup]);
+
+  useEffect(() => {
+    if (!auth?.canAccessAdmin || activeView !== 'admin') {
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    async function loadAdminIngestion() {
+      setAdminState((current) => ({ ...current, busy: { ...current.busy, refreshStatus: true, refreshSchedule: true } }));
+      try {
+        const [statusPayload, schedulePayload] = await Promise.all([
+          fetchJson('/api/admin/ingest/status'),
+          fetchJson('/api/admin/ingest/schedule')
+        ]);
+        if (cancelled) {
+          return;
+        }
+        setAdminState((current) => ({
+          ...current,
+          status: statusPayload.status || null,
+          schedule: schedulePayload.settings || current.schedule,
+          runtime: schedulePayload.runtime || current.runtime,
+          busy: { ...current.busy, refreshStatus: false, refreshSchedule: false },
+          statusMessage: { tone: 'success', message: 'Loaded ingestion status and scheduler settings.' }
+        }));
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        setAdminState((current) => ({ ...current, busy: { ...current.busy, refreshStatus: false, refreshSchedule: false }, statusMessage: { tone: 'error', message: error.message || 'Failed to load ingestion tools.' } }));
+      }
+    }
+
+    loadAdminIngestion();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeView, auth]);
+
+  useEffect(() => {
+    if (!auth?.canAccessAdmin || activeView !== 'admin' || !adminState.status?.inProgress) {
+      return undefined;
+    }
+
+    const handle = window.setInterval(async () => {
+      try {
+        const payload = await fetchJson('/api/admin/ingest/status');
+        setAdminState((current) => ({
+          ...current,
+          status: payload.status || null,
+          statusMessage: payload.status?.inProgress
+            ? { tone: 'info', message: 'Capacity ingestion is running.' }
+            : (payload.status?.lastError
+              ? { tone: 'error', message: `Last ingestion failed: ${payload.status.lastError}` }
+              : { tone: 'success', message: 'Capacity ingestion completed.' })
+        }));
+      } catch (error) {
+        setAdminState((current) => ({ ...current, statusMessage: { tone: 'error', message: error.message || 'Failed to refresh ingestion status.' } }));
+      }
+    }, 5000);
+
+    return () => {
+      window.clearInterval(handle);
+    };
+  }, [activeView, adminState.status, auth]);
 
   function updateFilter(name, value) {
     setFilters((current) => {
@@ -844,6 +1171,54 @@ function App() {
     }
   }
 
+  const adminActions = {
+    refreshStatus: async () => {
+      if (!auth?.canAccessAdmin) return;
+      setAdminState((current) => ({ ...current, busy: { ...current.busy, refreshStatus: true } }));
+      try {
+        const payload = await fetchJson('/api/admin/ingest/status');
+        setAdminState((current) => ({
+          ...current,
+          status: payload.status || null,
+          busy: { ...current.busy, refreshStatus: false },
+          statusMessage: { tone: 'success', message: payload.status?.inProgress ? 'Capacity ingestion is running.' : 'Ingestion status refreshed.' }
+        }));
+      } catch (error) {
+        setAdminState((current) => ({ ...current, busy: { ...current.busy, refreshStatus: false }, statusMessage: { tone: 'error', message: error.message || 'Failed to refresh ingestion status.' } }));
+      }
+    },
+    triggerIngest: async () => {
+      if (!auth?.canAccessAdmin) return;
+      setAdminState((current) => ({ ...current, busy: { ...current.busy, trigger: true }, statusMessage: { tone: 'info', message: 'Starting capacity ingestion...' } }));
+      try {
+        const payload = await fetchJson('/api/admin/ingest/capacity', { method: 'POST', body: JSON.stringify({ regionPreset: filters.regionPreset === 'all' || filters.regionPreset === 'custom' ? undefined : filters.regionPreset }) });
+        setAdminState((current) => ({ ...current, status: payload.status || current.status, busy: { ...current.busy, trigger: false }, statusMessage: { tone: 'success', message: payload.status?.inProgress ? 'Capacity ingestion started.' : 'Capacity ingestion completed.' } }));
+      } catch (error) {
+        setAdminState((current) => ({ ...current, busy: { ...current.busy, trigger: false }, statusMessage: { tone: 'error', message: error.message || 'Failed to start capacity ingestion.' } }));
+      }
+    },
+    refreshSchedule: async () => {
+      if (!auth?.canAccessAdmin) return;
+      setAdminState((current) => ({ ...current, busy: { ...current.busy, refreshSchedule: true } }));
+      try {
+        const payload = await fetchJson('/api/admin/ingest/schedule');
+        setAdminState((current) => ({ ...current, schedule: payload.settings || current.schedule, runtime: payload.runtime || current.runtime, busy: { ...current.busy, refreshSchedule: false }, statusMessage: { tone: 'success', message: 'Scheduler settings reloaded.' } }));
+      } catch (error) {
+        setAdminState((current) => ({ ...current, busy: { ...current.busy, refreshSchedule: false }, statusMessage: { tone: 'error', message: error.message || 'Failed to load scheduler settings.' } }));
+      }
+    },
+    saveSchedule: async () => {
+      if (!auth?.canAccessAdmin) return;
+      setAdminState((current) => ({ ...current, busy: { ...current.busy, saveSchedule: true }, statusMessage: { tone: 'info', message: 'Saving scheduler settings...' } }));
+      try {
+        const payload = await fetchJson('/api/admin/ingest/schedule', { method: 'PUT', body: JSON.stringify(adminState.schedule) });
+        setAdminState((current) => ({ ...current, schedule: payload.settings || current.schedule, runtime: payload.runtime || current.runtime, busy: { ...current.busy, saveSchedule: false }, statusMessage: { tone: 'success', message: 'Scheduler settings saved and applied.' } }));
+      } catch (error) {
+        setAdminState((current) => ({ ...current, busy: { ...current.busy, saveSchedule: false }, statusMessage: { tone: 'error', message: error.message || 'Failed to save scheduler settings.' } }));
+      }
+    }
+  };
+
   const quotaActions = {
     discover: async () => {
       if (!auth?.canAccessAdmin) return;
@@ -859,9 +1234,9 @@ function App() {
       if (!auth?.canAccessAdmin) return;
       setQuotaState((current) => ({ ...current, busy: { ...current.busy, generate: true } }));
       try {
-        const query = new URLSearchParams({ managementGroupId: quotaState.selectedManagementGroup, groupQuotaName: quotaState.selectedQuotaGroup, regionPreset: filters.regionPreset, region: 'all', family: 'all', subscriptionIds: '' });
+        const query = new URLSearchParams({ managementGroupId: quotaState.selectedManagementGroup, groupQuotaName: quotaState.selectedQuotaGroup, region: 'all', family: 'all', subscriptionIds: '' });
         const payload = await fetchJson(`/api/quota/candidates?${query.toString()}`);
-        setQuotaState((current) => ({ ...current, candidates: Array.isArray(payload.candidates) ? payload.candidates : [], busy: { ...current.busy, generate: false }, status: { tone: 'success', message: `Generated ${payload.candidateCount || 0} candidate row(s).` } }));
+        setQuotaState((current) => ({ ...current, candidates: Array.isArray(payload.candidates) ? payload.candidates : [], selectedDonorSubscriptionId: '', selectedMoveCandidate: null, requestedTransferAmount: 0, applyResults: [], busy: { ...current.busy, generate: false }, status: { tone: 'success', message: `Generated ${payload.candidateCount || 0} candidate row(s). Filter to a movable or needed row and send it to the move planner.` } }));
       } catch (error) {
         setQuotaState((current) => ({ ...current, busy: { ...current.busy, generate: false }, status: { tone: 'error', message: error.message || 'Failed to generate quota candidates.' } }));
       }
@@ -870,7 +1245,7 @@ function App() {
       if (!auth?.canAccessAdmin) return;
       setQuotaState((current) => ({ ...current, busy: { ...current.busy, capture: true } }));
       try {
-        const payload = await fetchJson('/api/quota/candidates/capture', { method: 'POST', body: JSON.stringify({ managementGroupId: quotaState.selectedManagementGroup, groupQuotaName: quotaState.selectedQuotaGroup, regionPreset: filters.regionPreset, region: 'all', family: 'all' }) });
+        const payload = await fetchJson('/api/quota/candidates/capture', { method: 'POST', body: JSON.stringify({ managementGroupId: quotaState.selectedManagementGroup, groupQuotaName: quotaState.selectedQuotaGroup, region: 'all', family: 'all' }) });
         const runsPayload = await fetchJson(`/api/quota/candidate-runs?${new URLSearchParams({ managementGroupId: quotaState.selectedManagementGroup, groupQuotaName: quotaState.selectedQuotaGroup, region: 'all', family: 'all', subscriptionIds: '' }).toString()}`);
         setQuotaState((current) => ({ ...current, quotaRuns: Array.isArray(runsPayload.runs) ? runsPayload.runs : [], busy: { ...current.busy, capture: false }, status: { tone: 'success', message: `Captured history for run ${payload.analysisRunId || 'n/a'}.` } }));
       } catch (error) {
@@ -891,6 +1266,48 @@ function App() {
       } catch (error) {
         setQuotaState((current) => ({ ...current, busy: { ...current.busy, refresh: false }, status: { tone: 'error', message: error.message || 'Failed to refresh quota analytics.' } }));
       }
+    },
+    refreshRuns: async () => {
+      if (!auth?.canAccessAdmin || quotaState.selectedQuotaGroup === 'all') return;
+      setQuotaState((current) => ({ ...current, busy: { ...current.busy, refreshRuns: true } }));
+      try {
+        const runsPayload = await fetchJson(`/api/quota/candidate-runs?${new URLSearchParams({ managementGroupId: quotaState.selectedManagementGroup, groupQuotaName: quotaState.selectedQuotaGroup, region: 'all', family: 'all', subscriptionIds: '' }).toString()}`);
+        const runs = Array.isArray(runsPayload.runs) ? runsPayload.runs : [];
+        setQuotaState((current) => ({ ...current, quotaRuns: runs, selectedAnalysisRunId: current.selectedAnalysisRunId || (runs[0] ? runs[0].analysisRunId : ''), selectedDonorSubscriptionId: '', busy: { ...current.busy, refreshRuns: false }, status: { tone: 'success', message: `Loaded ${runs.length} captured run(s).` } }));
+      } catch (error) {
+        setQuotaState((current) => ({ ...current, busy: { ...current.busy, refreshRuns: false }, status: { tone: 'error', message: error.message || 'Failed to load captured runs.' } }));
+      }
+    },
+    buildPlan: async () => {
+      if (!auth?.canAccessAdmin || !quotaState.selectedAnalysisRunId || quotaState.selectedQuotaGroup === 'all' || !quotaState.selectedMoveCandidate) return;
+      setQuotaState((current) => ({ ...current, busy: { ...current.busy, plan: true }, impactRows: [], applyResults: [] }));
+      try {
+        const payload = await fetchJson(`/api/quota/plan?${new URLSearchParams({ managementGroupId: quotaState.selectedManagementGroup, groupQuotaName: quotaState.selectedQuotaGroup, analysisRunId: quotaState.selectedAnalysisRunId, donorSubscriptionId: quotaState.selectedMoveCandidate.mode === 'donor' ? quotaState.selectedMoveCandidate.donorSubscriptionId : quotaState.selectedDonorSubscriptionId, recipientSubscriptionId: quotaState.selectedMoveCandidate.mode === 'recipient' ? quotaState.selectedMoveCandidate.recipientSubscriptionId : '', selectedSku: quotaState.selectedMoveCandidate.selectedSku || '', transferAmount: String(quotaState.requestedTransferAmount || 0), region: quotaState.selectedMoveCandidate.region, family: quotaState.selectedMoveCandidate.quotaName }).toString()}`);
+        setQuotaState((current) => ({ ...current, planRows: Array.isArray(payload.planRows) ? payload.planRows : [], applyResults: [], planSummary: payload || {}, busy: { ...current.busy, plan: false }, status: { tone: 'success', message: `Built ${payload.planRowCount || 0} move-plan row(s).` } }));
+      } catch (error) {
+        setQuotaState((current) => ({ ...current, busy: { ...current.busy, plan: false }, status: { tone: 'error', message: error.message || 'Failed to build quota move plan.' } }));
+      }
+    },
+    simulatePlan: async () => {
+      if (!auth?.canAccessAdmin || !quotaState.selectedAnalysisRunId || quotaState.selectedQuotaGroup === 'all' || !quotaState.selectedMoveCandidate) return;
+      setQuotaState((current) => ({ ...current, busy: { ...current.busy, simulate: true } }));
+      try {
+        const payload = await fetchJson('/api/quota/simulate', { method: 'POST', body: JSON.stringify({ managementGroupId: quotaState.selectedManagementGroup, groupQuotaName: quotaState.selectedQuotaGroup, analysisRunId: quotaState.selectedAnalysisRunId, donorSubscriptionId: quotaState.selectedMoveCandidate.mode === 'donor' ? quotaState.selectedMoveCandidate.donorSubscriptionId : quotaState.selectedDonorSubscriptionId, recipientSubscriptionId: quotaState.selectedMoveCandidate.mode === 'recipient' ? quotaState.selectedMoveCandidate.recipientSubscriptionId : '', selectedSku: quotaState.selectedMoveCandidate.selectedSku || '', transferAmount: quotaState.requestedTransferAmount || 0, region: quotaState.selectedMoveCandidate.region, family: quotaState.selectedMoveCandidate.quotaName }) });
+        setQuotaState((current) => ({ ...current, planRows: Array.isArray(payload.planRows) ? payload.planRows : current.planRows, impactRows: Array.isArray(payload.impactRows) ? payload.impactRows : [], applyResults: [], planSummary: payload || {}, busy: { ...current.busy, simulate: false }, status: { tone: 'success', message: `Simulation completed for ${payload.impactedRowCount || 0} impacted row(s).` } }));
+      } catch (error) {
+        setQuotaState((current) => ({ ...current, busy: { ...current.busy, simulate: false }, status: { tone: 'error', message: error.message || 'Failed to simulate quota move plan.' } }));
+      }
+    },
+    applyPlan: async () => {
+      if (!auth?.canAccessAdmin || !quotaState.selectedAnalysisRunId || quotaState.selectedQuotaGroup === 'all' || !quotaState.selectedMoveCandidate || !quotaState.planRows.length) return;
+      setQuotaState((current) => ({ ...current, busy: { ...current.busy, apply: true }, status: { tone: 'info', message: 'Quota apply queued. Waiting for backend execution...' } }));
+      try {
+        const queuedPayload = await fetchJson('/api/quota/apply', { method: 'POST', body: JSON.stringify({ managementGroupId: quotaState.selectedManagementGroup, groupQuotaName: quotaState.selectedQuotaGroup, analysisRunId: quotaState.selectedAnalysisRunId, donorSubscriptionId: quotaState.selectedMoveCandidate.mode === 'donor' ? quotaState.selectedMoveCandidate.donorSubscriptionId : quotaState.selectedDonorSubscriptionId, recipientSubscriptionId: quotaState.selectedMoveCandidate.mode === 'recipient' ? quotaState.selectedMoveCandidate.recipientSubscriptionId : '', selectedSku: quotaState.selectedMoveCandidate.selectedSku || '', transferAmount: quotaState.requestedTransferAmount || 0, region: quotaState.selectedMoveCandidate.region, family: quotaState.selectedMoveCandidate.quotaName, maxChanges: quotaState.planRows.length, async: true }) });
+        const payload = queuedPayload.jobId ? await waitForQuotaApplyJob(queuedPayload.jobId) : queuedPayload;
+        setQuotaState((current) => ({ ...current, planRows: Array.isArray(payload.planRows) ? payload.planRows : current.planRows, applyResults: Array.isArray(payload.applyResults) ? payload.applyResults : [], planSummary: payload || {}, busy: { ...current.busy, apply: false }, status: { tone: payload.failureCount > 0 ? 'warning' : 'success', message: payload.failureCount > 0 ? `Apply completed with ${payload.failureCount} failed submission(s). Review Apply Results.` : `Applied ${payload.submittedChangeCount || 0} quota change(s).` } }));
+      } catch (error) {
+        setQuotaState((current) => ({ ...current, busy: { ...current.busy, apply: false }, status: { tone: 'error', message: error.message || 'Failed to apply quota move plan.' } }));
+      }
     }
   };
 
@@ -898,6 +1315,68 @@ function App() {
     const term = String(subscriptionSearch || '').trim().toLowerCase();
     return subscriptionOptions.filter((option) => !term || String(option.subscriptionName || '').toLowerCase().includes(term) || String(option.subscriptionId || '').toLowerCase().includes(term));
   }, [subscriptionOptions, subscriptionSearch]);
+
+  const donorOptions = useMemo(() => {
+    const donorMap = new Map();
+
+    quotaState.candidates
+      .filter((candidate) => {
+        if (Number(candidate.suggestedMovable || candidate.movableQuota || 0) <= 0) {
+          return false;
+        }
+
+        if (!quotaState.selectedMoveCandidate) {
+          return true;
+        }
+
+        if (candidate.subscriptionId === quotaState.selectedMoveCandidate.recipientSubscriptionId) {
+          return false;
+        }
+
+        if (candidate.region !== quotaState.selectedMoveCandidate.region || candidate.family !== quotaState.selectedMoveCandidate.quotaName) {
+          return false;
+        }
+
+        return true;
+      })
+      .forEach((candidate) => {
+        const movable = Number(candidate.suggestedMovable || candidate.movableQuota || 0);
+        const existing = donorMap.get(candidate.subscriptionId);
+        if (existing) {
+          existing.suggestedMovable += movable;
+          return;
+        }
+
+        donorMap.set(candidate.subscriptionId, {
+          subscriptionId: candidate.subscriptionId,
+          subscriptionName: candidate.subscriptionName || candidate.subscriptionId,
+          suggestedMovable: movable
+        });
+      });
+
+    return [...donorMap.values()].sort((left, right) => right.suggestedMovable - left.suggestedMovable || left.subscriptionName.localeCompare(right.subscriptionName));
+  }, [quotaState.candidates, quotaState.selectedMoveCandidate]);
+
+  useEffect(() => {
+    if (quotaState.selectedMoveCandidate?.mode === 'donor') {
+      if (quotaState.selectedDonorSubscriptionId !== quotaState.selectedMoveCandidate.donorSubscriptionId) {
+        setQuotaState((current) => ({ ...current, selectedDonorSubscriptionId: current.selectedMoveCandidate?.donorSubscriptionId || '' }));
+      }
+      return;
+    }
+
+    if (!donorOptions.length) {
+      if (quotaState.selectedDonorSubscriptionId) {
+        setQuotaState((current) => ({ ...current, selectedDonorSubscriptionId: '' }));
+      }
+      return;
+    }
+
+    const selectedStillValid = donorOptions.some((option) => option.subscriptionId === quotaState.selectedDonorSubscriptionId);
+    if (!selectedStillValid) {
+      setQuotaState((current) => ({ ...current, selectedDonorSubscriptionId: donorOptions[0].subscriptionId }));
+    }
+  }, [donorOptions, quotaState.selectedDonorSubscriptionId]);
 
   if (!authResolved) {
     return (
@@ -951,13 +1430,13 @@ function App() {
       return <DataTable key="trend" title="Trend History" subtitle="Recent trend rows based on the current reporting filter scope." columns={[{ key: 'day', label: 'Day' }, { key: 'totalRows', label: 'Total Rows', render: (row) => formatNumber(row.totalRows) }, { key: 'constrainedRows', label: 'Constrained Rows', render: (row) => formatNumber(row.constrainedRows) }, { key: 'totalQuotaAvailable', label: 'Total Quota Available', render: (row) => formatNumber(row.totalQuotaAvailable) }]} rows={trendRows} emptyMessage="No trend history rows available." />;
     }
     if (activeView === 'quota-discovery') {
-      return <QuotaDiscoveryView managementGroups={quotaState.managementGroups} selectedManagementGroup={quotaState.selectedManagementGroup} onManagementGroupChange={(value) => setQuotaState({ ...quotaState, selectedManagementGroup: value })} quotaGroups={quotaState.quotaGroups} selectedQuotaGroup={quotaState.selectedQuotaGroup} onQuotaGroupChange={(value) => setQuotaState({ ...quotaState, selectedQuotaGroup: value })} candidates={quotaState.candidates} candidateFilters={quotaState.candidateFilters} setCandidateFilters={(value) => setQuotaState({ ...quotaState, candidateFilters: value })} quotaRuns={quotaState.quotaRuns} actions={quotaActions} busy={quotaState.busy} status={quotaState.status} />;
+      return <QuotaDiscoveryView managementGroups={quotaState.managementGroups} selectedManagementGroup={quotaState.selectedManagementGroup} onManagementGroupChange={(value) => setQuotaState({ ...quotaState, selectedManagementGroup: value })} quotaGroups={quotaState.quotaGroups} selectedQuotaGroup={quotaState.selectedQuotaGroup} onQuotaGroupChange={(value) => setQuotaState({ ...quotaState, selectedQuotaGroup: value, selectedAnalysisRunId: '', selectedDonorSubscriptionId: '', selectedMoveCandidate: null, requestedTransferAmount: 0, planRows: [], impactRows: [], applyResults: [], planSummary: {} })} candidates={quotaState.candidates} candidateFilters={quotaState.candidateFilters} setCandidateFilters={(value) => setQuotaState({ ...quotaState, candidateFilters: value })} selectedMoveCandidate={quotaState.selectedMoveCandidate} onSelectMoveCandidate={(row) => { const skuOptions = normalizeSkuList(row.skuList); const recipientNeed = getQuotaRecipientNeed(row); const movableQuota = Number(row.movableQuota || row.suggestedMovable || 0); const mode = movableQuota > 0 ? 'donor' : 'recipient'; const requestedTransferAmount = mode === 'donor' ? movableQuota : recipientNeed; setQuotaState((current) => ({ ...current, selectedMoveCandidate: { subscriptionId: row.subscriptionId, subscriptionName: row.subscriptionName || row.subscriptionId, donorSubscriptionId: mode === 'donor' ? row.subscriptionId : '', recipientSubscriptionId: mode === 'recipient' ? row.subscriptionId : '', recipientSubscriptionName: row.subscriptionName || row.subscriptionId, region: row.region, quotaName: row.family || row.quotaName, skuList: skuOptions, selectedSku: '', quotaAvailable: row.quotaAvailable, safetyBuffer: row.safetyBuffer, availability: row.availability, movableQuota, mode }, selectedDonorSubscriptionId: mode === 'donor' ? row.subscriptionId : '', requestedTransferAmount, planRows: [], impactRows: [], applyResults: [], planSummary: {}, status: { tone: 'success', message: `Selected ${row.subscriptionName || row.subscriptionId} as a ${mode} quota row. Continue in Quota Movement.` } })); setActiveView('quota-movement'); }} onOpenMovePlanner={() => setActiveView('quota-movement')} quotaRuns={quotaState.quotaRuns} actions={quotaActions} busy={quotaState.busy} status={quotaState.status} />;
     }
     if (activeView === 'admin') {
-      return <section className="rx-panel"><div className="rx-panel__header"><div><h2>Data Ingestion</h2><p>This React v2 surface preserves admin gating. The ingestion workflow can be moved here next once the quota/reporting UX stabilizes.</p></div></div><div className="rx-placeholder">Current React focus is on reporting and quota workflows. The classic admin page remains available in the legacy UI.</div></section>;
+      return <AdminIngestionView status={adminState.status} schedule={adminState.schedule} runtime={adminState.runtime} selectedRegionPreset={filters.regionPreset} actions={adminActions} onScheduleChange={(scope, field, value) => setAdminState((current) => ({ ...current, schedule: { ...current.schedule, [scope]: { ...current.schedule[scope], [field]: value } } }))} busy={adminState.busy} viewStatus={adminState.statusMessage} />;
     }
     if (activeView === 'quota-movement') {
-      return <section className="rx-panel"><div className="rx-panel__header"><div><h2>Quota Movements</h2><p>This page is reserved for the move-plan and simulation workflow in React.</p></div></div><div className="rx-placeholder">Next step: port plan build, run selection, and simulation into React with staged confirmations.</div></section>;
+      return <QuotaMovementView selectedManagementGroup={quotaState.selectedManagementGroup} selectedQuotaGroup={quotaState.selectedQuotaGroup} quotaRuns={quotaState.quotaRuns} selectedAnalysisRunId={quotaState.selectedAnalysisRunId} donorOptions={donorOptions} selectedDonorSubscriptionId={quotaState.selectedDonorSubscriptionId} selectedMoveCandidate={quotaState.selectedMoveCandidate} onSelectedSkuChange={(value) => setQuotaState({ ...quotaState, selectedMoveCandidate: quotaState.selectedMoveCandidate ? { ...quotaState.selectedMoveCandidate, selectedSku: value } : null, selectedDonorSubscriptionId: '', planRows: [], impactRows: [], applyResults: [], planSummary: {} })} requestedTransferAmount={quotaState.requestedTransferAmount} onRequestedTransferAmountChange={(value) => setQuotaState({ ...quotaState, requestedTransferAmount: Math.max(0, Number(value || 0)), planRows: [], impactRows: [], applyResults: [], planSummary: {} })} onAnalysisRunChange={(value) => setQuotaState({ ...quotaState, selectedAnalysisRunId: value, selectedDonorSubscriptionId: '', planRows: [], impactRows: [], applyResults: [], planSummary: {} })} onDonorSubscriptionChange={(value) => setQuotaState({ ...quotaState, selectedDonorSubscriptionId: value, planRows: [], impactRows: [], applyResults: [], planSummary: {} })} planRows={quotaState.planRows} impactRows={quotaState.impactRows} applyResults={quotaState.applyResults} summary={quotaState.planSummary} actions={quotaActions} busy={quotaState.busy} status={quotaState.status} />;
     }
     return <section className="rx-panel"><div className="rx-placeholder">View not implemented yet.</div></section>;
   })();

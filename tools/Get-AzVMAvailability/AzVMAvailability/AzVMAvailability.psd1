@@ -20,6 +20,10 @@
         'Get-PlacementScores'
         'Get-ValidAzureRegions'
         'Invoke-WithRetry'
+        'Get-QuotaApiBearerToken'
+        'Invoke-QuotaApiRequest'
+        'Import-QuotaGroupMovePlan'
+        'Invoke-QuotaGroupMoveApply'
         # SKU analysis
         'Get-CapValue'
         'Get-SkuFamily'

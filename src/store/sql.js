@@ -451,6 +451,8 @@ async function ensureQuotaCandidateSnapshotSchema(pool) {
         subscriptionName NVARCHAR(256) NOT NULL,
         region NVARCHAR(64) NOT NULL,
         quotaName NVARCHAR(128) NOT NULL,
+        skuList NVARCHAR(MAX) NULL,
+        skuCount INT NOT NULL DEFAULT 0,
         availabilityState NVARCHAR(32) NOT NULL,
         quotaCurrent INT NOT NULL,
         quotaLimit INT NOT NULL,
@@ -470,6 +472,8 @@ async function ensureQuotaCandidateSnapshotSchema(pool) {
     "IF COL_LENGTH('dbo.QuotaCandidateSnapshot', 'groupQuotaName') IS NULL ALTER TABLE dbo.QuotaCandidateSnapshot ADD groupQuotaName NVARCHAR(128) NULL;",
     "IF COL_LENGTH('dbo.QuotaCandidateSnapshot', 'subscriptionId') IS NULL ALTER TABLE dbo.QuotaCandidateSnapshot ADD subscriptionId NVARCHAR(64) NULL;",
     "IF COL_LENGTH('dbo.QuotaCandidateSnapshot', 'subscriptionName') IS NULL ALTER TABLE dbo.QuotaCandidateSnapshot ADD subscriptionName NVARCHAR(256) NULL;",
+    "IF COL_LENGTH('dbo.QuotaCandidateSnapshot', 'skuList') IS NULL ALTER TABLE dbo.QuotaCandidateSnapshot ADD skuList NVARCHAR(MAX) NULL;",
+    "IF COL_LENGTH('dbo.QuotaCandidateSnapshot', 'skuCount') IS NULL ALTER TABLE dbo.QuotaCandidateSnapshot ADD skuCount INT NULL;",
     "IF COL_LENGTH('dbo.QuotaCandidateSnapshot', 'availabilityState') IS NULL ALTER TABLE dbo.QuotaCandidateSnapshot ADD availabilityState NVARCHAR(32) NULL;",
     "IF COL_LENGTH('dbo.QuotaCandidateSnapshot', 'quotaCurrent') IS NULL ALTER TABLE dbo.QuotaCandidateSnapshot ADD quotaCurrent INT NULL;",
     "IF COL_LENGTH('dbo.QuotaCandidateSnapshot', 'quotaLimit') IS NULL ALTER TABLE dbo.QuotaCandidateSnapshot ADD quotaLimit INT NULL;",
@@ -484,6 +488,7 @@ async function ensureQuotaCandidateSnapshotSchema(pool) {
       groupQuotaName = ISNULL(groupQuotaName, 'legacy-quota-group'),
       subscriptionId = ISNULL(subscriptionId, subscriptionHash),
       subscriptionName = ISNULL(subscriptionName, subscriptionHash),
+      skuCount = ISNULL(skuCount, 0),
       availabilityState = ISNULL(availabilityState, 'Unknown'),
       quotaCurrent = ISNULL(quotaCurrent, 0),
       quotaLimit = ISNULL(quotaLimit, 0),
@@ -493,6 +498,7 @@ async function ensureQuotaCandidateSnapshotSchema(pool) {
        OR groupQuotaName IS NULL
        OR subscriptionId IS NULL
        OR subscriptionName IS NULL
+      OR skuCount IS NULL
        OR availabilityState IS NULL
        OR quotaCurrent IS NULL
        OR quotaLimit IS NULL
@@ -533,6 +539,8 @@ async function insertQuotaCandidateSnapshots(rows) {
       request.input('subscriptionName', sql.NVarChar(256), row.subscriptionName || 'Subscription');
       request.input('region', sql.NVarChar(64), row.region);
       request.input('quotaName', sql.NVarChar(128), row.quotaName);
+      request.input('skuList', sql.NVarChar(sql.MAX), row.skuList || null);
+      request.input('skuCount', sql.Int, row.skuCount ?? 0);
       request.input('availabilityState', sql.NVarChar(32), row.availabilityState || 'Unknown');
       request.input('quotaCurrent', sql.Int, row.quotaCurrent ?? 0);
       request.input('quotaLimit', sql.Int, row.quotaLimit ?? 0);
@@ -544,9 +552,9 @@ async function insertQuotaCandidateSnapshots(rows) {
 
       await request.query(`
         INSERT INTO dbo.QuotaCandidateSnapshot
-        (analysisRunId, capturedAtUtc, sourceCapturedAtUtc, managementGroupId, groupQuotaName, subscriptionId, subscriptionName, region, quotaName, availabilityState, quotaCurrent, quotaLimit, quotaAvailable, suggestedMovable, safetyBuffer, subscriptionHash, candidateStatus)
+        (analysisRunId, capturedAtUtc, sourceCapturedAtUtc, managementGroupId, groupQuotaName, subscriptionId, subscriptionName, region, quotaName, skuList, skuCount, availabilityState, quotaCurrent, quotaLimit, quotaAvailable, suggestedMovable, safetyBuffer, subscriptionHash, candidateStatus)
         VALUES
-        (@analysisRunId, @capturedAtUtc, @sourceCapturedAtUtc, @managementGroupId, @groupQuotaName, @subscriptionId, @subscriptionName, @region, @quotaName, @availabilityState, @quotaCurrent, @quotaLimit, @quotaAvailable, @suggestedMovable, @safetyBuffer, @subscriptionHash, @candidateStatus)
+        (@analysisRunId, @capturedAtUtc, @sourceCapturedAtUtc, @managementGroupId, @groupQuotaName, @subscriptionId, @subscriptionName, @region, @quotaName, @skuList, @skuCount, @availabilityState, @quotaCurrent, @quotaLimit, @quotaAvailable, @suggestedMovable, @safetyBuffer, @subscriptionHash, @candidateStatus)
       `);
     }
 
@@ -611,6 +619,8 @@ async function getQuotaCandidateSnapshots(filters = {}) {
       qcs.subscriptionName,
       qcs.region,
       qcs.quotaName,
+      qcs.skuList,
+      qcs.skuCount,
       qcs.availabilityState,
       qcs.quotaCurrent,
       qcs.quotaLimit,
@@ -662,9 +672,9 @@ async function listQuotaCandidateRuns(filters = {}) {
       analysisRunId,
       capturedAtUtc,
       MAX(sourceCapturedAtUtc) AS latestSourceCapturedAtUtc,
-      COUNT(*) AS rowCount,
-      COUNT(DISTINCT subscriptionId) AS subscriptionCount,
-      SUM(CASE WHEN suggestedMovable > 0 THEN 1 ELSE 0 END) AS movableCandidateCount
+        COUNT(*) AS [rowCount],
+        COUNT(DISTINCT subscriptionId) AS [subscriptionCount],
+        SUM(CASE WHEN suggestedMovable > 0 THEN 1 ELSE 0 END) AS [movableCandidateCount]
     FROM dbo.QuotaCandidateSnapshot
     WHERE managementGroupId = @managementGroupId
       AND groupQuotaName = @groupQuotaName

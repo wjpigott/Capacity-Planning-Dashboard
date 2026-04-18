@@ -10,6 +10,7 @@ param(
     [Parameter(Mandatory = $true)][string]$SqlEntraAdminObjectId,
     [Parameter(Mandatory = $false)][string]$WorkerSharedSecret,
     [Parameter(Mandatory = $false)][string[]]$WebReaderSubscriptionIds = @(),
+    [Parameter(Mandatory = $false)][string[]]$WebQuotaWriterSubscriptionIds = @(),
     [Parameter(Mandatory = $false)][string[]]$WorkerRbacSubscriptionIds = @(),
     [Parameter(Mandatory = $false)][bool]$AssignWorkerComputeRecommendationsRole = $true,
     [Parameter(Mandatory = $false)][bool]$AssignWorkerCostManagementReaderRole = $true,
@@ -86,11 +87,13 @@ if (-not [string]::IsNullOrWhiteSpace($AdminGroupId)) {
     $deploymentArgs += @('--parameters', "adminGroupId=$AdminGroupId")
 }
 
-if ($WorkerRbacSubscriptionIds.Count -gt 0 -or $WebReaderSubscriptionIds.Count -gt 0) {
+if ($WorkerRbacSubscriptionIds.Count -gt 0 -or $WebReaderSubscriptionIds.Count -gt 0 -or $WebQuotaWriterSubscriptionIds.Count -gt 0) {
     if ($resolvedParameterFile -and [System.IO.Path]::GetExtension($resolvedParameterFile).Equals('.bicepparam', [System.StringComparison]::OrdinalIgnoreCase)) {
         $temporaryParameterFile = Join-Path (Split-Path -Path $resolvedParameterFile -Parent) ("capdash-rbac-{0}.bicepparam" -f ([guid]::NewGuid().ToString('N')))
         $webSubscriptionParamLines = $WebReaderSubscriptionIds | ForEach-Object { "  '$_'" }
         $webSubscriptionParamBlock = "[" + [Environment]::NewLine + ($webSubscriptionParamLines -join ([Environment]::NewLine)) + [Environment]::NewLine + "]"
+        $webQuotaWriterSubscriptionParamLines = $WebQuotaWriterSubscriptionIds | ForEach-Object { "  '$_'" }
+        $webQuotaWriterSubscriptionParamBlock = "[" + [Environment]::NewLine + ($webQuotaWriterSubscriptionParamLines -join ([Environment]::NewLine)) + [Environment]::NewLine + "]"
         $workerSubscriptionParamLines = $WorkerRbacSubscriptionIds | ForEach-Object { "  '$_'" }
         $workerSubscriptionParamBlock = "[" + [Environment]::NewLine + ($workerSubscriptionParamLines -join ([Environment]::NewLine)) + [Environment]::NewLine + "]"
         $assignWorkerComputeRecommendationsRoleBicep = $AssignWorkerComputeRecommendationsRole.ToString().ToLowerInvariant()
@@ -100,6 +103,7 @@ if ($WorkerRbacSubscriptionIds.Count -gt 0 -or $WebReaderSubscriptionIds.Count -
             (Get-Content -Path $resolvedParameterFile -Raw),
             '',
             "param webReaderSubscriptionIds = $webSubscriptionParamBlock",
+            "param webQuotaWriterSubscriptionIds = $webQuotaWriterSubscriptionParamBlock",
             "param workerSubscriptionRbacSubscriptionIds = $workerSubscriptionParamBlock",
             "param assignWorkerComputeRecommendationsRole = $assignWorkerComputeRecommendationsRoleBicep",
             "param assignWorkerCostManagementReaderRole = $assignWorkerCostManagementReaderRoleBicep",
@@ -116,6 +120,9 @@ if ($WorkerRbacSubscriptionIds.Count -gt 0 -or $WebReaderSubscriptionIds.Count -
             parameters = @{
                 webReaderSubscriptionIds = @{
                     value = $WebReaderSubscriptionIds
+                }
+                webQuotaWriterSubscriptionIds = @{
+                    value = $WebQuotaWriterSubscriptionIds
                 }
                 workerSubscriptionRbacSubscriptionIds = @{
                     value = $WorkerRbacSubscriptionIds
@@ -142,7 +149,7 @@ if ($resolvedParameterFile) {
     $deploymentArgs += @('--parameters', $parameterFileArgument)
 }
 
-if (($WorkerRbacSubscriptionIds.Count -gt 0 -or $WebReaderSubscriptionIds.Count -gt 0) -and $temporaryParameterFile -and [System.IO.Path]::GetExtension($temporaryParameterFile).Equals('.json', [System.StringComparison]::OrdinalIgnoreCase)) {
+if (($WorkerRbacSubscriptionIds.Count -gt 0 -or $WebReaderSubscriptionIds.Count -gt 0 -or $WebQuotaWriterSubscriptionIds.Count -gt 0) -and $temporaryParameterFile -and [System.IO.Path]::GetExtension($temporaryParameterFile).Equals('.json', [System.StringComparison]::OrdinalIgnoreCase)) {
     $deploymentArgs += @('--parameters', ('@' + $temporaryParameterFile))
 }
 

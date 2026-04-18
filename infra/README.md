@@ -21,6 +21,7 @@ This template provisions a native Azure baseline for the dashboard solution.
 - SQL admin password is a secure deployment parameter.
 - Web App uses managed identity and receives Key Vault Secrets User role on the deployed vault.
 - Web App can optionally receive subscription-level `Reader` assignments during infra deployment to support cross-subscription discovery.
+- Web App can optionally receive subscription-level `GroupQuota Request Operator` assignments during infra deployment by passing `webQuotaWriterSubscriptionIds` for quota apply writes.
 - Function App uses managed identity and receives Key Vault Secrets User role on the deployed vault.
 - Function App host storage should use identity-based `AzureWebJobsStorage` settings with storage data-plane RBAC instead of shared-key auth.
 - Worker Function App runs on its own dedicated App Service plan instead of Flex Consumption.
@@ -29,6 +30,7 @@ This template provisions a native Azure baseline for the dashboard solution.
 - Key Vault defaults to private-access mode (`keyVaultPublicNetworkAccess = 'Disabled'`) and is reachable from App Service/Function App via VNet integration and private endpoint.
 - Live placement and pricing RBAC can now be assigned automatically during infra deployment by passing `workerSubscriptionRbacSubscriptionIds` (and optional role toggles) to apply `Compute Recommendations Role`, `Cost Management Reader`, and `Billing Reader` on those subscriptions.
 - Dashboard subscription discovery RBAC can now be assigned automatically during infra deployment by passing `webReaderSubscriptionIds` to apply `Reader` on those subscriptions.
+- Dashboard quota-apply RBAC can now be assigned automatically during infra deployment by passing `webQuotaWriterSubscriptionIds` to apply `GroupQuota Request Operator` on those subscriptions.
 - Dashboard Entra sign-in can now be configured during infra deployment through app settings (`authEnabled`, `entraTenantId`, `entraClientId`, `entraClientSecret`, `adminGroupId`, and optional `authRedirectUri`).
 - Split read/write identities in later phases (recommended) for least privilege.
 
@@ -59,6 +61,7 @@ This template provisions a native Azure baseline for the dashboard solution.
   -WorkloadSuffix "cap001" \
   -ParameterFile "./infra/test.bicepparam" \
   -WebReaderSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
+  -WebQuotaWriterSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
   -WorkerRbacSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
   -AuthEnabled $true \
   -EntraTenantId "<tenant-id>" \
@@ -78,6 +81,28 @@ az deployment group create \
   --template-file ./infra/main.bicep \
   --parameters ./infra/test.bicepparam \
   --parameters sqlAdminPassword="<secure-password>" sqlEntraAdminLogin="<entra-upn>" sqlEntraAdminObjectId="<entra-object-id>"
+```
+
+## RBAC At Scale
+
+Use `webQuotaWriterSubscriptionIds` in Bicep when you have a small, curated list of participating subscriptions.
+
+For customers with hundreds or thousands of subscriptions, do not maintain a large subscription array in the resource-group deployment. Use `scripts/grant-quota-rbac.ps1` to assign `GroupQuota Request Operator` from a management-group-derived subscription list or from a maintained subscription inventory file.
+
+Recommended pattern for large estates:
+
+1. Assign `GroupQuota Request Operator` at the quota management group.
+2. Enumerate the participating subscriptions from the customer management group or an approved subscription inventory export.
+3. Apply `GroupQuota Request Operator` at each participating subscription scope.
+4. Rerun the bulk assignment script as subscriptions enter or leave the quota-move scope.
+
+Example:
+
+```powershell
+./scripts/grant-quota-rbac.ps1 \
+  -PrincipalObjectId "<web-app-managed-identity-principal-id>" \
+  -ManagementGroupId "Demo-MG" \
+  -AssignManagementGroupRole
 ```
 
 ## Current gaps for blue-green style Bicep deployments

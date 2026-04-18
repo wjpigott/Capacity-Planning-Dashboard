@@ -40,9 +40,9 @@ Status legend:
 | Worker execution host | `[~]` | Azure Functions PowerShell 7 worker runs on a dedicated App Service plan with managed-identity host storage; live placement worker still needs module restore validation |
 | Security and identity | `[x]` | Entra admin + AAD-only SQL auth, managed identity runtime access, no raw subscription IDs stored in snapshots; Entra sign-in and admin group gating are enabled via `ADMIN_GROUP_ID` |
 | Live ingestion pipeline | `[x]` | Internal ingestion endpoint + scheduler; family filtering is optional (omit `INGEST_QUOTA_FAMILY_FILTERS` to ingest all families) + SQL snapshot writes |
-| API and analytics | `[~]` | Capacity API, subscription catalog, family summary, masked subscription summary, and trend APIs complete; quota-group APIs still placeholder |
+| API and analytics | `[~]` | Capacity API, subscription catalog, family summary, masked subscription summary, and trend APIs complete; quota discovery, plan, simulation, and apply APIs are live |
 | UX and dashboard | `[~]` | Capacity grid, filters (region, resource type, SKU family search, availability, subscription), sidebar report navigation, analytics tables, and chart views complete; export/workflow pages still pending |
-| Quota movement orchestration | `[ ]` | Discover/plan/apply backend flow and approvals not implemented yet |
+| Quota movement orchestration | `[~]` | Discover, capture, plan, simulate, and apply flows are live; approval workflow and request tracking still pending |
 | Operations and release | `[~]` | Deployment scripts and migration scripts complete; CI/CD pipeline and runbooks still pending |
 
 ### Detailed checklist
@@ -84,7 +84,7 @@ Status legend:
 - [x] `POST /internal/ingest/capacity`
 - [x] `GET /internal/ingest/status`
 - [x] `GET /api/quota/groups` live implementation
-- [ ] Quota movement plan/apply endpoints
+- [x] Quota movement plan/simulate/apply endpoints
 
 #### UX and dashboard
 
@@ -111,9 +111,14 @@ Status legend:
 #### Quota movement orchestration
 
 - [x] Discover quota groups from live APIs
- - [~] Generate candidate/move plans from analytics data (read-only candidate generation, captured-run selection, move-plan building, and simulation are live; apply orchestration is still pending)
+- [x] Generate candidate/move plans from analytics data (read-only candidate generation, captured-run selection, move-plan building, simulation, and apply are live)
 - [ ] Approval workflow for quota apply actions
 - [ ] Safe apply with change caps, retries, and audit log views
+
+Quota apply execution now runs through the dedicated `tools/Get-AzVMAvailability/Apply-QuotaGroupMove.ps1` entry point.
+`Get-AzVMAvailability.ps1 -QuotaGroupApply` remains available for backward compatibility and delegates to that dedicated script.
+
+Quota move/apply operations require write RBAC in addition to the read access used for discovery. The managed identity used by the dashboard for quota apply must have `GroupQuota Request Operator` on the management group referenced by `QUOTA_MANAGEMENT_GROUP_ID` (for example `Demo-MG`) and on every participating subscription scope used by the move. In practice that means both donor and recipient subscriptions need the role assignment when the quota apply path patches `quotaAllocations`. Without those grants, quota apply requests can authenticate successfully but still fail with `403 Forbidden` on `quotaAllocations` PATCH calls. For large estates, prefer the bulk rollout script at `scripts/grant-quota-rbac.ps1` instead of hand-maintaining long subscription arrays.
 
 #### Operations and release
 
@@ -235,6 +240,8 @@ az webapp config appsettings set \
 ```
 
 The `GET_AZ_VM_AVAILABILITY_ROOT` environment variable tells the recommender wrapper where to find the external `Get-AzVMAvailability` PowerShell repository. Without this setting, the Capacity Recommender will return an error indicating the repository root was not found.
+
+Quota apply uses the vendored `tools/Get-AzVMAvailability` copy that ships with this repo, so it does not depend on a separate external checkout.
 
 ## Infrastructure deployment
 

@@ -59,6 +59,9 @@ param workerSharedSecret string = ''
 @description('Optional subscription IDs where the dashboard web app managed identity should receive Reader access for subscription discovery and read-only ARM queries.')
 param webReaderSubscriptionIds array = []
 
+@description('Optional subscription IDs where the dashboard web app managed identity should receive GroupQuota Request Operator for quota apply writes. Include every subscription that can participate in quota moves.')
+param webQuotaWriterSubscriptionIds array = []
+
 @description('Optional subscription IDs where the worker managed identity should receive subscription-level RBAC roles for live placement and pricing lookups.')
 param workerSubscriptionRbacSubscriptionIds array = []
 
@@ -612,6 +615,14 @@ module workerSubscriptionRbacAssignments './modules/worker-subscription-rbac.bic
 
 module webSubscriptionReaderAssignments './modules/webSubscriptionReader.bicep' = [for targetSubscriptionId in webReaderSubscriptionIds: {
   name: 'web-sub-reader-${uniqueString(targetSubscriptionId, webApp.id)}'
+  scope: subscription(targetSubscriptionId)
+  params: {
+    principalId: webApp.identity.principalId
+  }
+}]
+
+module webSubscriptionQuotaWriterAssignments './modules/webSubscriptionQuotaWriter.bicep' = [for targetSubscriptionId in webQuotaWriterSubscriptionIds: {
+  name: 'web-sub-quota-writer-${uniqueString(targetSubscriptionId, webApp.id)}'
   scope: subscription(targetSubscriptionId)
   params: {
     principalId: webApp.identity.principalId

@@ -104,6 +104,7 @@ Status legend:
 - [x] Ingestion status widget in UI
 - [x] Admin UI setting for scheduled refresh rates (capacity ingestion and live placement refresh stored in SQL)
 - [ ] Admin UI setting for quota discovery scope selection (management group and, if needed, quota group picker/default)
+- [ ] Clean up Quota Workbench button interactions, emphasis, and color treatment so step actions read clearly and consistently
 - [x] Pagination for report grids (prefer server-side paging for large result sets)
 - [ ] Export (CSV/XLSX) actions wired to backend
 - [ ] Separate pricing report (on-demand and spot) with $/Hr and $/Mo columns sourced from Get-AzVMAvailability
@@ -219,8 +220,6 @@ Verification checks after deploy:
 
 - `curl.exe -i -s https://app-capdash-dev-cap001.azurewebsites.net/`
 - `curl.exe -i -s https://app-capdash-dev-cap001.azurewebsites.net/api/auth/me`
-
-For auth-specific outage recovery, runtime drift, and safe restore steps, use [docs/AUTH-RECOVERY-RUNBOOK.md](docs/AUTH-RECOVERY-RUNBOOK.md).
 
 Expected behavior:
 

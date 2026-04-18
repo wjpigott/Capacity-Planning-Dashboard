@@ -37,8 +37,7 @@ const REPORT_VIEWS = [
   { key: 'region-matrix', label: 'Region Matrix', adminOnly: false },
   { key: 'trend', label: 'Trend History', adminOnly: false },
   { key: 'admin', label: 'Data Ingestion', adminOnly: true },
-  { key: 'quota-discovery', label: 'Quota Discovery', adminOnly: true },
-  { key: 'quota-movement', label: 'Quota Movements', adminOnly: true }
+  { key: 'quota-workbench', label: 'Quota Workbench', adminOnly: true }
 ];
 
 const baseRegionPresets = {
@@ -843,6 +842,238 @@ function QuotaMovementView(props) {
   );
 }
 
+function QuotaWorkbenchView(props) {
+  const {
+    managementGroups,
+    selectedManagementGroup,
+    onManagementGroupChange,
+    quotaGroups,
+    selectedQuotaGroup,
+    onQuotaGroupChange,
+    candidates,
+    candidateFilters,
+    setCandidateFilters,
+    selectedMoveCandidate,
+    onSelectMoveCandidate,
+    quotaRuns,
+    selectedAnalysisRunId,
+    donorOptions,
+    selectedDonorSubscriptionId,
+    onSelectedSkuChange,
+    requestedTransferAmount,
+    onRequestedTransferAmountChange,
+    onAnalysisRunChange,
+    onDonorSubscriptionChange,
+    planRows,
+    impactRows,
+    applyResults,
+    summary,
+    actions,
+    busy,
+    status
+  } = props;
+
+  const steps = [
+    { key: 'scope', number: 1, label: 'Scope', description: 'Pick management and quota scope.' },
+    { key: 'discover', number: 2, label: 'Discover', description: 'Generate and filter candidate rows.' },
+    { key: 'plan', number: 3, label: 'Plan', description: 'Choose the move details.' },
+    { key: 'simulate', number: 4, label: 'Simulate', description: 'Build and validate the move.' },
+    { key: 'apply', number: 5, label: 'Apply', description: 'Execute and review results.' }
+  ];
+  const [activeStep, setActiveStep] = useState('scope');
+
+  const filteredCandidates = useMemo(() => {
+    const familyTerm = normalizeSearchText(candidateFilters.family || '');
+    return candidates.filter((row) => {
+      const recipientNeed = getQuotaRecipientNeed(row);
+      const movableQuota = Number(row.movableQuota || row.suggestedMovable || 0);
+      const bySub = candidateFilters.subscriptionId === 'all' || row.subscriptionId === candidateFilters.subscriptionId;
+      const byRegion = candidateFilters.region === 'all' || row.region === candidateFilters.region;
+      const byIntent = candidateFilters.intent === 'all'
+        || (candidateFilters.intent === 'need' && recipientNeed > 0)
+        || (candidateFilters.intent === 'donor' && movableQuota > 0);
+      const searchableText = normalizeSearchText(`${row.family || ''} ${row.quotaName || ''} ${normalizeSkuList(row.skuList).join(' ')}`);
+      const byFamily = !familyTerm || searchableText.includes(familyTerm);
+      return bySub && byRegion && byIntent && byFamily;
+    });
+  }, [candidates, candidateFilters]);
+
+  const subscriptionOptions = useMemo(() => {
+    const map = new Map();
+    candidates.forEach((candidate) => {
+      if (candidate.subscriptionId && !map.has(candidate.subscriptionId)) {
+        map.set(candidate.subscriptionId, candidate.subscriptionName || candidate.subscriptionId);
+      }
+    });
+    return [...map.entries()].map(([subscriptionId, subscriptionName]) => ({ subscriptionId, subscriptionName }));
+  }, [candidates]);
+
+  const regionOptions = useMemo(() => [...new Set(candidates.map((candidate) => candidate.region).filter(Boolean))].sort(), [candidates]);
+  const selectedRun = useMemo(() => quotaRuns.find((run) => run.analysisRunId === selectedAnalysisRunId) || null, [quotaRuns, selectedAnalysisRunId]);
+  const selectedSkuOptions = useMemo(() => normalizeSkuList(selectedMoveCandidate?.skuList || []), [selectedMoveCandidate]);
+  const moveTargetNeed = getQuotaRecipientNeed(selectedMoveCandidate);
+  const moveBasisValue = selectedMoveCandidate?.mode === 'donor'
+    ? Number(selectedMoveCandidate?.movableQuota || 0)
+    : moveTargetNeed;
+  const effectiveDonorSubscriptionId = selectedMoveCandidate?.mode === 'donor'
+    ? selectedMoveCandidate?.donorSubscriptionId
+    : selectedDonorSubscriptionId;
+  const movePlannerReady = Boolean(selectedMoveCandidate && selectedAnalysisRunId && effectiveDonorSubscriptionId && selectedQuotaGroup !== 'all' && Number(requestedTransferAmount || 0) > 0);
+  const formatSkuList = (row) => {
+    const raw = normalizeSkuList(row?.skuList).join(', ');
+    return raw || 'n/a';
+  };
+  const selectedCandidateLabel = selectedMoveCandidate
+    ? `${selectedMoveCandidate.subscriptionName} | ${selectedMoveCandidate.region} | ${selectedMoveCandidate.quotaName} | ${selectedMoveCandidate.mode === 'donor' ? 'Donor' : 'Recipient'}`
+    : 'No quota row selected yet';
+  const donorHelpText = !selectedMoveCandidate
+    ? 'Select a donor or recipient row in Step 2.'
+    : selectedMoveCandidate.mode === 'donor'
+      ? 'This move starts from the selected donor row into the group quota pool.'
+      : (donorOptions.length > 0
+        ? `${formatNumber(donorOptions.length)} donor subscription(s) available for this region and quota family.`
+        : 'No donor subscriptions found for the selected region and quota family in the current candidate set.');
+  const stepStatus = {
+    scope: Boolean(selectedManagementGroup && selectedQuotaGroup !== 'all'),
+    discover: candidates.length > 0,
+    plan: Boolean(selectedMoveCandidate && selectedAnalysisRunId && effectiveDonorSubscriptionId && Number(requestedTransferAmount || 0) > 0),
+    simulate: Boolean(planRows.length > 0 && impactRows.length > 0),
+    apply: Boolean(applyResults.length > 0)
+  };
+  const managementGroupOptions = useMemo(() => {
+    if (Array.isArray(managementGroups) && managementGroups.length > 0) {
+      return managementGroups;
+    }
+
+    if (selectedManagementGroup) {
+      return [{
+        id: selectedManagementGroup,
+        displayName: selectedManagementGroup,
+        tenantId: null
+      }];
+    }
+
+    return [];
+  }, [managementGroups, selectedManagementGroup]);
+
+  useEffect(() => {
+    if (selectedMoveCandidate && activeStep === 'discover') {
+      setActiveStep('plan');
+    }
+  }, [selectedMoveCandidate, activeStep]);
+
+  return (
+    <div className="rx-view-stack">
+      <Banner tone={status.tone} message={status.message} />
+      <section className="rx-panel rx-panel--compact rx-panel--muted">
+        <div className="rx-panel__header"><div><h2>Quota Workbench</h2><p>Discovery, planning, simulation, and execution now run in one admin workspace instead of separate pages.</p></div></div>
+        <div className="rx-stepper" role="tablist" aria-label="Quota workflow steps">
+          {steps.map((step) => (
+            <button
+              key={step.key}
+              className={classNames('rx-step-chip', activeStep === step.key && 'is-active', stepStatus[step.key] && 'is-complete')}
+              type="button"
+              onClick={() => setActiveStep(step.key)}
+            >
+              <span className="rx-step-chip__number">Step {step.number}</span>
+              <strong>{step.label}</strong>
+              <small>{step.description}</small>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className={classNames('rx-panel', 'rx-step-panel', activeStep === 'scope' && 'rx-step-panel--active')}>
+        <div className="rx-panel__header"><div><h2>Step 1: Scope</h2><p>Set the management group and quota group that all later steps will use.</p></div></div>
+        <div className="rx-field-grid">
+          <label className="rx-field"><span>Management Group</span><select value={selectedManagementGroup} onChange={(event) => onManagementGroupChange(event.target.value)}><option value="" disabled>{managementGroupOptions.length ? 'Select management group' : 'No management groups available'}</option>{managementGroupOptions.map((group) => <option key={group.id} value={group.id}>{group.displayName} ({group.id})</option>)}</select></label>
+          <label className="rx-field"><span>Quota Group</span><select value={selectedQuotaGroup} onChange={(event) => onQuotaGroupChange(event.target.value)}><option value="all">Select quota group</option>{quotaGroups.map((group) => <option key={group.groupQuotaName} value={group.groupQuotaName}>{group.groupQuotaName}</option>)}</select></label>
+        </div>
+        <div className="rx-inline-actions">
+          <button className="rx-button" type="button" onClick={actions.discover} disabled={busy.discover}>{busy.discover ? 'Discovering...' : 'Discover Quota Groups'}</button>
+          <button className="rx-button rx-button--secondary" type="button" onClick={actions.refresh} disabled={busy.refresh}>{busy.refresh ? 'Refreshing...' : 'Refresh Workspace'}</button>
+          <span className="rx-selected-count">Selected quota group: {selectedQuotaGroup === 'all' ? 'None' : selectedQuotaGroup}</span>
+          <button className="rx-chip-button" type="button" onClick={() => setActiveStep('discover')} disabled={selectedQuotaGroup === 'all'}>Continue to Step 2</button>
+        </div>
+      </section>
+
+      <section className={classNames('rx-panel', 'rx-step-panel', activeStep === 'discover' && 'rx-step-panel--active')}>
+        <div className="rx-panel__header"><div><h2>Step 2: Discover Candidates</h2><p>Generate candidate rows, capture history, and select the donor or recipient row that drives the move.</p></div></div>
+        <div className="rx-inline-actions">
+          <button className="rx-button" type="button" onClick={actions.generate} disabled={busy.generate || selectedQuotaGroup === 'all'}>{busy.generate ? 'Generating...' : 'Generate Candidates'}</button>
+          <button className="rx-button rx-button--secondary" type="button" onClick={actions.capture} disabled={busy.capture || selectedQuotaGroup === 'all'}>{busy.capture ? 'Capturing...' : 'Capture Quota History'}</button>
+          <span className="rx-selected-count">Candidate rows: {formatNumber(filteredCandidates.length)}</span>
+          <span className="rx-selected-count">Selected row: {selectedCandidateLabel}</span>
+        </div>
+        <div className="rx-field-grid rx-field-grid--filters">
+          <label className="rx-field"><span>Subscription</span><select value={candidateFilters.subscriptionId} onChange={(event) => setCandidateFilters({ ...candidateFilters, subscriptionId: event.target.value })}><option value="all">All Subscriptions</option>{subscriptionOptions.map((option) => <option key={option.subscriptionId} value={option.subscriptionId}>{option.subscriptionName} ({option.subscriptionId})</option>)}</select></label>
+          <label className="rx-field"><span>Region</span><select value={candidateFilters.region} onChange={(event) => setCandidateFilters({ ...candidateFilters, region: event.target.value })}><option value="all">All Regions</option>{regionOptions.map((region) => <option key={region} value={region}>{region}</option>)}</select></label>
+          <label className="rx-field"><span>Intent</span><select value={candidateFilters.intent} onChange={(event) => setCandidateFilters({ ...candidateFilters, intent: event.target.value })}><option value="all">All rows</option><option value="donor">Can donate</option><option value="need">Needs quota</option></select></label>
+          <label className="rx-field rx-field--wide"><span>SKU / Family</span><input className="rx-input" value={candidateFilters.family} onChange={(event) => setCandidateFilters({ ...candidateFilters, family: event.target.value })} placeholder="Search family or quota name" /></label>
+          <button className="rx-button rx-button--secondary" type="button" onClick={() => setCandidateFilters({ subscriptionId: 'all', region: 'all', family: '', intent: 'all' })}>Clear</button>
+        </div>
+        <DataTable title="Discovered Quota Groups" columns={[{ key: 'managementGroupId', label: 'Management Group' }, { key: 'groupQuotaName', label: 'Quota Group' }, { key: 'displayName', label: 'Display Name' }, { key: 'groupType', label: 'Group Type' }, { key: 'provisioningState', label: 'Provisioning State' }, { key: 'subscriptionCount', label: 'Subscriptions', render: (row) => formatNumber(row.subscriptionCount) }]} rows={quotaGroups} emptyMessage="No quota groups discovered yet." />
+        <DataTable title="Quota Candidates" subtitle="Pick a donor or recipient row to move into the planning steps." columns={[{ key: 'moveAction', label: 'Select', render: (row) => { const recipientNeed = getQuotaRecipientNeed(row); const movableQuota = Number(row.movableQuota || row.suggestedMovable || 0); const disabled = recipientNeed <= 0 && movableQuota <= 0; const isSelected = selectedMoveCandidate && selectedMoveCandidate.subscriptionId === row.subscriptionId && selectedMoveCandidate.region === row.region && selectedMoveCandidate.quotaName === (row.family || row.quotaName); const buttonLabel = disabled ? 'No Action' : (isSelected ? 'Selected' : (movableQuota > 0 ? 'Pick Donor' : 'Pick Need')); return <button className="rx-button rx-button--secondary" type="button" disabled={disabled} onClick={() => onSelectMoveCandidate(row)}>{buttonLabel}</button>; } }, { key: 'subscriptionName', label: 'Subscription', render: (row) => row.subscriptionName || row.subscriptionId || 'n/a' }, { key: 'region', label: 'Region' }, { key: 'family', label: 'Family' }, { key: 'skuList', label: 'SKUs', render: (row) => formatSkuList(row) }, { key: 'skuCount', label: 'SKU Count', render: (row) => formatNumber(row.skuCount || 0) }, { key: 'availability', label: 'Availability', render: (row) => <StatusPill value={row.availability} /> }, { key: 'quotaCurrent', label: 'Current', render: (row) => formatNumber(row.quotaCurrent) }, { key: 'quotaLimit', label: 'Limit', render: (row) => formatNumber(row.quotaLimit) }, { key: 'quotaAvailable', label: 'Available', render: (row) => formatNumber(row.quotaAvailable) }, { key: 'recipientNeed', label: 'Need', render: (row) => formatNumber(getQuotaRecipientNeed(row)) }, { key: 'movableQuota', label: 'Movable', render: (row) => formatNumber(row.movableQuota || row.suggestedMovable) }, { key: 'status', label: 'Status', render: (row) => <StatusPill value={row.status || row.candidateStatus} /> }]} rows={filteredCandidates} emptyMessage="Generate candidates to populate this table." />
+      </section>
+
+      <section className={classNames('rx-panel', 'rx-step-panel', activeStep === 'plan' && 'rx-step-panel--active')}>
+        <div className="rx-panel__header"><div><h2>Step 3: Plan</h2><p>Load a captured run, choose the donor details, and define how much quota to move.</p></div></div>
+        <div className="rx-field-grid">
+          <label className="rx-field rx-field--wide"><span>Captured Run</span><select value={selectedAnalysisRunId} onChange={(event) => onAnalysisRunChange(event.target.value)} disabled={!quotaRuns.length}><option value="">Select captured run</option>{quotaRuns.map((run) => <option key={run.analysisRunId} value={run.analysisRunId}>{run.capturedAtUtc || run.analysisRunId} ({formatNumber(run.rowCount || run.candidateCount || 0)} rows)</option>)}</select></label>
+          <label className="rx-field rx-field--wide"><span>Selected Scope</span><input className="rx-input" value={selectedCandidateLabel} readOnly /></label>
+          <label className="rx-field"><span>{selectedMoveCandidate?.mode === 'donor' ? 'Movable Quota' : 'Recipient Need'}</span><input className="rx-input" value={selectedMoveCandidate ? formatNumber(moveBasisValue) : '0'} readOnly /></label>
+          <label className="rx-field"><span>SKU In Scope</span><select value={selectedMoveCandidate?.selectedSku || ''} onChange={(event) => onSelectedSkuChange(event.target.value)} disabled={!selectedMoveCandidate || !selectedSkuOptions.length}><option value="">Any SKU in family</option>{selectedSkuOptions.map((sku) => <option key={sku} value={sku}>{sku}</option>)}</select></label>
+          <label className="rx-field"><span>Cores To Move</span><input className="rx-input" type="number" min="1" step="1" value={requestedTransferAmount} onChange={(event) => onRequestedTransferAmountChange(event.target.value)} disabled={!selectedMoveCandidate} /></label>
+          <label className="rx-field rx-field--wide"><span>Donor Subscription</span><select value={effectiveDonorSubscriptionId || ''} onChange={(event) => onDonorSubscriptionChange(event.target.value)} disabled={selectedMoveCandidate?.mode === 'donor' || !donorOptions.length}><option value="">Select donor subscription</option>{donorOptions.map((option) => <option key={option.subscriptionId} value={option.subscriptionId}>{option.subscriptionName} ({formatNumber(option.suggestedMovable)} movable)</option>)}</select></label>
+        </div>
+        <div className="rx-inline-actions">
+          <button className="rx-button" type="button" onClick={actions.refreshRuns} disabled={busy.refreshRuns || selectedQuotaGroup === 'all'}>{busy.refreshRuns ? 'Loading Runs...' : 'Load Captured Runs'}</button>
+          {selectedRun ? <span className="rx-selected-count">Selected run captured {selectedRun.capturedAtUtc || 'n/a'}</span> : null}
+          <span className="rx-selected-count">{donorHelpText}</span>
+          <button className="rx-chip-button" type="button" onClick={() => setActiveStep('simulate')} disabled={!movePlannerReady}>Continue to Step 4</button>
+        </div>
+        <DataTable title="Captured Runs" columns={[{ key: 'analysisRunId', label: 'Run ID' }, { key: 'capturedAtUtc', label: 'Captured At' }, { key: 'rowCount', label: 'Rows', render: (row) => formatNumber(row.rowCount || row.candidateCount || 0) }, { key: 'subscriptionCount', label: 'Subscriptions', render: (row) => formatNumber(row.subscriptionCount || 0) }, { key: 'movableCandidateCount', label: 'Movable Rows', render: (row) => formatNumber(row.movableCandidateCount || 0) }]} rows={quotaRuns} emptyMessage="No captured runs yet." />
+      </section>
+
+      <section className={classNames('rx-panel', 'rx-step-panel', activeStep === 'simulate' && 'rx-step-panel--active')}>
+        <div className="rx-panel__header"><div><h2>Step 4: Simulate</h2><p>Build the move plan first, then simulate impact on donors and recipients before applying anything.</p></div></div>
+        <div className="rx-inline-actions">
+          <button className="rx-button" type="button" onClick={actions.buildPlan} disabled={busy.plan || !movePlannerReady}>{busy.plan ? 'Building Plan...' : 'Build Move Plan'}</button>
+          <button className="rx-button rx-button--secondary" type="button" onClick={actions.simulatePlan} disabled={busy.simulate || !movePlannerReady || !planRows.length}>{busy.simulate ? 'Simulating...' : 'Simulate Impact'}</button>
+          <span className="rx-selected-count">Plan rows: {formatNumber(planRows.length)}</span>
+          <span className="rx-selected-count">Impacted rows: {formatNumber(impactRows.length)}</span>
+          <button className="rx-chip-button" type="button" onClick={() => setActiveStep('apply')} disabled={!impactRows.length}>Continue to Step 5</button>
+        </div>
+        <DataTable title="Planned Quota Moves" columns={[{ key: 'region', label: 'Region' }, { key: 'quotaName', label: 'Quota Family' }, { key: 'selectedSku', label: 'Selected SKU', render: (row) => row.selectedSku || 'n/a' }, { key: 'skuList', label: 'SKUs In Scope', render: (row) => formatSkuList(row) }, { key: 'donorSubscriptionName', label: 'Donor' }, { key: 'recipientSubscriptionName', label: 'Recipient' }, { key: 'transferAmount', label: 'Transfer', render: (row) => formatNumber(row.transferAmount) }, { key: 'donorAvailableBefore', label: 'Donor Before', render: (row) => formatNumber(row.donorAvailableBefore) }, { key: 'donorRemainingMovable', label: 'Donor Left', render: (row) => formatNumber(row.donorRemainingMovable) }, { key: 'recipientNeededQuota', label: 'Recipient Need', render: (row) => formatNumber(row.recipientNeededQuota) }, { key: 'recipientRemainingNeed', label: 'Need Left', render: (row) => formatNumber(row.recipientRemainingNeed) }, { key: 'recipientAvailabilityState', label: 'Recipient State', render: (row) => <StatusPill value={row.recipientAvailabilityState} /> }]} rows={planRows} emptyMessage="Define the move details in Step 3, then build the move plan here." />
+        <DataTable title="Simulation Impact" columns={[{ key: 'role', label: 'Role' }, { key: 'subscriptionName', label: 'Subscription' }, { key: 'region', label: 'Region' }, { key: 'quotaName', label: 'Quota Family' }, { key: 'skuList', label: 'SKUs In Scope', render: (row) => formatSkuList(row) }, { key: 'delta', label: 'Delta', render: (row) => formatNumber(row.delta) }, { key: 'quotaAvailableBefore', label: 'Before', render: (row) => formatNumber(row.quotaAvailableBefore) }, { key: 'quotaAvailableAfter', label: 'After', render: (row) => formatNumber(row.quotaAvailableAfter) }, { key: 'gapBefore', label: 'Gap Before', render: (row) => formatNumber(row.gapBefore) }, { key: 'gapAfter', label: 'Gap After', render: (row) => formatNumber(row.gapAfter) }, { key: 'projectedState', label: 'Projected', render: (row) => <StatusPill value={row.projectedState} /> }]} rows={impactRows} emptyMessage="Run simulation after building a plan to see recipient and donor impacts." />
+      </section>
+
+      <section className={classNames('rx-panel', 'rx-step-panel', activeStep === 'apply' && 'rx-step-panel--active')}>
+        <div className="rx-panel__header"><div><h2>Step 5: Apply</h2><p>Execute the approved move and review the final result set in one place.</p></div></div>
+        <div className="rx-inline-actions">
+          <button className="rx-button" type="button" onClick={actions.applyPlan} disabled={busy.apply || !planRows.length || !impactRows.length}>{busy.apply ? 'Applying...' : 'Apply Move'}</button>
+          <span className="rx-selected-count">Submitted changes: {formatNumber(summary.submittedChangeCount || 0)}</span>
+          <span className="rx-selected-count">Apply failures: {formatNumber(summary.failureCount || 0)}</span>
+        </div>
+        <DataTable title="Apply Results" columns={[{ key: 'subscriptionId', label: 'Subscription Id' }, { key: 'region', label: 'Region' }, { key: 'quotaName', label: 'Quota Family' }, { key: 'rowsSubmitted', label: 'Rows', render: (row) => formatNumber(row.rowsSubmitted) }, { key: 'requestedCores', label: 'Requested Cores', render: (row) => formatNumber(row.requestedCores) }, { key: 'status', label: 'Status', render: (row) => <StatusPill value={row.status} /> }, { key: 'error', label: 'Error' }]} rows={applyResults} emptyMessage="Apply results will appear here after the move is submitted." />
+        <section className="rx-panel rx-panel--compact rx-panel--muted">
+          <div className="rx-panel__header"><div><h2>Plan Summary</h2><p>High-level movement totals from the selected captured run.</p></div></div>
+          <div className="rx-summary-grid">
+            <article className="rx-metric-card"><span>Planned Moves</span><strong>{formatNumber(summary.planRowCount || 0)}</strong></article>
+            <article className="rx-metric-card"><span>Total Planned Quota</span><strong>{formatNumber(summary.totalPlannedQuota || 0)}</strong></article>
+            <article className="rx-metric-card"><span>Unresolved Recipients</span><strong>{formatNumber(summary.unresolvedRecipientCount || 0)}</strong></article>
+            <article className="rx-metric-card"><span>Resolved Recipients</span><strong>{formatNumber(summary.recipientResolvedCount || 0)}</strong></article>
+            <article className="rx-metric-card"><span>At-Risk Donors</span><strong>{formatNumber(summary.atRiskDonorCount || 0)}</strong></article>
+            <article className="rx-metric-card"><span>Impacted Rows</span><strong>{formatNumber(summary.impactedRowCount || 0)}</strong></article>
+            <article className="rx-metric-card"><span>Submitted Changes</span><strong>{formatNumber(summary.submittedChangeCount || 0)}</strong></article>
+            <article className="rx-metric-card"><span>Apply Failures</span><strong>{formatNumber(summary.failureCount || 0)}</strong></article>
+          </div>
+        </section>
+      </section>
+    </div>
+  );
+}
+
 function App() {
   const [auth, setAuth] = useState(null);
   const [authResolved, setAuthResolved] = useState(false);
@@ -1429,14 +1660,11 @@ function App() {
     if (activeView === 'trend') {
       return <DataTable key="trend" title="Trend History" subtitle="Recent trend rows based on the current reporting filter scope." columns={[{ key: 'day', label: 'Day' }, { key: 'totalRows', label: 'Total Rows', render: (row) => formatNumber(row.totalRows) }, { key: 'constrainedRows', label: 'Constrained Rows', render: (row) => formatNumber(row.constrainedRows) }, { key: 'totalQuotaAvailable', label: 'Total Quota Available', render: (row) => formatNumber(row.totalQuotaAvailable) }]} rows={trendRows} emptyMessage="No trend history rows available." />;
     }
-    if (activeView === 'quota-discovery') {
-      return <QuotaDiscoveryView managementGroups={quotaState.managementGroups} selectedManagementGroup={quotaState.selectedManagementGroup} onManagementGroupChange={(value) => setQuotaState({ ...quotaState, selectedManagementGroup: value })} quotaGroups={quotaState.quotaGroups} selectedQuotaGroup={quotaState.selectedQuotaGroup} onQuotaGroupChange={(value) => setQuotaState({ ...quotaState, selectedQuotaGroup: value, selectedAnalysisRunId: '', selectedDonorSubscriptionId: '', selectedMoveCandidate: null, requestedTransferAmount: 0, planRows: [], impactRows: [], applyResults: [], planSummary: {} })} candidates={quotaState.candidates} candidateFilters={quotaState.candidateFilters} setCandidateFilters={(value) => setQuotaState({ ...quotaState, candidateFilters: value })} selectedMoveCandidate={quotaState.selectedMoveCandidate} onSelectMoveCandidate={(row) => { const skuOptions = normalizeSkuList(row.skuList); const recipientNeed = getQuotaRecipientNeed(row); const movableQuota = Number(row.movableQuota || row.suggestedMovable || 0); const mode = movableQuota > 0 ? 'donor' : 'recipient'; const requestedTransferAmount = mode === 'donor' ? movableQuota : recipientNeed; setQuotaState((current) => ({ ...current, selectedMoveCandidate: { subscriptionId: row.subscriptionId, subscriptionName: row.subscriptionName || row.subscriptionId, donorSubscriptionId: mode === 'donor' ? row.subscriptionId : '', recipientSubscriptionId: mode === 'recipient' ? row.subscriptionId : '', recipientSubscriptionName: row.subscriptionName || row.subscriptionId, region: row.region, quotaName: row.family || row.quotaName, skuList: skuOptions, selectedSku: '', quotaAvailable: row.quotaAvailable, safetyBuffer: row.safetyBuffer, availability: row.availability, movableQuota, mode }, selectedDonorSubscriptionId: mode === 'donor' ? row.subscriptionId : '', requestedTransferAmount, planRows: [], impactRows: [], applyResults: [], planSummary: {}, status: { tone: 'success', message: `Selected ${row.subscriptionName || row.subscriptionId} as a ${mode} quota row. Continue in Quota Movement.` } })); setActiveView('quota-movement'); }} onOpenMovePlanner={() => setActiveView('quota-movement')} quotaRuns={quotaState.quotaRuns} actions={quotaActions} busy={quotaState.busy} status={quotaState.status} />;
+    if (activeView === 'quota-workbench') {
+      return <QuotaWorkbenchView managementGroups={quotaState.managementGroups} selectedManagementGroup={quotaState.selectedManagementGroup} onManagementGroupChange={(value) => setQuotaState({ ...quotaState, selectedManagementGroup: value })} quotaGroups={quotaState.quotaGroups} selectedQuotaGroup={quotaState.selectedQuotaGroup} onQuotaGroupChange={(value) => setQuotaState({ ...quotaState, selectedQuotaGroup: value, selectedAnalysisRunId: '', selectedDonorSubscriptionId: '', selectedMoveCandidate: null, requestedTransferAmount: 0, planRows: [], impactRows: [], applyResults: [], planSummary: {} })} candidates={quotaState.candidates} candidateFilters={quotaState.candidateFilters} setCandidateFilters={(value) => setQuotaState({ ...quotaState, candidateFilters: value })} selectedMoveCandidate={quotaState.selectedMoveCandidate} onSelectMoveCandidate={(row) => { const skuOptions = normalizeSkuList(row.skuList); const recipientNeed = getQuotaRecipientNeed(row); const movableQuota = Number(row.movableQuota || row.suggestedMovable || 0); const mode = movableQuota > 0 ? 'donor' : 'recipient'; const requestedTransferAmount = mode === 'donor' ? movableQuota : recipientNeed; setQuotaState((current) => ({ ...current, selectedMoveCandidate: { subscriptionId: row.subscriptionId, subscriptionName: row.subscriptionName || row.subscriptionId, donorSubscriptionId: mode === 'donor' ? row.subscriptionId : '', recipientSubscriptionId: mode === 'recipient' ? row.subscriptionId : '', recipientSubscriptionName: row.subscriptionName || row.subscriptionId, region: row.region, quotaName: row.family || row.quotaName, skuList: skuOptions, selectedSku: '', quotaAvailable: row.quotaAvailable, safetyBuffer: row.safetyBuffer, availability: row.availability, movableQuota, mode }, selectedDonorSubscriptionId: mode === 'donor' ? row.subscriptionId : '', requestedTransferAmount, planRows: [], impactRows: [], applyResults: [], planSummary: {}, status: { tone: 'success', message: `Selected ${row.subscriptionName || row.subscriptionId} as a ${mode} quota row. Continue to Step 3 to build the move.` } })); }} quotaRuns={quotaState.quotaRuns} selectedAnalysisRunId={quotaState.selectedAnalysisRunId} donorOptions={donorOptions} selectedDonorSubscriptionId={quotaState.selectedDonorSubscriptionId} onSelectedSkuChange={(value) => setQuotaState({ ...quotaState, selectedMoveCandidate: quotaState.selectedMoveCandidate ? { ...quotaState.selectedMoveCandidate, selectedSku: value } : null, selectedDonorSubscriptionId: '', planRows: [], impactRows: [], applyResults: [], planSummary: {} })} requestedTransferAmount={quotaState.requestedTransferAmount} onRequestedTransferAmountChange={(value) => setQuotaState({ ...quotaState, requestedTransferAmount: Math.max(0, Number(value || 0)), planRows: [], impactRows: [], applyResults: [], planSummary: {} })} onAnalysisRunChange={(value) => setQuotaState({ ...quotaState, selectedAnalysisRunId: value, selectedDonorSubscriptionId: '', planRows: [], impactRows: [], applyResults: [], planSummary: {} })} onDonorSubscriptionChange={(value) => setQuotaState({ ...quotaState, selectedDonorSubscriptionId: value, planRows: [], impactRows: [], applyResults: [], planSummary: {} })} planRows={quotaState.planRows} impactRows={quotaState.impactRows} applyResults={quotaState.applyResults} summary={quotaState.planSummary} actions={quotaActions} busy={quotaState.busy} status={quotaState.status} />;
     }
     if (activeView === 'admin') {
       return <AdminIngestionView status={adminState.status} schedule={adminState.schedule} runtime={adminState.runtime} selectedRegionPreset={filters.regionPreset} actions={adminActions} onScheduleChange={(scope, field, value) => setAdminState((current) => ({ ...current, schedule: { ...current.schedule, [scope]: { ...current.schedule[scope], [field]: value } } }))} busy={adminState.busy} viewStatus={adminState.statusMessage} />;
-    }
-    if (activeView === 'quota-movement') {
-      return <QuotaMovementView selectedManagementGroup={quotaState.selectedManagementGroup} selectedQuotaGroup={quotaState.selectedQuotaGroup} quotaRuns={quotaState.quotaRuns} selectedAnalysisRunId={quotaState.selectedAnalysisRunId} donorOptions={donorOptions} selectedDonorSubscriptionId={quotaState.selectedDonorSubscriptionId} selectedMoveCandidate={quotaState.selectedMoveCandidate} onSelectedSkuChange={(value) => setQuotaState({ ...quotaState, selectedMoveCandidate: quotaState.selectedMoveCandidate ? { ...quotaState.selectedMoveCandidate, selectedSku: value } : null, selectedDonorSubscriptionId: '', planRows: [], impactRows: [], applyResults: [], planSummary: {} })} requestedTransferAmount={quotaState.requestedTransferAmount} onRequestedTransferAmountChange={(value) => setQuotaState({ ...quotaState, requestedTransferAmount: Math.max(0, Number(value || 0)), planRows: [], impactRows: [], applyResults: [], planSummary: {} })} onAnalysisRunChange={(value) => setQuotaState({ ...quotaState, selectedAnalysisRunId: value, selectedDonorSubscriptionId: '', planRows: [], impactRows: [], applyResults: [], planSummary: {} })} onDonorSubscriptionChange={(value) => setQuotaState({ ...quotaState, selectedDonorSubscriptionId: value, planRows: [], impactRows: [], applyResults: [], planSummary: {} })} planRows={quotaState.planRows} impactRows={quotaState.impactRows} applyResults={quotaState.applyResults} summary={quotaState.planSummary} actions={quotaActions} busy={quotaState.busy} status={quotaState.status} />;
     }
     return <section className="rx-panel"><div className="rx-placeholder">View not implemented yet.</div></section>;
   })();

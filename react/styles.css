@@ -376,6 +376,67 @@ body {
   margin: 12px 0 0;
 }
 
+.rx-stepper {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.rx-step-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-height: 96px;
+  padding: 14px 16px;
+  border: 1px solid var(--rx-line);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(240, 246, 252, 0.92));
+  color: var(--rx-ink);
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.rx-step-chip:hover {
+  transform: translateY(-1px);
+  border-color: rgba(0, 95, 168, 0.28);
+}
+
+.rx-step-chip.is-active {
+  border-color: rgba(0, 95, 168, 0.42);
+  background: linear-gradient(180deg, rgba(227, 239, 252, 0.96), rgba(255, 255, 255, 0.98));
+  box-shadow: 0 16px 32px rgba(5, 60, 110, 0.12);
+}
+
+.rx-step-chip.is-complete .rx-step-chip__number {
+  color: var(--rx-success-ink);
+}
+
+.rx-step-chip strong {
+  font-size: 16px;
+}
+
+.rx-step-chip small,
+.rx-step-chip__number {
+  color: var(--rx-muted);
+}
+
+.rx-step-chip__number {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.rx-step-panel {
+  display: none;
+}
+
+.rx-step-panel--active {
+  display: block;
+}
+
 .rx-chip-button {
   min-height: 34px;
   padding: 0 12px;
@@ -800,6 +861,10 @@ body {
 }
 
 @media (max-width: 1100px) {
+  .rx-stepper {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .rx-matrix-key {
     grid-template-columns: 1fr;
   }
@@ -830,6 +895,10 @@ body {
 }
 
 @media (max-width: 720px) {
+  .rx-stepper {
+    grid-template-columns: 1fr;
+  }
+
   .rx-shell {
     grid-template-columns: 1fr;
   }

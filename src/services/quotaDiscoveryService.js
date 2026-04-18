@@ -50,16 +50,26 @@ async function armGetAll(url, token) {
 async function listManagementGroups() {
   const token = await getToken();
   const groupsUrl = `${ARM_BASE}/providers/Microsoft.Management/managementGroups?api-version=${MANAGEMENT_API_VERSION}`;
+  const fallbackManagementGroupId = getManagementGroupId();
 
   try {
     const groups = await armGetAll(groupsUrl, token);
-    return groups.map((group) => ({
+    const mappedGroups = groups.map((group) => ({
       id: group.name,
       displayName: group?.properties?.displayName || group.name,
       tenantId: group?.properties?.tenantId || null
     }));
+
+    if (!mappedGroups.length && fallbackManagementGroupId) {
+      return [{
+        id: fallbackManagementGroupId,
+        displayName: fallbackManagementGroupId,
+        tenantId: null
+      }];
+    }
+
+    return mappedGroups;
   } catch (error) {
-    const fallbackManagementGroupId = getManagementGroupId();
     if (!fallbackManagementGroupId || !error.message.includes('AuthorizationFailed')) {
       throw error;
     }

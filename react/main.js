@@ -73,6 +73,24 @@ function classNames() {
   return Array.from(arguments).filter(Boolean).join(' ');
 }
 
+function detectDeploymentEnvironment(hostname = window.location.hostname) {
+  const value = String(hostname || '').toLowerCase();
+
+  if (value.includes('-test-') || value.includes('test') || value.includes('demo')) {
+    return { key: 'test', label: 'Test' };
+  }
+
+  if (value.includes('-dev-') || value.includes('dev')) {
+    return { key: 'dev', label: 'Dev' };
+  }
+
+  if (value.includes('-prod-') || value.includes('prod')) {
+    return { key: 'prod', label: 'Prod' };
+  }
+
+  return { key: 'default', label: 'React V2' };
+}
+
 function escapeHtml(value) {
   return String(value || '')
     .replace(/&/g, '&amp;')
@@ -1340,6 +1358,7 @@ function QuotaWorkbenchView(props) {
 }
 
 function App() {
+  const deploymentEnvironment = useMemo(() => detectDeploymentEnvironment(), []);
   const [auth, setAuth] = useState(null);
   const [authResolved, setAuthResolved] = useState(false);
   const [appStatus, setAppStatus] = useState({ tone: 'info', message: 'Loading React experience...' });
@@ -1387,6 +1406,7 @@ function App() {
   const topSkus = useMemo(() => topSkuRows(filteredAnalyticsRows), [filteredAnalyticsRows]);
   const familySummaryRows = useMemo(() => (familyRows.length > 0 ? familyRows : familySummaryFromRows(filteredAnalyticsRows)), [familyRows, filteredAnalyticsRows]);
   const matrix = useMemo(() => regionMatrixRows(filteredAnalyticsRows, filters.region, scopedRegionOptions), [filteredAnalyticsRows, filters.region, scopedRegionOptions]);
+  const isAdminView = Boolean(auth?.canAccessAdmin && activeView === 'admin');
 
   useEffect(() => {
     if (!recommendedTargetSku) {
@@ -1431,6 +1451,11 @@ function App() {
   }, [recommendedRegions]);
 
   useEffect(() => {
+    document.documentElement.dataset.environment = deploymentEnvironment.key;
+    document.body.dataset.environment = deploymentEnvironment.key;
+  }, [deploymentEnvironment]);
+
+  useEffect(() => {
     async function initialize() {
       try {
         const authPayload = await fetchJson('/api/auth/me');
@@ -1456,7 +1481,7 @@ function App() {
           : (managementGroups[0] ? managementGroups[0].id : '');
         setQuotaState((current) => ({ ...current, managementGroups, selectedManagementGroup }));
         setShowSqlPreview(Boolean(uiSettingsPayload.settings && uiSettingsPayload.settings.showSqlPreview));
-        setAppStatus({ tone: 'success', message: 'React v2 playground loaded. Use the right-side flyout to manage large filter sets.' });
+        setAppStatus({ tone: 'success', message: 'React v2 loaded. Use the right-side flyout to manage large filter sets.' });
       } catch (error) {
         setAppStatus({ tone: 'error', message: error.message || 'Failed to initialize React experience.' });
       } finally {
@@ -1531,7 +1556,7 @@ function App() {
   }, [auth, quotaState.selectedManagementGroup]);
 
   useEffect(() => {
-    if (!auth?.canAccessAdmin || !showSqlPreview) {
+    if (!isAdminView || !showSqlPreview) {
       setSqlPreviewState({ loading: false, error: '', rows: [] });
       return undefined;
     }
@@ -1573,7 +1598,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [auth?.canAccessAdmin, showSqlPreview, activeView, capacityData.pagination.pageNumber, capacityData.pagination.pageSize, filters, selectedSubscriptionIds, quotaState.selectedManagementGroup, quotaState.selectedQuotaGroup, quotaState.selectedAnalysisRunId]);
+  }, [isAdminView, showSqlPreview, activeView, capacityData.pagination.pageNumber, capacityData.pagination.pageSize, filters, selectedSubscriptionIds, quotaState.selectedManagementGroup, quotaState.selectedQuotaGroup, quotaState.selectedAnalysisRunId]);
 
   useEffect(() => {
     if (!auth?.canAccessAdmin || activeView !== 'admin') {
@@ -1719,10 +1744,12 @@ function App() {
   }
 
   async function handleShowSqlPreviewChange(nextValue) {
-    if (!auth?.canAccessAdmin) {
+    if (!auth?.canAccessAdmin || activeView !== 'admin') {
       return;
     }
 
+    const fallbackValue = Boolean(nextValue);
+    setShowSqlPreview(fallbackValue);
     setUiSettingsBusy(true);
     try {
       const payload = await fetchJson('/api/admin/ui-settings', {
@@ -1731,7 +1758,8 @@ function App() {
       });
       setShowSqlPreview(Boolean(payload.settings && payload.settings.showSqlPreview));
     } catch (error) {
-      setAppStatus({ tone: 'error', message: error.message || 'Failed to save SQL preview preference.' });
+      setShowSqlPreview(fallbackValue);
+      setAppStatus({ tone: 'warn', message: 'SQL preview was updated for this session only. Saving the preference requires DashboardSetting table access.' });
     } finally {
       setUiSettingsBusy(false);
     }
@@ -2026,7 +2054,7 @@ function App() {
       <main className="rx-main">
         <header className="rx-topbar">
           <div>
-            <div className="rx-kicker">Dev Playground</div>
+            <div className="rx-kicker">{deploymentEnvironment.label}</div>
             <h2>{REPORT_VIEWS.find((view) => view.key === activeView)?.label || 'React V2'}</h2>
             <p>Right-side flyout keeps high-cardinality filters like subscriptions out of the main content flow.</p>
           </div>
@@ -2035,7 +2063,7 @@ function App() {
               <button className="rx-button rx-button--secondary" type="button" disabled={Boolean(exportBusyFormat)} onClick={() => downloadCapacityExport('csv')}>{exportBusyFormat === 'csv' ? 'Exporting CSV...' : 'Export CSV'}</button>
               <button className="rx-button rx-button--secondary" type="button" disabled={Boolean(exportBusyFormat)} onClick={() => downloadCapacityExport('xlsx')}>{exportBusyFormat === 'xlsx' ? 'Exporting Excel...' : 'Export Excel'}</button>
             </> : null}
-            {auth?.canAccessAdmin ? <label className="rx-check rx-check--sql-toggle"><input type="checkbox" checked={showSqlPreview} disabled={uiSettingsBusy} onChange={(event) => handleShowSqlPreviewChange(event.target.checked)} />Show SQL</label> : null}
+            {isAdminView ? <label className="rx-check rx-check--sql-toggle"><input type="checkbox" checked={showSqlPreview} disabled={uiSettingsBusy} onChange={(event) => handleShowSqlPreviewChange(event.target.checked)} />Show SQL</label> : null}
             <div className="rx-user-chip">
               <strong>{auth?.name || 'Loading user...'}</strong>
               <small>{auth?.username || 'No Entra context yet'}</small>
@@ -2047,7 +2075,7 @@ function App() {
 
         <Banner tone={appStatus.tone} message={appStatus.message} />
         {viewContent}
-        {auth?.canAccessAdmin && showSqlPreview ? <SqlPreviewPanel activeViewLabel={REPORT_VIEWS.find((view) => view.key === activeView)?.label || activeView} loading={sqlPreviewState.loading} error={sqlPreviewState.error} rows={sqlPreviewState.rows} /> : null}
+        {isAdminView && showSqlPreview ? <SqlPreviewPanel activeViewLabel={REPORT_VIEWS.find((view) => view.key === activeView)?.label || activeView} loading={sqlPreviewState.loading} error={sqlPreviewState.error} rows={sqlPreviewState.rows} /> : null}
       </main>
 
       <aside className={classNames('rx-drawer', drawerOpen && 'is-open')}>

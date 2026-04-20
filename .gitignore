@@ -8,6 +8,8 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 appservice-logs*/
+test-app-logs/
+test-current-logs*/
 artifacts/
 
 # Secrets / local config

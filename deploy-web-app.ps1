@@ -18,6 +18,8 @@ New-Item -Path $stagingPath -ItemType Directory -Force | Out-Null
 $filesToCopy = @(
     'app.js',
     'index.html',
+    'server.js',
+    'web.config',
     'styles.css',
     'package.json',
     'package-lock.json',

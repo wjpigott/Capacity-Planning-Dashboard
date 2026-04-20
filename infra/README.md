@@ -18,7 +18,6 @@ This template provisions a native Azure baseline for the dashboard solution.
 ## Security design
 
 - No subscription IDs, tenant IDs, resource group names, or secrets are stored in this repo.
-- SQL admin password is a secure deployment parameter.
 - Web App uses managed identity and receives Key Vault Secrets User role on the deployed vault.
 - Web App can optionally receive subscription-level `Reader` assignments during infra deployment to support cross-subscription discovery.
 - Web App can optionally receive subscription-level `GroupQuota Request Operator` assignments during infra deployment by passing `webQuotaWriterSubscriptionIds` for quota apply writes.
@@ -46,6 +45,7 @@ This template provisions a native Azure baseline for the dashboard solution.
 
 - Keep `dev` as the mutable build-and-verify environment.
 - Stand up `test` as the stable demo environment in the same subscription using the same naming pattern with the environment token changed to `test`.
+- Treat the React app as the primary UI for future production rollout. The classic root UI can remain for compatibility in dev/test, but it should not drive the production deployment shape.
 - Current naming example with `workloadSuffix = cap001`:
   - Web App: `app-capdash-test-cap001`
   - Function App: `func-capdash-test-cap001-appsvc`
@@ -77,8 +77,16 @@ The script-based path is the recommended operator workflow because it now:
 
 - deploys the infrastructure from Bicep
 - deploys the dashboard web package, including `react/`, to the matching App Service name
+- keeps the repeatable SQL bootstrap path inside Azure instead of requiring local SQL connectivity
+- falls back to an admin-assisted Azure-side bootstrap when the web app identity cannot create schema objects itself
 
 Use `-DeployWebApp $false` only when you intentionally want an infra-only run.
+
+Manual SQL tooling note:
+
+- `sqlcmd` is still a prerequisite for the standalone schema/migration/sample-data scripts under `scripts/`.
+- For private SQL environments, prefer the web app bootstrap path over manual `sqlcmd` execution from a workstation that may not have network access.
+- If the customer DBA team owns a pre-created Entra-only SQL server, use `scripts/initialize-database.ps1` from an Azure-connected host with Entra SQL admin rights, or hand that script to the DBA team as the post-deploy runbook step.
 
 Raw Bicep deployment is also supported:
 
@@ -87,7 +95,7 @@ az deployment group create \
   --resource-group <resource-group-name> \
   --template-file ./infra/main.bicep \
   --parameters ./infra/test.bicepparam \
-  --parameters sqlAdminPassword="<secure-password>" sqlEntraAdminLogin="<entra-upn>" sqlEntraAdminObjectId="<entra-object-id>"
+  --parameters sqlEntraAdminLogin="<entra-upn>" sqlEntraAdminObjectId="<entra-object-id>"
 ```
 
 ## RBAC At Scale
@@ -118,7 +126,8 @@ Example:
 
 - Raw template deployment still provisions infrastructure only. The script-based workflow now chains the dashboard web app publish, but Function zip deployment, SQL schema migration, and some post-deploy app settings remain separate runbook steps.
 - There is no traffic-routing layer in Bicep yet. `dev` and `test` can coexist, but cutover is manual because Front Door, Traffic Manager, or deployment slots are not modeled.
-- SQL database data-plane grants (for example `db_datareader` and `db_datawriter`) are not ARM resources and still require post-deploy SQL role configuration.
+- A React-only production packaging/deployment path is not modeled separately yet. The next production pass should decide whether the classic UI is omitted entirely or retained only as a compatibility fallback.
+- SQL database data-plane grants (for example `db_datareader` and `db_datawriter`) are not ARM resources and still require post-deploy SQL role configuration. The repo now includes `scripts/initialize-database.ps1` for that step when SQL is customer-managed.
 - If your organization requires billing-scope role assignments (instead of subscription scope), those billing-scope assignments remain external to this resource-group deployment.
 - Entra app registration creation and tenant-side consent/group assignment remain external to the template. The template now wires the dashboard auth settings, but you still need a real Entra app registration and group/object IDs.
 - The template has no outputs or automation for database schema application; `apply-schema.ps1` and later migrations still need to run after infra creation.

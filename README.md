@@ -59,7 +59,7 @@ Status legend:
 
 - [x] SQL configured with Entra admin and AAD-only auth
 - [x] App Service system-assigned managed identity enabled
-- [x] App identity granted SQL read/write roles for ingestion and read APIs
+- [~] App identity database roles are granted post-deploy through the database bootstrap flow or `scripts/initialize-database.ps1` when the SQL team owns the server lifecycle
 - [x] Internal ingestion endpoints protected by `INGEST_API_KEY`
 - [x] Subscription identities masked (`subscriptionKey`) in stored analytics rows
 - [x] Entra sign-in and admin group gating enabled via dashboard auth flow and `ADMIN_GROUP_ID`
@@ -172,6 +172,31 @@ Capacity Recommender settings:
 
 ## Dashboard web app deployment
 
+### Environment naming and UI theme detection
+
+The dashboard does not read a dedicated environment setting to decide whether to show `Dev`, `Test`, or `Prod` branding in the UI. Both the classic UI and the React UI infer the environment from the request hostname.
+
+Current hostname rules:
+
+- If the hostname contains `test` or `demo`, the UI is treated as `Test`
+- If the hostname contains `dev`, the UI is treated as `Dev`
+- If the hostname contains `prod`, the UI is treated as `Prod`
+- If none of those tokens are present, the classic UI falls back to its default styling and the React UI falls back to generic `React V2` labeling
+
+Practical guidance for new environments:
+
+- You do not strictly need the App Service resource name itself to contain `dev` or `test`
+- You do need the user-facing hostname to contain the environment token if you want automatic environment-specific branding and color treatment
+- The simplest approach is to keep the App Service name and default `azurewebsites.net` hostname aligned with the environment, for example `app-capdash-dev-...` or `app-capdash-test-...`
+- If you use a custom domain, the same rule applies: include `dev`, `test`, `demo`, or `prod` in the hostname if you want the automatic theme to activate
+
+Examples:
+
+- `app-capdash-dev-cap001.azurewebsites.net` -> `Dev`
+- `app-capdash-test-cap001.azurewebsites.net` -> `Test`
+- `capacity-demo.contoso.com` -> `Test`
+- `capacity.contoso.com` -> default styling unless you change the detection logic
+
 Use zip/web package deploy for the dashboard App Service.
 
 Current target:
@@ -191,16 +216,19 @@ Package only the runtime files and folders:
 $items = @(
 	'app.js',
 	'index.html',
+	'server.js',
+	'web.config',
 	'styles.css',
 	'package.json',
 	'package-lock.json',
+	'api-contract.md',
+	'README.md',
 	'react',
 	'src',
 	'sql',
 	'scripts',
-	'functions',
 	'docs',
-	'api-contract.md'
+	'tools'
 )
 
 Compress-Archive -Path $items -DestinationPath ..\webpackage-capdash-clean.zip -Force
@@ -240,8 +268,30 @@ az account set --subscription "<subscription-name-or-id>"
 Notes:
 
 - The deployment script already stages the correct runtime files and publishes them to `app-capdash-dev-cap001`.
+- The deployment package stages the repo's `react/` folder, root `server.js`, and root `web.config`, so a fresh pull plus redeploy publishes the current React experience and keeps `/api/*` routed to Express on Windows App Service.
+- Keep the package source-shaped. Do not ship local `node_modules`; App Service restores production dependencies during deployment.
 - If `az webapp deploy` fails with `AuthorizationFailed`, refresh Azure credentials with `az login`, confirm the correct subscription with `az account show`, and make sure the signed-in identity has App Service access on the `CapacityDashboard` resource group.
 - The React experience is served from `https://app-capdash-dev-cap001.azurewebsites.net/react/`.
+- Plan the production UI around the React experience. The classic root experience is still present for compatibility, but it should not be treated as the long-term production surface.
+
+Repo refresh guidance:
+
+- If someone had an older checkout before the React branding and routing fixes landed, a `git pull` followed by `./deploy-web-app.ps1` is enough to republish the updated React assets and root routing files.
+- If you are provisioning or updating the whole environment, `./scripts/deploy-infra.ps1` also republishes the dashboard web package by default, so the same pull-and-redeploy flow updates both infra settings and the React UI.
+
+Private or DBA-managed SQL note:
+
+- If Azure SQL is pre-created by a customer DBA team and exposed only through private access with Entra-only auth, do not assume the app identity can create schema objects on first start.
+- `scripts/deploy-infra.ps1` now tries two install paths: app-identity bootstrap first, then an Azure-side admin-assisted bootstrap using the current Azure CLI login if that login is an Entra SQL admin.
+- If neither path can administer the database, hand off `scripts/initialize-database.ps1` to the DBA team. That script applies `sql/schema.sql`, runs all files in `sql/migrations/`, and grants the dashboard web app identity the runtime roles it needs.
+- Example DBA handoff command:
+
+```powershell
+./scripts/initialize-database.ps1 \
+	-SqlServer "sql-capdash-test-cap001.database.windows.net" \
+	-SqlDatabase "sqldb-capdash-test" \
+	-AppIdentityName "app-capdash-test-cap001"
+```
 
 **Capacity Recommender configuration:**
 
@@ -267,6 +317,7 @@ Use script-based deployment with Central US default:
 	-ResourceGroupName "<rg-name>" \
 	-Environment dev \
 	-WorkloadSuffix "cap001" \
+	-QuotaManagementGroupId "<management-group-id>" \
 	-WebReaderSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
 	-WorkerRbacSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
 	-SqlEntraAdminLogin "<entra-upn>" \
@@ -295,6 +346,7 @@ Example:
 	-Environment test \
 	-WorkloadSuffix "cap001" \
 	-ParameterFile "./infra/test.bicepparam" \
+	-QuotaManagementGroupId "Demo-MG" \
 	-WebReaderSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
 	-WorkerRbacSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
 	-SqlEntraAdminLogin "<entra-upn>" \
@@ -305,13 +357,16 @@ Example:
 Notes:
 
 - SQL is configured with Microsoft Entra admin and AAD-only authentication.
-- `SqlAdminPassword` is optional; when omitted, the script generates a strong random value for server bootstrap.
+- Database bootstrap for private SQL runs through the deployed web app's internal endpoint, so the repeatable path stays inside Azure rather than relying on local SQL access.
+- `sqlcmd` is still required for the manual schema, migration, and sample-data scripts in `scripts/` when you intentionally run them outside the App Service bootstrap flow.
 - The Bicep template now also provisions a Function App plus storage account for the PowerShell 7 worker host.
 - The script-based deployment path now also deploys the dashboard web content, so `/react/` is available immediately after a successful run.
+- The likely production target is React-only. Keep `/react/` as the primary deployed experience and treat the classic root UI as legacy unless a specific environment still requires it.
 - Raw `az deployment group create` with the Bicep template still provisions infrastructure only; it does not upload the local dashboard or `react/` files.
 - `-ParameterFile` lets you keep environment defaults in a `.bicepparam` file while still overriding secure/runtime values from the command line.
 - `-WebReaderSubscriptionIds` grants the dashboard web app `Reader` on the listed subscriptions so subscription discovery can see every target subscription.
 - `-WebReaderSubscriptionIds` is the only built-in path that grants the dashboard web app managed identity subscription `Reader` access during deployment. There is no management-group fallback for read access in the current template, so fresh deployments must provide the target subscription list explicitly.
+- `-QuotaManagementGroupId` sets the `QUOTA_MANAGEMENT_GROUP_ID` app setting during deployment. Use it whenever you expect live quota discovery or quota apply to target a specific management group such as `Demo-MG`.
 - `-WorkerRbacSubscriptionIds` triggers subscription-level RBAC assignment for the worker identity (`Compute Recommendations Role`, `Cost Management Reader`, `Billing Reader`) in the same deployment.
 - `-AuthEnabled` plus `-EntraTenantId`, `-EntraClientId`, `-EntraClientSecret`, and optional `-AdminGroupId` configure the built-in Entra sign-in flow used by the dashboard API.
 
@@ -693,6 +748,12 @@ Planned data/API direction:
 - Admin access is enforced by the dashboard auth middleware using the signed-in user's Entra group claims. Set `ADMIN_GROUP_ID` to the Object ID of the Entra security group allowed to see Admin sections and call admin-only APIs.
 
 ## SQL migration
+
+Manual script prerequisites:
+
+- Azure CLI authenticated to the correct subscription when you are targeting Azure resources.
+- `sqlcmd` installed when using `./scripts/apply-schema.ps1`, `./scripts/apply-migration.ps1`, or `./scripts/load-sample-data.ps1` directly.
+- Network path to the SQL server. For private SQL environments, prefer the App Service bootstrap route instead of running these scripts from a machine without SQL connectivity.
 
 To add masked subscription-key support to existing databases, run:
 

@@ -4,10 +4,6 @@ param location = 'centralus'
 param environment = 'test'
 param workloadSuffix = 'cap001'
 
-// Supply at deployment time via secure pipeline/secret variable if you need to override bootstrap defaults.
-param sqlAdminLogin = 'sqllocaladmin'
-param sqlAdminPassword = 'ReplaceWithSecureSecretAtDeployTime!'
-
 // Supply at deployment time for Azure SQL Entra admin configuration.
 param sqlEntraAdminLogin = 'user@contoso.com'
 param sqlEntraAdminObjectId = '00000000-0000-0000-0000-000000000000'
@@ -21,6 +17,7 @@ param keyVaultPublicNetworkAccess = 'Disabled'
 
 // Optional: enable worker subscription RBAC in one deployment by listing target subscription IDs.
 // Example:
+// param quotaManagementGroupId = 'Demo-MG'
 // param webReaderSubscriptionIds = [
 //   '00000000-0000-0000-0000-000000000000'
 // ]

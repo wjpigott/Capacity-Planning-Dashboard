@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "description": "Capacity and quota planning dashboard",
-  "main": "src/server.js",
+  "main": "server.js",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node src/server.js"
+    "start": "node server.js",
+    "dev": "node server.js"
   },
   "dependencies": {
     "@azure/identity": "^4.5.0",

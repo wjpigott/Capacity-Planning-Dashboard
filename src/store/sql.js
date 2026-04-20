@@ -2,6 +2,55 @@ const sql = require('mssql');
 
 let cachedPool;
 
+function buildSqlConfig({ accessToken } = {}) {
+  const server = process.env.SQL_SERVER || process.env.Sql__Server;
+  const database = process.env.SQL_DATABASE || process.env.Sql__Database;
+  const authMode = (process.env.SQL_AUTH_MODE || process.env.Sql__AuthMode || '').toLowerCase();
+  const msiClientId = process.env.SQL_MSI_CLIENT_ID || process.env.Sql__MsiClientId;
+  const user = process.env.SQL_USER;
+  const password = process.env.SQL_PASSWORD;
+
+  if (!server || !database) {
+    return null;
+  }
+
+  const useManagedIdentity = authMode === 'managed-identity' || authMode === 'msi';
+  if (!accessToken && !useManagedIdentity && (!user || !password)) {
+    return null;
+  }
+
+  const config = {
+    server,
+    database,
+    options: {
+      encrypt: true,
+      trustServerCertificate: false
+    },
+    pool: {
+      max: 10,
+      min: 0,
+      idleTimeoutMillis: 30000
+    }
+  };
+
+  if (accessToken) {
+    config.authentication = {
+      type: 'azure-active-directory-access-token',
+      options: { token: accessToken }
+    };
+  } else if (useManagedIdentity) {
+    config.authentication = {
+      type: 'azure-active-directory-msi-app-service',
+      options: msiClientId ? { clientId: msiClientId } : {}
+    };
+  } else {
+    config.user = user;
+    config.password = password;
+  }
+
+  return config;
+}
+
 function normalizeSkuName(value) {
   const trimmed = String(value || '').trim();
   if (!trimmed) {
@@ -38,19 +87,8 @@ function normalizeSkuName(value) {
 }
 
 async function getSqlPool() {
-  const server = process.env.SQL_SERVER || process.env.Sql__Server;
-  const database = process.env.SQL_DATABASE || process.env.Sql__Database;
-  const authMode = (process.env.SQL_AUTH_MODE || process.env.Sql__AuthMode || '').toLowerCase();
-  const msiClientId = process.env.SQL_MSI_CLIENT_ID || process.env.Sql__MsiClientId;
-  const user = process.env.SQL_USER;
-  const password = process.env.SQL_PASSWORD;
-
-  if (!server || !database) {
-    return null;
-  }
-
-  const useManagedIdentity = authMode === 'managed-identity' || authMode === 'msi';
-  if (!useManagedIdentity && (!user || !password)) {
+  const config = buildSqlConfig();
+  if (!config) {
     return null;
   }
 
@@ -58,32 +96,24 @@ async function getSqlPool() {
     return cachedPool;
   }
 
-  const config = {
-    server,
-    database,
-    options: {
-      encrypt: true,
-      trustServerCertificate: false
-    },
-    pool: {
-      max: 10,
-      min: 0,
-      idleTimeoutMillis: 30000
-    }
-  };
-
-  if (useManagedIdentity) {
-    config.authentication = {
-      type: 'azure-active-directory-msi-app-service',
-      options: msiClientId ? { clientId: msiClientId } : {}
-    };
-  } else {
-    config.user = user;
-    config.password = password;
-  }
-
   cachedPool = await sql.connect(config);
   return cachedPool;
+}
+
+async function createSqlPoolWithAccessToken(accessToken) {
+  const normalizedToken = String(accessToken || '').trim();
+  if (!normalizedToken) {
+    throw new Error('SQL access token is required.');
+  }
+
+  const config = buildSqlConfig({ accessToken: normalizedToken });
+  if (!config) {
+    throw new Error('SQL connection is not configured.');
+  }
+
+  const pool = new sql.ConnectionPool(config);
+  await pool.connect();
+  return pool;
 }
 
 async function insertCapacitySnapshots(rows) {
@@ -1233,12 +1263,7 @@ async function getLatestLivePlacementSnapshots(desiredCount = 1, maxAgeHours = 1
   }));
 }
 
-async function ensurePhase3Schema() {
-  const pool = await getSqlPool();
-  if (!pool) {
-    throw new Error('SQL connection is not configured.');
-  }
-
+async function ensurePhase3SchemaForPool(pool) {
   await ensureSubscriptionsTableSchema(pool);
   await ensureCapacityScoreSnapshotSchema(pool);
   await ensureLivePlacementSnapshotSchema(pool);
@@ -1303,8 +1328,18 @@ async function ensurePhase3Schema() {
   return { ok: true };
 }
 
+async function ensurePhase3Schema() {
+  const pool = await getSqlPool();
+  if (!pool) {
+    throw new Error('SQL connection is not configured.');
+  }
+
+  return ensurePhase3SchemaForPool(pool);
+}
+
 module.exports = {
   getSqlPool,
+  createSqlPoolWithAccessToken,
   insertCapacitySnapshots,
   upsertSubscriptions,
   getSubscriptionsFromTable,
@@ -1326,5 +1361,6 @@ module.exports = {
   ensureDashboardSettingSchema,
   getDashboardSettings,
   upsertDashboardSettings,
+  ensurePhase3SchemaForPool,
   ensurePhase3Schema
 };

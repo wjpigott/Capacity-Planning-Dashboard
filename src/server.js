@@ -3,6 +3,7 @@ const cors = require('cors');
 const { randomUUID } = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const sql = require('mssql');
 const ExcelJS = require('exceljs');
 const dotenv = require('dotenv');
 
@@ -57,7 +58,9 @@ const {
 const { listManagementGroups, listQuotaGroups } = require('./services/quotaDiscoveryService');
 const {
   getSqlPool,
+  createSqlPoolWithAccessToken,
   ensurePhase3Schema,
+  ensurePhase3SchemaForPool,
   ensureSubscriptionsTableSchema,
   getCapacityScoreSnapshotHistory,
   insertDashboardErrorLog,
@@ -722,7 +725,9 @@ function isReactPrototypeHostAllowed(hostname = '') {
   return value.includes('localhost')
     || value.includes('127.0.0.1')
     || value.includes('-dev-')
-    || value.includes('dev');
+    || value.includes('-test-')
+    || value.includes('dev')
+    || value.includes('test');
 }
 
 function sendReactAuthGate(res) {
@@ -759,7 +764,7 @@ app.use('/react', (req, res, next) => {
     return next();
   }
 
-  return res.status(404).type('text/plain').send('React prototype is available in dev only.');
+  return res.status(404).type('text/plain').send('React prototype is available in dev and test only.');
 });
 
 app.use(express.static(path.resolve(__dirname, '..'), {
@@ -780,6 +785,141 @@ function requireIngestKey(req, res, next) {
   }
 
   next();
+}
+
+function splitSqlBatches(scriptContent = '') {
+  return String(scriptContent || '')
+    .split(/^\s*GO\s*$/gmi)
+    .map((batch) => batch.trim())
+    .filter(Boolean);
+}
+
+async function executeSqlScriptFile(pool, filePath) {
+  const scriptContent = fs.readFileSync(filePath, 'utf8');
+  const batches = splitSqlBatches(scriptContent);
+
+  for (let index = 0; index < batches.length; index += 1) {
+    try {
+      await pool.request().batch(batches[index]);
+    } catch (err) {
+      throw new Error(`Failed applying ${path.basename(filePath)} batch ${index + 1}: ${err.message}`);
+    }
+  }
+
+  return batches.length;
+}
+
+async function runDatabaseBootstrap() {
+  return runDatabaseBootstrapWithPool();
+}
+
+async function runDatabaseBootstrapWithPool(poolOverride = null) {
+  const pool = poolOverride || await getSqlPool();
+  if (!pool) {
+    throw new Error('SQL connection is not configured.');
+  }
+
+  const schemaPath = path.resolve(__dirname, '..', 'sql', 'schema.sql');
+  const migrationsDir = path.resolve(__dirname, '..', 'sql', 'migrations');
+  const migrationFiles = fs.readdirSync(migrationsDir)
+    .filter((fileName) => fileName.toLowerCase().endsWith('.sql'))
+    .sort((left, right) => left.localeCompare(right));
+
+  const existsResult = await pool.request().query(`
+    SELECT CASE WHEN OBJECT_ID('dbo.CapacitySnapshot', 'U') IS NULL THEN 0 ELSE 1 END AS hasCapacitySnapshot
+  `);
+  const hasCapacitySnapshot = Boolean(existsResult.recordset?.[0]?.hasCapacitySnapshot);
+  let appliedSchema = false;
+
+  if (!hasCapacitySnapshot) {
+    await executeSqlScriptFile(pool, schemaPath);
+    appliedSchema = true;
+  }
+
+  for (const migrationFile of migrationFiles) {
+    await executeSqlScriptFile(pool, path.resolve(migrationsDir, migrationFile));
+  }
+
+  await ensurePhase3SchemaForPool(pool);
+
+  return {
+    ok: true,
+    appliedSchema,
+    migrationsApplied: migrationFiles,
+    phase3Ensured: true
+  };
+}
+
+function normalizeDatabasePrincipalName(value, fallback = '') {
+  const normalized = String(value == null ? fallback : value).trim().replace(/^[\[]|[\]]$/g, '');
+  return normalized;
+}
+
+function normalizeDatabaseRoles(roles = [], { includeBootstrapRole = false } = {}) {
+  const allowedRoles = new Set(['db_datareader', 'db_datawriter', 'db_ddladmin']);
+  const values = Array.isArray(roles) ? roles : [roles];
+  const normalized = values
+    .map((role) => String(role || '').trim().toLowerCase())
+    .filter((role) => allowedRoles.has(role));
+
+  if (!normalized.includes('db_datareader')) {
+    normalized.push('db_datareader');
+  }
+
+  if (!normalized.includes('db_datawriter')) {
+    normalized.push('db_datawriter');
+  }
+
+  if (includeBootstrapRole && !normalized.includes('db_ddladmin')) {
+    normalized.push('db_ddladmin');
+  }
+
+  return [...new Set(normalized)];
+}
+
+async function ensureDatabasePrincipalAccess(pool, principalName, roles = []) {
+  const normalizedPrincipalName = normalizeDatabasePrincipalName(principalName);
+  if (!normalizedPrincipalName) {
+    throw new Error('Database principal name is required.');
+  }
+
+  const normalizedRoles = normalizeDatabaseRoles(roles);
+  await pool.request()
+    .input('principalName', sql.NVarChar(256), normalizedPrincipalName)
+    .query(`
+      IF NOT EXISTS (
+        SELECT 1
+        FROM sys.database_principals
+        WHERE name = @principalName
+      )
+      BEGIN
+        DECLARE @createUserSql NVARCHAR(4000) = N'CREATE USER ' + QUOTENAME(@principalName) + N' FROM EXTERNAL PROVIDER';
+        EXEC sp_executesql @createUserSql;
+      END
+    `);
+
+  for (const roleName of normalizedRoles) {
+    await pool.request()
+      .input('principalName', sql.NVarChar(256), normalizedPrincipalName)
+      .query(`
+        IF NOT EXISTS (
+          SELECT 1
+          FROM sys.database_role_members AS roleMembers
+          INNER JOIN sys.database_principals AS rolePrincipal
+            ON rolePrincipal.principal_id = roleMembers.role_principal_id
+          INNER JOIN sys.database_principals AS memberPrincipal
+            ON memberPrincipal.principal_id = roleMembers.member_principal_id
+          WHERE rolePrincipal.name = N'${roleName}'
+            AND memberPrincipal.name = @principalName
+        )
+        BEGIN
+          DECLARE @grantRoleSql NVARCHAR(4000) = N'ALTER ROLE ${roleName} ADD MEMBER ' + QUOTENAME(@principalName);
+          EXEC sp_executesql @grantRoleSql;
+        END
+      `);
+  }
+
+  return normalizedRoles;
 }
 
 app.get('/healthz', (_, res) => {
@@ -1344,6 +1484,52 @@ app.post('/internal/db/ensure-phase3-schema', requireIngestKey, async (_, res) =
     res.json(result);
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/internal/db/bootstrap', requireIngestKey, async (_, res) => {
+  try {
+    const result = await runDatabaseBootstrap();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/internal/db/bootstrap-admin', requireIngestKey, async (req, res) => {
+  const sqlAccessToken = String(req.body?.sqlAccessToken || '').trim();
+  const appIdentityName = normalizeDatabasePrincipalName(req.body?.appIdentityName, process.env.WEBSITE_SITE_NAME || '');
+  const runtimeRoles = normalizeDatabaseRoles(req.body?.runtimeRoles, {
+    includeBootstrapRole: normalizeBoolean(req.body?.grantBootstrapRole, false)
+  });
+
+  if (!sqlAccessToken) {
+    return res.status(400).json({ ok: false, error: 'sqlAccessToken is required.' });
+  }
+
+  if (!appIdentityName) {
+    return res.status(400).json({ ok: false, error: 'appIdentityName is required.' });
+  }
+
+  let adminPool;
+  try {
+    adminPool = await createSqlPoolWithAccessToken(sqlAccessToken);
+    const bootstrapResult = await runDatabaseBootstrapWithPool(adminPool);
+    const grantedRoles = await ensureDatabasePrincipalAccess(adminPool, appIdentityName, runtimeRoles);
+
+    res.json({
+      ...bootstrapResult,
+      ok: true,
+      usedAdminAccessToken: true,
+      appIdentityName,
+      grantedRoles
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  } finally {
+    if (adminPool) {
+      adminPool.close().catch(() => {});
+    }
   }
 });
 

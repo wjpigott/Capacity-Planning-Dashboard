@@ -16,13 +16,6 @@ param environment string = 'dev'
 @maxLength(12)
 param workloadSuffix string
 
-@description('SQL administrator login name')
-param sqlAdminLogin string
-
-@secure()
-@description('SQL administrator password')
-param sqlAdminPassword string
-
 @description('Microsoft Entra administrator UPN for Azure SQL')
 param sqlEntraAdminLogin string
 
@@ -56,11 +49,22 @@ param keyVaultPublicNetworkAccess string = 'Disabled'
 @description('Optional shared secret used between the dashboard web app and the worker function app')
 param workerSharedSecret string = ''
 
+@secure()
+@description('Shared secret used to authorize internal bootstrap and ingestion routes on the dashboard web app')
+param ingestApiKey string
+
+@secure()
+@description('Session secret used by the dashboard web app session middleware')
+param sessionSecret string
+
 @description('Optional subscription IDs where the dashboard web app managed identity should receive Reader access for subscription discovery and read-only ARM queries.')
 param webReaderSubscriptionIds array = []
 
 @description('Optional subscription IDs where the dashboard web app managed identity should receive GroupQuota Request Operator for quota apply writes. Include every subscription that can participate in quota moves.')
 param webQuotaWriterSubscriptionIds array = []
+
+@description('Optional management group ID used by the dashboard quota discovery UI when tenant-wide management group enumeration is not permitted.')
+param quotaManagementGroupId string = ''
 
 @description('Optional subscription IDs where the worker managed identity should receive subscription-level RBAC roles for live placement and pricing lookups.')
 param workerSubscriptionRbacSubscriptionIds array = []
@@ -272,6 +276,18 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'CAPACITY_WORKER_SHARED_SECRET'
           value: workerSharedSecret
+        }
+        {
+          name: 'INGEST_API_KEY'
+          value: ingestApiKey
+        }
+        {
+          name: 'SESSION_SECRET'
+          value: sessionSecret
+        }
+        {
+          name: 'QUOTA_MANAGEMENT_GROUP_ID'
+          value: quotaManagementGroupId
         }
         {
           name: 'NODE_ENV'

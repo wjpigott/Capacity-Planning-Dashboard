@@ -69,6 +69,13 @@ CREATE TABLE dbo.CapacityScoreSnapshot (
 );
 GO
 
+CREATE TABLE dbo.DashboardSetting (
+    settingKey NVARCHAR(128) NOT NULL PRIMARY KEY,
+    settingValue NVARCHAR(MAX) NOT NULL,
+    updatedAtUtc DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+);
+GO
+
 CREATE OR ALTER VIEW dbo.CapacityLatest AS
 WITH Ranked AS (
     SELECT

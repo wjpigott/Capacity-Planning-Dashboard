@@ -66,38 +66,7 @@ PRINT 'Updated statistics on dbo.CapacitySnapshot';
 GO
 
 ----- Create indexed view for latest capacity per family/region if not exists
-IF OBJECT_ID('dbo.CapacityLatestPerFamily', 'V') IS NULL
-BEGIN
-    CREATE VIEW dbo.CapacityLatestPerFamily
-    WITH SCHEMABINDING
-    AS
-    WITH RankedRows AS (
-        SELECT
-            region,
-            skuFamily,
-            skuName,
-            SUM(quotaCurrent) AS totalQuotaCurrent,
-            SUM(quotaLimit) AS totalQuotaLimit,
-            COUNT(DISTINCT subscriptionId) AS subscriptionCount,
-            AVG(CAST(quotaCurrent AS FLOAT) / NULLIF(CAST(quotaLimit AS FLOAT), 0)) * 100 AS avgUtilizationPct,
-            ROW_NUMBER() OVER (PARTITION BY region, skuFamily ORDER BY MAX(capturedAtUtc) DESC) AS rn
-        FROM dbo.CapacitySnapshot
-        WHERE capturedAtUtc >= DATEADD(HOUR, -24, GETUTCDATE()) -- Only last 24 hours
-        GROUP BY region, skuFamily, skuName
-    )
-    SELECT
-        region,
-        skuFamily,
-        skuName,
-        totalQuotaCurrent,
-        totalQuotaLimit,
-        (totalQuotaLimit - totalQuotaCurrent) AS totalQuotaAvailable,
-        subscriptionCount,
-        CAST(avgUtilizationPct AS INT) AS avgUtilizationPct
-    FROM RankedRows
-    WHERE rn = 1;
-    PRINT 'Created indexed view: dbo.CapacityLatestPerFamily';
-END
+PRINT 'Skipped unused CapacityLatestPerFamily view creation.';
 GO
 
 PRINT 'Migration complete: Performance indexes added successfully';

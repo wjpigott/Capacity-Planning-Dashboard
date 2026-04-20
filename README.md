@@ -270,6 +270,7 @@ Notes:
 - The deployment script already stages the correct runtime files and publishes them to `app-capdash-dev-cap001`.
 - The deployment package stages the repo's `react/` folder, root `server.js`, and root `web.config`, so a fresh pull plus redeploy publishes the current React experience and keeps `/api/*` routed to Express on Windows App Service.
 - Keep the package source-shaped. Do not ship local `node_modules`; App Service restores production dependencies during deployment.
+- `/react/` now sends `no-store` cache headers because the React shell uses stable filenames such as `react/main.js`; after a redeploy, the live environment should pick up the current React navigation without relying on a stale browser cache.
 - If `az webapp deploy` fails with `AuthorizationFailed`, refresh Azure credentials with `az login`, confirm the correct subscription with `az account show`, and make sure the signed-in identity has App Service access on the `CapacityDashboard` resource group.
 - The React experience is served from `https://app-capdash-dev-cap001.azurewebsites.net/react/`.
 - Plan the production UI around the React experience. The classic root experience is still present for compatibility, but it should not be treated as the long-term production surface.
@@ -284,6 +285,8 @@ Private or DBA-managed SQL note:
 - If Azure SQL is pre-created by a customer DBA team and exposed only through private access with Entra-only auth, do not assume the app identity can create schema objects on first start.
 - `scripts/deploy-infra.ps1` now tries two install paths: app-identity bootstrap first, then an Azure-side admin-assisted bootstrap using the current Azure CLI login if that login is an Entra SQL admin.
 - If neither path can administer the database, hand off `scripts/initialize-database.ps1` to the DBA team. That script applies `sql/schema.sql`, runs all files in `sql/migrations/`, and grants the dashboard web app identity the runtime roles it needs.
+- `dbo.DashboardSetting` is part of the provisioned schema and is also backfilled by `sql/migrations/20260420-add-dashboard-setting.sql`. Scheduler settings are expected to come from schema/bootstrap, not from opportunistic runtime table creation.
+- If the React Data Ingestion page reports that SQL scheduler settings are unavailable because `DashboardSetting` is not provisioned, rerun the database bootstrap path instead of re-enabling runtime `CREATE TABLE` behavior.
 - Example DBA handoff command:
 
 ```powershell
@@ -358,6 +361,7 @@ Notes:
 
 - SQL is configured with Microsoft Entra admin and AAD-only authentication.
 - Database bootstrap for private SQL runs through the deployed web app's internal endpoint, so the repeatable path stays inside Azure rather than relying on local SQL access.
+- The migration chain now includes `20260420-add-dashboard-setting.sql` so scheduler persistence is provisioned by bootstrap. If bootstrap stops on an earlier migration, the app falls back to runtime defaults and shows a scheduler provisioning warning instead of creating `dbo.DashboardSetting` on the fly.
 - `sqlcmd` is still required for the manual schema, migration, and sample-data scripts in `scripts/` when you intentionally run them outside the App Service bootstrap flow.
 - The Bicep template now also provisions a Function App plus storage account for the PowerShell 7 worker host.
 - The script-based deployment path now also deploys the dashboard web content, so `/react/` is available immediately after a successful run.
@@ -474,6 +478,7 @@ Approvals are required before:
 - **Auto-discover**: If `INGEST_SUBSCRIPTION_IDS` is not set, the service calls `/subscriptions` to enumerate all accessible subscriptions.
 - **Explicit list**: Set `INGEST_SUBSCRIPTION_IDS=sub-1,sub-2,sub-3` to ingest only those subscriptions.
 - **Frequency**: Use Admin -> Data Ingestion -> Scheduler Settings to store cadence in SQL (for example 30 = every 30 minutes). `INGEST_INTERVAL_MINUTES` remains the fallback default when SQL settings are unavailable.
+- **Scheduler persistence**: `Admin -> Data Ingestion -> Scheduler Settings` reads and writes `dbo.DashboardSetting`. If that table is missing, treat it as an incomplete bootstrap/migration state, not as a signal to let the app create tables during normal runtime.
 - **Batch tuning**: Subscription batch size (100) and inter-batch delay (2s) are hardcoded; adjust in `azureIngestionService.js` if needed for different ARM throttle profiles.
 
 This design avoids the performance and cost penalties of real-time API calls during dashboard queries — all filtering happens on indexed SQL tables. Batching and retry logic ensure safe ingestion at scale.

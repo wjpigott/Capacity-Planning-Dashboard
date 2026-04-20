@@ -768,6 +768,15 @@ app.use('/react', (req, res, next) => {
   return res.status(404).type('text/plain').send('React prototype is available in dev and test only.');
 });
 
+app.use('/react', (req, res, next) => {
+  // React assets are served with stable filenames, so disable browser caching
+  // to keep dev and test aligned immediately after a deployment.
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  next();
+});
+
 app.use(express.static(path.resolve(__dirname, '..'), {
   index: false
 }));

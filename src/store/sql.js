@@ -1342,7 +1342,6 @@ async function ensurePhase3SchemaForPool(pool) {
   await ensureLivePlacementSnapshotSchema(pool);
   await ensureDashboardErrorLogSchema(pool);
   await ensureDashboardOperationLogSchema(pool);
-  await ensureDashboardSettingSchema(pool);
 
   const alterScript = `
     IF COL_LENGTH('dbo.CapacitySnapshot', 'subscriptionId') IS NULL

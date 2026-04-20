@@ -1360,6 +1360,7 @@ function App() {
   const [quotaState, setQuotaState] = useState({ managementGroups: [], selectedManagementGroup: '', quotaGroups: [], selectedQuotaGroup: 'all', candidates: [], quotaRuns: [], selectedAnalysisRunId: '', selectedDonorSubscriptionId: '', selectedMoveCandidate: null, requestedTransferAmount: 0, planRows: [], impactRows: [], applyResults: [], planSummary: {}, candidateFilters: { subscriptionId: 'all', region: 'all', family: '', intent: 'all' }, status: { tone: 'info', message: 'Quota tools ready.' }, busy: { discover: false, generate: false, capture: false, refresh: false, refreshRuns: false, plan: false, simulate: false, apply: false } });
   const [showSqlPreview, setShowSqlPreview] = useState(false);
   const [sqlPreviewState, setSqlPreviewState] = useState({ loading: false, error: '', rows: [] });
+  const [uiSettingsBusy, setUiSettingsBusy] = useState(false);
 
   const queryFilters = useMemo(() => ({
     regionPreset: filters.regionPreset,
@@ -1439,11 +1440,13 @@ function App() {
         const requests = [fetchJson('/api/subscriptions?limit=500')];
         if (authContext && authContext.canAccessAdmin) {
           requests.push(fetchJson('/api/quota/management-groups'));
+          requests.push(fetchJson('/api/admin/ui-settings'));
         }
 
         const responses = await Promise.all(requests);
         const subscriptionPayload = responses[0] || { rows: [] };
         const managementGroupPayload = responses[1] || { groups: [], defaultManagementGroupId: '' };
+        const uiSettingsPayload = responses[2] || { settings: { showSqlPreview: false } };
         const subscriptions = Array.isArray(subscriptionPayload.rows) ? subscriptionPayload.rows : [];
         setSubscriptionOptions(subscriptions);
         setSelectedSubscriptionIds(subscriptions.map((row) => row.subscriptionId).filter(Boolean));
@@ -1452,6 +1455,7 @@ function App() {
           ? managementGroupPayload.defaultManagementGroupId
           : (managementGroups[0] ? managementGroups[0].id : '');
         setQuotaState((current) => ({ ...current, managementGroups, selectedManagementGroup }));
+        setShowSqlPreview(Boolean(uiSettingsPayload.settings && uiSettingsPayload.settings.showSqlPreview));
         setAppStatus({ tone: 'success', message: 'React v2 playground loaded. Use the right-side flyout to manage large filter sets.' });
       } catch (error) {
         setAppStatus({ tone: 'error', message: error.message || 'Failed to initialize React experience.' });
@@ -1711,6 +1715,25 @@ function App() {
       setRecommendState((current) => ({ ...current, result: payload.result || null, busy: false, status: { tone: 'success', message: `Recommendation completed. ${count} alternative SKU(s) returned.` } }));
     } catch (error) {
       setRecommendState((current) => ({ ...current, result: null, busy: false, status: { tone: 'error', message: error.message || 'Failed to run recommendations.' } }));
+    }
+  }
+
+  async function handleShowSqlPreviewChange(nextValue) {
+    if (!auth?.canAccessAdmin) {
+      return;
+    }
+
+    setUiSettingsBusy(true);
+    try {
+      const payload = await fetchJson('/api/admin/ui-settings', {
+        method: 'PUT',
+        body: JSON.stringify({ showSqlPreview: nextValue })
+      });
+      setShowSqlPreview(Boolean(payload.settings && payload.settings.showSqlPreview));
+    } catch (error) {
+      setAppStatus({ tone: 'error', message: error.message || 'Failed to save SQL preview preference.' });
+    } finally {
+      setUiSettingsBusy(false);
     }
   }
 
@@ -2012,7 +2035,7 @@ function App() {
               <button className="rx-button rx-button--secondary" type="button" disabled={Boolean(exportBusyFormat)} onClick={() => downloadCapacityExport('csv')}>{exportBusyFormat === 'csv' ? 'Exporting CSV...' : 'Export CSV'}</button>
               <button className="rx-button rx-button--secondary" type="button" disabled={Boolean(exportBusyFormat)} onClick={() => downloadCapacityExport('xlsx')}>{exportBusyFormat === 'xlsx' ? 'Exporting Excel...' : 'Export Excel'}</button>
             </> : null}
-            {auth?.canAccessAdmin ? <label className="rx-check rx-check--sql-toggle"><input type="checkbox" checked={showSqlPreview} onChange={(event) => setShowSqlPreview(event.target.checked)} />Show SQL</label> : null}
+            {auth?.canAccessAdmin ? <label className="rx-check rx-check--sql-toggle"><input type="checkbox" checked={showSqlPreview} disabled={uiSettingsBusy} onChange={(event) => handleShowSqlPreviewChange(event.target.checked)} />Show SQL</label> : null}
             <div className="rx-user-chip">
               <strong>{auth?.name || 'Loading user...'}</strong>
               <small>{auth?.username || 'No Entra context yet'}</small>

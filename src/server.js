@@ -78,7 +78,8 @@ const DASHBOARD_SETTING_KEYS = {
   ingestIntervalMinutes: 'schedule.ingest.intervalMinutes',
   ingestRunOnStartup: 'schedule.ingest.runOnStartup',
   livePlacementIntervalMinutes: 'schedule.livePlacement.intervalMinutes',
-  livePlacementRunOnStartup: 'schedule.livePlacement.runOnStartup'
+  livePlacementRunOnStartup: 'schedule.livePlacement.runOnStartup',
+  showSqlPreview: 'ui.showSqlPreview'
 };
 
 function normalizeIntervalMinutes(value, fallback = 0) {
@@ -543,6 +544,46 @@ async function saveSchedulerSettings(settings = {}) {
 
   if (savedCount < 4) {
     throw new Error('SQL scheduler settings could not be saved. Verify SQL connectivity and permissions.');
+  }
+
+  return normalized;
+}
+
+function getDefaultUiSettings() {
+  return {
+    showSqlPreview: false
+  };
+}
+
+function parseUiSettingsFromDb(dbMap = {}) {
+  const defaults = getDefaultUiSettings();
+  const showSqlPreview = dbMap[DASHBOARD_SETTING_KEYS.showSqlPreview];
+
+  return {
+    showSqlPreview: normalizeBoolean(showSqlPreview ? showSqlPreview.value : defaults.showSqlPreview, defaults.showSqlPreview)
+  };
+}
+
+async function getEffectiveUiSettings() {
+  try {
+    const dbSettings = await getDashboardSettings('ui.');
+    return parseUiSettingsFromDb(dbSettings);
+  } catch {
+    return getDefaultUiSettings();
+  }
+}
+
+async function saveUiSettings(settings = {}) {
+  const normalized = {
+    showSqlPreview: normalizeBoolean(settings?.showSqlPreview, false)
+  };
+
+  const savedCount = await upsertDashboardSettings({
+    [DASHBOARD_SETTING_KEYS.showSqlPreview]: normalized.showSqlPreview ? 'true' : 'false'
+  });
+
+  if (savedCount < 1) {
+    throw new Error('SQL UI settings could not be saved. Verify SQL connectivity and permissions.');
   }
 
   return normalized;
@@ -1151,6 +1192,26 @@ app.get('/api/admin/ingest/schedule', requireAdmin, async (_, res) => {
     res.json({ ok: true, settings: persisted, runtime });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message || 'Failed to load scheduler settings.' });
+  }
+});
+
+app.get('/api/admin/ui-settings', requireAdmin, async (_, res) => {
+  try {
+    const settings = await getEffectiveUiSettings();
+    res.json({ ok: true, settings });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message || 'Failed to load UI settings.' });
+  }
+});
+
+app.put('/api/admin/ui-settings', requireAdmin, async (req, res) => {
+  try {
+    const settings = await saveUiSettings({
+      showSqlPreview: req.body?.showSqlPreview
+    });
+    res.json({ ok: true, settings });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message || 'Failed to save UI settings.' });
   }
 });
 

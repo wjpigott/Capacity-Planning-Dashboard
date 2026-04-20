@@ -1,0 +1,79 @@
+<mxfile host="app.diagrams.net" modified="2026-04-20T00:00:00.000Z" agent="GitHub Copilot" version="24.7.17" type="device">
+  <diagram id="reporting-runtime-architecture" name="Reporting Runtime Architecture">
+    <mxGraphModel dx="1800" dy="1200" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2200" pageHeight="1400" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="laneClients" value="Client Experiences" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#0E7490;fillColor=#ECFEFF;fontStyle=1;align=left;verticalAlign=top;spacingTop=10;fontSize=22;" vertex="1" parent="1">
+          <mxGeometry x="40" y="120" width="480" height="1020" as="geometry"/>
+        </mxCell>
+        <mxCell id="laneApi" value="Node and Express App Service" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#166534;fillColor=#ECFDF5;fontStyle=1;align=left;verticalAlign=top;spacingTop=10;fontSize=22;" vertex="1" parent="1">
+          <mxGeometry x="580" y="120" width="760" height="1020" as="geometry"/>
+        </mxCell>
+        <mxCell id="laneData" value="SQL and Platform Data" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#7C3AED;fillColor=#F5F3FF;fontStyle=1;align=left;verticalAlign=top;spacingTop=10;fontSize=22;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="120" width="740" height="1020" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="user" value="Capacity Analysts and Admins" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#0369A1;fillColor=#BAE6FD;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="90" y="190" width="260" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="reactUi" value="React UI&#xa;/react/&#xa;Reporting views + admin tools&#xa;Show SQL toggle" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#0F766E;fillColor=#A7F3D0;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="90" y="350" width="340" height="150" as="geometry"/>
+        </mxCell>
+        <mxCell id="classicUi" value="Classic UI&#xa;/&#xa;Legacy report rendering&#xa;Parity reference for Region Matrix" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#0E7490;fillColor=#CCFBF1;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="90" y="560" width="340" height="150" as="geometry"/>
+        </mxCell>
+        <mxCell id="browserNotes" value="Both experiences use the same auth session and backend filters: region preset, subscriptions, family, availability, resource type." style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#0891B2;fillColor=#E0F2FE;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="90" y="790" width="360" height="150" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="appService" value="Azure App Service&#xa;Static assets + Express runtime&#xa;Managed identity + Entra session auth" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#15803D;fillColor=#BBF7D0;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="650" y="180" width="360" height="140" as="geometry"/>
+        </mxCell>
+        <mxCell id="routes" value="Report Routes&#xa;/api/capacity&#xa;/api/capacity/paged&#xa;/api/capacity/trends&#xa;/api/capacity/families&#xa;/api/capacity/scores" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#166534;fillColor=#DCFCE7;fontSize=19;" vertex="1" parent="1">
+          <mxGeometry x="650" y="390" width="300" height="250" as="geometry"/>
+        </mxCell>
+        <mxCell id="adminRoutes" value="Admin Routes&#xa;/api/admin/sql-preview&#xa;/api/admin/ui-settings&#xa;/api/admin/ingest/*&#xa;/api/quota/*" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#166534;fillColor=#DCFCE7;fontSize=19;" vertex="1" parent="1">
+          <mxGeometry x="1010" y="390" width="270" height="250" as="geometry"/>
+        </mxCell>
+        <mxCell id="services" value="Service Layer&#xa;capacityService&#xa;sqlPreviewService&#xa;quota and ingestion services" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#15803D;fillColor=#BBF7D0;fontSize=20;" vertex="1" parent="1">
+          <mxGeometry x="650" y="730" width="290" height="180" as="geometry"/>
+        </mxCell>
+        <mxCell id="settingsFlow" value="UI Preference Flow&#xa;Admin checks Show SQL&#xa;React calls PUT /api/admin/ui-settings&#xa;Server writes ui.showSqlPreview to DashboardSetting&#xa;React reload uses GET /api/admin/ui-settings" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#65A30D;fillColor=#ECFCCB;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="980" y="730" width="300" height="220" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="sqlDb" value="Azure SQL Database" style="shape=cylinder;whiteSpace=wrap;html=1;boundedLbl=1;strokeColor=#6D28D9;fillColor=#DDD6FE;fontSize=22;" vertex="1" parent="1">
+          <mxGeometry x="1680" y="180" width="180" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="currentViews" value="Current reporting tables and views&#xa;CapacitySnapshot&#xa;CapacityLatest&#xa;CapacityScoreSnapshot&#xa;LivePlacementSnapshot&#xa;QuotaCandidateSnapshot" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#7C3AED;fillColor=#EDE9FE;fontSize=19;" vertex="1" parent="1">
+          <mxGeometry x="1510" y="390" width="300" height="250" as="geometry"/>
+        </mxCell>
+        <mxCell id="opsTables" value="Operational tables&#xa;DashboardSetting&#xa;DashboardOperationLog&#xa;DashboardErrorLog&#xa;Subscriptions" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#7C3AED;fillColor=#EDE9FE;fontSize=19;" vertex="1" parent="1">
+          <mxGeometry x="1850" y="390" width="220" height="250" as="geometry"/>
+        </mxCell>
+        <mxCell id="previewNotes" value="SQL Preview is metadata only.&#xa;It explains which SQL-backed rowset feeds a view and where any in-memory shaping happens, such as Region Matrix column layout." style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#8B5CF6;fillColor=#F5F3FF;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="1510" y="730" width="560" height="160" as="geometry"/>
+        </mxCell>
+        <mxCell id="platform" value="Platform integrations&#xa;Entra auth for users and SQL&#xa;Managed identity for app access&#xa;Azure deployment scripts publish the same runtime" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#1D4ED8;fillColor=#DBEAFE;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="1510" y="960" width="560" height="130" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e1" value="Uses" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=3;fontSize=16;" edge="1" parent="1" source="user" target="reactUi"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e2" value="Uses" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=3;fontSize=16;" edge="1" parent="1" source="user" target="classicUi"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e3" value="HTTPS" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=3;fontSize=16;" edge="1" parent="1" source="reactUi" target="appService"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e4" value="HTTPS" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=3;fontSize=16;" edge="1" parent="1" source="classicUi" target="appService"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e5" value="Serves" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=3;fontSize=16;" edge="1" parent="1" source="appService" target="routes"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e6" value="Serves" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=3;fontSize=16;" edge="1" parent="1" source="appService" target="adminRoutes"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e7" value="Calls" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=3;fontSize=16;" edge="1" parent="1" source="routes" target="services"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e8" value="Calls" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=3;fontSize=16;" edge="1" parent="1" source="adminRoutes" target="services"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e9" value="Managed identity and Entra SQL auth" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=3;fontSize=16;" edge="1" parent="1" source="services" target="sqlDb"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e10" value="Reads report rowsets" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=3;fontSize=16;" edge="1" parent="1" source="sqlDb" target="currentViews"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e11" value="Reads and writes admin settings" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=3;fontSize=16;" edge="1" parent="1" source="settingsFlow" target="opsTables"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e12" value="Explains source SQL" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=3;fontSize=16;" edge="1" parent="1" source="adminRoutes" target="previewNotes"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e13" value="Documents runtime" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=3;fontSize=16;" edge="1" parent="1" source="browserNotes" target="settingsFlow"><mxGeometry relative="1" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -113,6 +113,25 @@ function buildCapacityPreview(filters = {}) {
   ];
 }
 
+function buildRegionMatrixPreview(filters = {}) {
+  return buildCapacityPreview(filters).map((item, index) => {
+    if (index !== 0) {
+      return item;
+    }
+
+    return {
+      ...item,
+      title: 'Region Matrix Source Rows',
+      endpoint: '/api/capacity -> in-memory matrix derivation',
+      notes: [
+        'Region Matrix reads the filtered CapacityLatest rowset from SQL through /api/capacity.',
+        'The family-by-region matrix cells are then derived in memory in the React client from those SQL-backed rows; it does not call a separate live API.',
+        ...item.notes
+      ]
+    };
+  });
+}
+
 function buildTrendPreview(filters = {}) {
   const common = buildCommonFilterPreview(filters);
   const daysBack = Math.max(1, Math.min(Number(filters.days || 7), 30));
@@ -309,9 +328,10 @@ function buildSqlPreviewForView(view, filters = {}) {
     case 'capacity-grid':
       return buildCapacityPreview(filters);
     case 'region-health':
+    case 'region-matrix':
     case 'sku-chart':
     case 'family-summary':
-      return buildCapacityPreview(filters);
+      return view === 'region-matrix' ? buildRegionMatrixPreview(filters) : buildCapacityPreview(filters);
     case 'trend':
       return buildTrendPreview({ ...filters, days: filters.days || 7 });
     case 'capacity-score':

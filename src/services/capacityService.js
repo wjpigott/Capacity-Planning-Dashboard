@@ -457,6 +457,66 @@ async function getCapacityTrends(filters) {
     ];
   }
 
+  if (filters.resourceType && filters.resourceType !== 'all') {
+    const request = pool.request();
+    request.input('daysBack', days);
+
+    let query = `
+      SELECT
+        CONVERT(varchar(10), CAST(capturedAtUtc AS date), 23) AS [day],
+        skuFamily,
+        skuName,
+        availabilityState,
+        quotaLimit,
+        quotaCurrent,
+        region,
+        subscriptionId
+      FROM dbo.CapacitySnapshot
+      WHERE capturedAtUtc >= DATEADD(day, -@daysBack, SYSUTCDATETIME())
+    `;
+
+    query += appendCommonSqlFilters(filters, request);
+    query += `
+      ORDER BY [day] ASC
+    `;
+
+    const result = await request.query(query);
+    const grouped = new Map();
+
+    result.recordset.forEach((record) => {
+      const normalizedRow = normalizeCapacityRow({
+        day: record.day,
+        family: record.skuFamily,
+        sku: record.skuName,
+        availability: record.availabilityState,
+        quotaLimit: Number(record.quotaLimit || 0),
+        quotaCurrent: Number(record.quotaCurrent || 0),
+        region: record.region,
+        subscriptionId: record.subscriptionId
+      });
+
+      if (!applyFilters([normalizedRow], filters).length) {
+        return;
+      }
+
+      const current = grouped.get(record.day) || {
+        day: record.day,
+        totalRows: 0,
+        constrainedRows: 0,
+        totalQuotaAvailable: 0
+      };
+
+      current.totalRows += 1;
+      if (normalizedRow.availability === 'CONSTRAINED') {
+        current.constrainedRows += 1;
+      }
+      current.totalQuotaAvailable += normalizedRow.quotaLimit - normalizedRow.quotaCurrent;
+      grouped.set(record.day, current);
+    });
+
+    return [...grouped.values()].sort((left, right) => String(left.day).localeCompare(String(right.day)));
+  }
+
   const request = pool.request();
   request.input('daysBack', days);
 

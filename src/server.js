@@ -35,6 +35,7 @@ const {
   getCapacityScoreSummary,
   getCapacityScoreSummaryPaginated
 } = require('./services/capacityService');
+const { buildSqlPreviewForView } = require('./services/sqlPreviewService');
 const {
   getLivePlacementScoreRows,
   getCapacityRecommendations,
@@ -984,6 +985,30 @@ app.get('/api/capacity/subscriptions', async (req, res) => {
   }
 });
 
+app.get('/api/admin/sql-preview', requireAdmin, async (req, res) => {
+  try {
+    const rows = buildSqlPreviewForView(req.query.view, {
+      pageNumber: req.query.pageNumber,
+      pageSize: req.query.pageSize,
+      days: req.query.days,
+      desiredCount: req.query.desiredCount,
+      regionPreset: req.query.regionPreset,
+      subscriptionIds: req.query.subscriptionIds,
+      region: req.query.region,
+      family: req.query.family,
+      quotaName: req.query.quotaName,
+      availability: req.query.availability,
+      resourceType: req.query.resourceType,
+      managementGroupId: req.query.managementGroupId,
+      groupQuotaName: req.query.groupQuotaName,
+      analysisRunId: req.query.analysisRunId
+    });
+    res.json({ rows });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to build SQL preview', detail: err.message });
+  }
+});
+
 app.get('/api/capacity/trends', async (req, res) => {
   try {
     const rows = await getCapacityTrends({
@@ -992,7 +1017,8 @@ app.get('/api/capacity/trends', async (req, res) => {
       subscriptionIds: req.query.subscriptionIds,
       region: req.query.region,
       family: req.query.family,
-      availability: req.query.availability
+      availability: req.query.availability,
+      resourceType: req.query.resourceType
     });
     res.json({ rows });
   } catch (err) {

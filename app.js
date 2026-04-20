@@ -198,6 +198,8 @@ const quotaCandidatesGridBody = document.querySelector('#quotaCandidatesGrid tbo
 const quotaPlanGridBody = document.querySelector('#quotaPlanGrid tbody');
 const quotaSimulationGridBody = document.querySelector('#quotaSimulationGrid tbody');
 const trendGridBody = document.querySelector('#trendGrid tbody');
+const trendQuotaChart = document.querySelector('#trendQuotaChart');
+const trendObservationChart = document.querySelector('#trendObservationChart');
 const familySummaryGridBody = document.querySelector('#familySummaryGrid tbody');
 const familySummaryEmpty = document.querySelector('#familySummaryEmpty');
 const capacityScoreGridBody = document.querySelector('#capacityScoreGrid tbody');
@@ -1922,11 +1924,38 @@ function renderTrends(trendRows) {
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${row.day}</td>
-      <td>${row.totalRows}</td>
-      <td>${row.constrainedRows}</td>
-      <td>${row.totalQuotaAvailable}</td>
+      <td>${Number(row.totalRows || 0).toLocaleString()}</td>
+      <td>${Number(row.constrainedRows || 0).toLocaleString()}</td>
+      <td>${Number(row.totalQuotaAvailable || 0).toLocaleString()}</td>
     `;
     trendGridBody.appendChild(tr);
+  });
+
+  renderTrendLineChart(trendQuotaChart, trendRows, {
+    title: 'Total Quota Available',
+    series: [
+      {
+        key: 'totalQuotaAvailable',
+        label: 'Quota Available',
+        color: '#0063b1'
+      }
+    ]
+  });
+
+  renderTrendLineChart(trendObservationChart, trendRows, {
+    title: 'Observation Counts',
+    series: [
+      {
+        key: 'totalRows',
+        label: 'Total SKU Observations',
+        color: '#19793a'
+      },
+      {
+        key: 'constrainedRows',
+        label: 'Constrained Observations',
+        color: '#c75a00'
+      }
+    ]
   });
 }
 
@@ -2333,6 +2362,102 @@ function renderBarChart(host, items, options = {}) {
     `;
     host.appendChild(row);
   });
+}
+
+function formatCompactNumber(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return 'n/a';
+  }
+
+  return new Intl.NumberFormat(undefined, {
+    notation: 'compact',
+    maximumFractionDigits: numeric >= 100 ? 0 : 1
+  }).format(numeric);
+}
+
+function formatShortDay(value) {
+  if (!value) {
+    return 'n/a';
+  }
+
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric'
+  });
+}
+
+function renderTrendLineChart(host, rows, options = {}) {
+  if (!host) {
+    return;
+  }
+
+  host.innerHTML = '';
+
+  const scopedRows = Array.isArray(rows) ? rows : [];
+  const series = Array.isArray(options.series) ? options.series : [];
+  if (scopedRows.length === 0 || series.length === 0) {
+    host.innerHTML = '<div class="inline-note">No trend history rows available.</div>';
+    return;
+  }
+
+  const width = 920;
+  const height = 276;
+  const margin = { top: 16, right: 20, bottom: 34, left: 58 };
+  const innerWidth = width - margin.left - margin.right;
+  const innerHeight = height - margin.top - margin.bottom;
+  const maxValue = Math.max(1, ...scopedRows.flatMap((row) => series.map((item) => Number(row?.[item.key] || 0))));
+  const tickCount = 4;
+  const xStep = scopedRows.length > 1 ? innerWidth / (scopedRows.length - 1) : 0;
+
+  const legend = document.createElement('div');
+  legend.className = 'trend-chart-legend';
+  legend.innerHTML = series.map((item) => `
+    <div class="trend-chart-legend__item">
+      <span class="trend-chart-legend__swatch" style="background:${item.color}"></span>
+      <strong>${escapeHtml(item.label)}</strong>
+      <span>${escapeHtml(formatCompactNumber(scopedRows[scopedRows.length - 1]?.[item.key]))}</span>
+    </div>
+  `).join('');
+
+  const svgParts = [];
+  for (let index = 0; index <= tickCount; index += 1) {
+    const value = (maxValue / tickCount) * index;
+    const y = margin.top + innerHeight - (value / maxValue) * innerHeight;
+    svgParts.push(`<line class="trend-line-chart__grid" x1="${margin.left}" y1="${y}" x2="${width - margin.right}" y2="${y}"></line>`);
+    svgParts.push(`<text class="trend-line-chart__tick" x="${margin.left - 10}" y="${y + 4}" text-anchor="end">${escapeHtml(formatCompactNumber(value))}</text>`);
+  }
+
+  series.forEach((item) => {
+    const points = scopedRows.map((row, index) => {
+      const value = Number(row?.[item.key] || 0);
+      const x = margin.left + (scopedRows.length === 1 ? innerWidth / 2 : xStep * index);
+      const y = margin.top + innerHeight - (value / maxValue) * innerHeight;
+      return { x, y, value, day: row.day };
+    });
+
+    svgParts.push(`<polyline class="trend-line-chart__line" fill="none" stroke="${item.color}" stroke-width="3" points="${points.map((point) => `${point.x},${point.y}`).join(' ')}"></polyline>`);
+    points.forEach((point) => {
+      svgParts.push(`<circle cx="${point.x}" cy="${point.y}" r="4" fill="${item.color}"><title>${escapeHtml(`${item.label}: ${Number(point.value || 0).toLocaleString()} on ${point.day}`)}</title></circle>`);
+    });
+  });
+
+  scopedRows.forEach((row, index) => {
+    const x = margin.left + (scopedRows.length === 1 ? innerWidth / 2 : xStep * index);
+    svgParts.push(`<text class="trend-line-chart__tick trend-line-chart__tick--x" x="${x}" y="${height - 10}" text-anchor="middle">${escapeHtml(formatShortDay(row.day))}</text>`);
+  });
+
+  const chart = document.createElement('div');
+  chart.className = 'trend-line-chart__canvas';
+  chart.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(options.title || 'Trend chart')}">${svgParts.join('')}</svg>`;
+
+  host.appendChild(legend);
+  host.appendChild(chart);
 }
 
 function parseRegionListInput(rawValue) {

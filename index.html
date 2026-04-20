@@ -444,7 +444,29 @@
             <div class="report-explainer">
               <strong>Report Key</strong>
               <span>This view tracks the recent SQL snapshots for the current filter scope.</span>
+              <span>The API applies the active region preset, specific region, selected subscriptions, family, and availability filters first, then groups <strong>dbo.CapacitySnapshot</strong> by day.</span>
               <span><strong>Total SKU Observations</strong> is the number of stored observations for that day, while <strong>Total Quota Available</strong> is the summed headroom across those observations.</span>
+              <span>Large day-to-day swings usually mean a different number of snapshot rows were captured on that day, not that the React client changed the region filter.</span>
+            </div>
+            <div class="trend-chart-stack">
+              <section class="trend-chart-panel">
+                <div class="trend-chart-panel__header">
+                  <div>
+                    <h4>Quota Available Over Time</h4>
+                    <p>Daily summed headroom for the current filter scope.</p>
+                  </div>
+                </div>
+                <div id="trendQuotaChart" class="trend-line-chart"></div>
+              </section>
+              <section class="trend-chart-panel">
+                <div class="trend-chart-panel__header">
+                  <div>
+                    <h4>Snapshot Volume Context</h4>
+                    <p>Use this to see whether lower totals simply came from fewer captured observations that day.</p>
+                  </div>
+                </div>
+                <div id="trendObservationChart" class="trend-line-chart"></div>
+              </section>
             </div>
             <table id="trendGrid">
               <thead>

@@ -219,6 +219,7 @@ az webapp deploy \
 Verification checks after deploy:
 
 - `curl.exe -i -s https://app-capdash-dev-cap001.azurewebsites.net/`
+- `curl.exe -i -s https://app-capdash-dev-cap001.azurewebsites.net/react/`
 - `curl.exe -i -s https://app-capdash-dev-cap001.azurewebsites.net/api/auth/me`
 
 Expected behavior:
@@ -226,6 +227,21 @@ Expected behavior:
 - Deployment should complete in roughly seconds to a small number of minutes, not stall on a huge upload.
 - The clean package should stay small; the last known good package was about 456 KB.
 - If deployment is slow or fails during extraction, inspect the zip contents first before retrying.
+
+Recommended dev publish workflow:
+
+```powershell
+az login
+az account show --output table
+az account set --subscription "<subscription-name-or-id>"
+./deploy-web-app.ps1
+```
+
+Notes:
+
+- The deployment script already stages the correct runtime files and publishes them to `app-capdash-dev-cap001`.
+- If `az webapp deploy` fails with `AuthorizationFailed`, refresh Azure credentials with `az login`, confirm the correct subscription with `az account show`, and make sure the signed-in identity has App Service access on the `CapacityDashboard` resource group.
+- The React experience is served from `https://app-capdash-dev-cap001.azurewebsites.net/react/`.
 
 **Capacity Recommender configuration:**
 

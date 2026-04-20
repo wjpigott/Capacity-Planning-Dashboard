@@ -308,11 +308,21 @@ function matrixStatusMeta(status) {
   return { short: '✗ BLOCKED', description: 'Cannot deploy. Pick a different region or SKU.' };
 }
 
-function regionMatrixRows(rows, selectedRegion) {
+function regionMatrixRows(rows, selectedRegion, presetRegions) {
   const scopedRows = (rows || []).filter((row) => rowMatchesResourceType(row, 'Compute'));
   const regions = selectedRegion && selectedRegion !== 'all'
     ? [selectedRegion]
-    : [...new Set(scopedRows.map((row) => String(row.region || '').trim().toLowerCase()).filter(Boolean))].sort();
+    : (() => {
+      const normalizedPresetRegions = (Array.isArray(presetRegions) ? presetRegions : [])
+        .map((region) => String(region || '').trim().toLowerCase())
+        .filter(Boolean);
+
+      if (normalizedPresetRegions.length > 0) {
+        return [...new Set(normalizedPresetRegions)].sort();
+      }
+
+      return [...new Set(scopedRows.map((row) => String(row.region || '').trim().toLowerCase()).filter(Boolean))].sort();
+    })();
   const familyMap = new Map();
 
   scopedRows.forEach((row) => {
@@ -555,6 +565,261 @@ function DataTable({ title, subtitle, columns, rows, emptyMessage, tableClassNam
   );
 }
 
+function SqlPreviewPanel({ activeViewLabel, loading, error, rows }) {
+  const items = Array.isArray(rows) ? rows : [];
+
+  return (
+    <section className="rx-panel rx-panel--compact rx-panel--sql-preview">
+      <div className="rx-panel__header">
+        <div>
+          <h2>SQL Preview</h2>
+          <p>Queries behind the current {activeViewLabel || 'view'} for Power BI validation and report design.</p>
+        </div>
+      </div>
+      {loading ? <div className="rx-empty">Loading SQL preview...</div> : null}
+      {!loading && error ? <div className="rx-empty">{error}</div> : null}
+      {!loading && !error && items.length === 0 ? <div className="rx-empty">No SQL preview rows available.</div> : null}
+      {!loading && !error && items.length > 0 ? (
+        <div className="rx-sql-preview-stack">
+          {items.map((item, index) => (
+            <article key={`${item.title}-${index}`} className="rx-sql-card">
+              <div className="rx-sql-card__meta">
+                <strong>{item.title}</strong>
+                <span>{item.endpoint}</span>
+              </div>
+              <pre className="rx-sql-card__query">{item.query}</pre>
+              <div className="rx-sql-card__params">
+                <strong>Parameters</strong>
+                <code>{JSON.stringify(item.params || {}, null, 2)}</code>
+              </div>
+              {Array.isArray(item.notes) && item.notes.length > 0 ? (
+                <div className="rx-sql-card__notes">
+                  {item.notes.map((note, noteIndex) => <p key={noteIndex}>{note}</p>)}
+                </div>
+              ) : null}
+            </article>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function formatCompactNumber(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return 'n/a';
+  }
+
+  return new Intl.NumberFormat(undefined, {
+    notation: 'compact',
+    maximumFractionDigits: numeric >= 100 ? 0 : 1
+  }).format(numeric);
+}
+
+function formatShortDay(value) {
+  if (!value) {
+    return 'n/a';
+  }
+
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric'
+  });
+}
+
+function TrendLineChart({ title, subtitle, rows, series, emptyMessage }) {
+  const scopedRows = Array.isArray(rows) ? rows : [];
+  const chartSeries = Array.isArray(series) ? series : [];
+
+  if (scopedRows.length === 0 || chartSeries.length === 0) {
+    return (
+      <section className="rx-panel rx-panel--compact">
+        <div className="rx-panel__header">
+          <div>
+            <h2>{title}</h2>
+            {subtitle ? <p>{subtitle}</p> : null}
+          </div>
+        </div>
+        <div className="rx-empty">{emptyMessage || 'No trend history rows available.'}</div>
+      </section>
+    );
+  }
+
+  const width = 920;
+  const height = 276;
+  const margin = { top: 16, right: 20, bottom: 34, left: 58 };
+  const innerWidth = width - margin.left - margin.right;
+  const innerHeight = height - margin.top - margin.bottom;
+  const maxValue = Math.max(1, ...scopedRows.flatMap((row) => chartSeries.map((item) => Number(item.getValue(row) || 0))));
+  const tickCount = 4;
+  const yTicks = Array.from({ length: tickCount + 1 }, (_, index) => {
+    const value = (maxValue / tickCount) * index;
+    const y = margin.top + innerHeight - (value / maxValue) * innerHeight;
+    return { value, y };
+  });
+  const xStep = scopedRows.length > 1 ? innerWidth / (scopedRows.length - 1) : 0;
+
+  return (
+    <section className="rx-panel rx-panel--compact">
+      <div className="rx-panel__header">
+        <div>
+          <h2>{title}</h2>
+          {subtitle ? <p>{subtitle}</p> : null}
+        </div>
+      </div>
+      <div className="rx-trend-legend">
+        {chartSeries.map((item) => (
+          <div key={item.key} className="rx-trend-legend__item">
+            <span className="rx-trend-legend__swatch" style={{ backgroundColor: item.color }}></span>
+            <strong>{item.label}</strong>
+            <span>{formatCompactNumber(item.getValue(scopedRows[scopedRows.length - 1]))}</span>
+          </div>
+        ))}
+      </div>
+      <div className="rx-trend-chart">
+        <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={title}>
+          {yTicks.map((tick) => (
+            <g key={tick.value}>
+              <line className="rx-trend-chart__grid" x1={margin.left} x2={width - margin.right} y1={tick.y} y2={tick.y}></line>
+              <text className="rx-trend-chart__tick" x={margin.left - 10} y={tick.y + 4} textAnchor="end">{formatCompactNumber(tick.value)}</text>
+            </g>
+          ))}
+          {chartSeries.map((item) => {
+            const points = scopedRows.map((row, index) => {
+              const value = Number(item.getValue(row) || 0);
+              const x = margin.left + (scopedRows.length === 1 ? innerWidth / 2 : xStep * index);
+              const y = margin.top + innerHeight - (value / maxValue) * innerHeight;
+              return { x, y, value, day: row.day };
+            });
+
+            return (
+              <g key={item.key}>
+                <polyline
+                  className="rx-trend-chart__line"
+                  fill="none"
+                  stroke={item.color}
+                  strokeWidth="3"
+                  points={points.map((point) => `${point.x},${point.y}`).join(' ')}
+                ></polyline>
+                {points.map((point) => (
+                  <g key={`${item.key}-${point.day}`}>
+                    <circle cx={point.x} cy={point.y} r="4" fill={item.color}></circle>
+                    <title>{`${item.label}: ${formatNumber(point.value)} on ${point.day}`}</title>
+                  </g>
+                ))}
+              </g>
+            );
+          })}
+          {scopedRows.map((row, index) => {
+            const x = margin.left + (scopedRows.length === 1 ? innerWidth / 2 : xStep * index);
+            return (
+              <text key={row.day} className="rx-trend-chart__tick rx-trend-chart__tick--x" x={x} y={height - 10} textAnchor="middle">{formatShortDay(row.day)}</text>
+            );
+          })}
+        </svg>
+      </div>
+    </section>
+  );
+}
+
+function TrendReport({ rows, filters, selectedSubscriptionCount, totalSubscriptionCount }) {
+  const scopedRows = Array.isArray(rows) ? rows : [];
+  const latestRow = scopedRows[scopedRows.length - 1] || null;
+  const firstRow = scopedRows[0] || null;
+  const quotaDelta = latestRow && firstRow ? Number(latestRow.totalQuotaAvailable || 0) - Number(firstRow.totalQuotaAvailable || 0) : 0;
+  const observationDelta = latestRow && firstRow ? Number(latestRow.totalRows || 0) - Number(firstRow.totalRows || 0) : 0;
+  const subscriptionLabel = selectedSubscriptionCount === totalSubscriptionCount
+    ? `All ${formatNumber(totalSubscriptionCount)} subscriptions`
+    : `${formatNumber(selectedSubscriptionCount)} selected subscriptions`;
+  const regionLabel = filters.region && filters.region !== 'all'
+    ? filters.region
+    : `${filters.regionPreset || 'all'} preset`;
+
+  return (
+    <div className="rx-view-stack">
+      <section className="rx-panel rx-panel--compact rx-panel--muted">
+        <div className="rx-panel__header">
+          <div>
+            <h2>Trend Calculation</h2>
+            <p>The server groups `dbo.CapacitySnapshot` by capture date after applying the active region preset, specific region, selected subscriptions, family, and availability filters.</p>
+          </div>
+        </div>
+        <div className="rx-trend-summary">
+          <div className="rx-trend-summary__item">
+            <span>Filter Scope</span>
+            <strong>{regionLabel}</strong>
+            <small>{subscriptionLabel}</small>
+          </div>
+          <div className="rx-trend-summary__item">
+            <span>Latest Quota Available</span>
+            <strong>{latestRow ? formatNumber(latestRow.totalQuotaAvailable) : 'n/a'}</strong>
+            <small>{firstRow ? `${quotaDelta >= 0 ? '+' : ''}${formatNumber(quotaDelta)} vs first day` : 'Waiting for history'}</small>
+          </div>
+          <div className="rx-trend-summary__item">
+            <span>Latest SKU Observations</span>
+            <strong>{latestRow ? formatNumber(latestRow.totalRows) : 'n/a'}</strong>
+            <small>{firstRow ? `${observationDelta >= 0 ? '+' : ''}${formatNumber(observationDelta)} vs first day` : 'Waiting for history'}</small>
+          </div>
+        </div>
+        <p className="rx-trend-note">Large swings usually mean more or fewer snapshot rows were captured on that day. React is only rendering the result; the region and subscription filters are applied by the API before the daily totals are calculated.</p>
+      </section>
+      <TrendLineChart
+        title="Quota Available Over Time"
+        subtitle="Daily summed headroom across the current filter scope. Use subscription filters when you want one subscription trend instead of the whole cohort."
+        rows={scopedRows}
+        series={[
+          {
+            key: 'quota',
+            label: 'Total Quota Available',
+            color: '#005a9c',
+            getValue: (row) => row.totalQuotaAvailable
+          }
+        ]}
+        emptyMessage="No quota trend history rows available."
+      />
+      <TrendLineChart
+        title="Snapshot Volume Context"
+        subtitle="These counts explain why quota totals can jump: fewer captured rows usually means a smaller daily aggregate even with the same filters."
+        rows={scopedRows}
+        series={[
+          {
+            key: 'totalRows',
+            label: 'Total SKU Observations',
+            color: '#2f855a',
+            getValue: (row) => row.totalRows
+          },
+          {
+            key: 'constrainedRows',
+            label: 'Constrained Observations',
+            color: '#c05621',
+            getValue: (row) => row.constrainedRows
+          }
+        ]}
+        emptyMessage="No observation trend history rows available."
+      />
+      <DataTable
+        key="trend"
+        title="Daily Trend Rows"
+        subtitle="Raw daily aggregates behind the charts."
+        columns={[
+          { key: 'day', label: 'Day' },
+          { key: 'totalRows', label: 'Total Rows', render: (row) => formatNumber(row.totalRows) },
+          { key: 'constrainedRows', label: 'Constrained Rows', render: (row) => formatNumber(row.constrainedRows) },
+          { key: 'totalQuotaAvailable', label: 'Total Quota Available', render: (row) => formatNumber(row.totalQuotaAvailable) }
+        ]}
+        rows={scopedRows}
+        emptyMessage="No trend history rows available."
+      />
+    </div>
+  );
+}
+
 function DrawerFilterSection({ title, children }) {
   return (
     <section className="rx-drawer-section">
@@ -624,17 +889,17 @@ function AdminIngestionView(props) {
       </section>
       <section className="rx-panel rx-panel--compact rx-panel--muted">
         <div className="rx-panel__header"><div><h2>Current Status</h2><p>Latest ingestion health and the most recent run summary.</p></div></div>
-        <div className="rx-summary-grid">
+        <div className="rx-summary-grid rx-summary-grid--status">
           <article className="rx-metric-card"><span>State</span><strong>{stateLabel}</strong></article>
-          <article className="rx-metric-card"><span>Last Run</span><strong>{formatTimestamp(status?.lastRunUtc)}</strong></article>
-          <article className="rx-metric-card"><span>Last Success</span><strong>{formatTimestamp(status?.lastSuccessUtc)}</strong></article>
+          <article className="rx-metric-card rx-metric-card--detail"><span>Last Run</span><strong>{formatTimestamp(status?.lastRunUtc)}</strong></article>
+          <article className="rx-metric-card rx-metric-card--detail"><span>Last Success</span><strong>{formatTimestamp(status?.lastSuccessUtc)}</strong></article>
           <article className="rx-metric-card"><span>Duration</span><strong>{formatDuration(status?.lastDurationMs)}</strong></article>
           <article className="rx-metric-card"><span>Inserted Rows</span><strong>{formatNumber(status?.lastInsertedRows || 0)}</strong></article>
           <article className="rx-metric-card"><span>Score Rows</span><strong>{formatNumber(summary.insertedScoreRows || 0)}</strong></article>
           <article className="rx-metric-card"><span>Subscriptions</span><strong>{formatNumber(summary.subscriptionCount || 0)}</strong></article>
-          <article className="rx-metric-card"><span>Regions</span><strong>{regions}</strong></article>
-          <article className="rx-metric-card"><span>Families</span><strong>{families}</strong></article>
-          <article className="rx-metric-card"><span>Last Error</span><strong>{status?.lastError || 'None'}</strong></article>
+          <article className="rx-metric-card rx-metric-card--detail"><span>Regions</span><strong>{regions}</strong></article>
+          <article className="rx-metric-card rx-metric-card--detail"><span>Families</span><strong>{families}</strong></article>
+          <article className="rx-metric-card rx-metric-card--detail"><span>Last Error</span><strong>{status?.lastError || 'None'}</strong></article>
         </div>
       </section>
       <section className="rx-panel">
@@ -1093,6 +1358,8 @@ function App() {
   const [recommendState, setRecommendState] = useState({ targetSku: '', autoTargetSku: '', regions: '', autoRegions: '', topN: 10, minScore: 50, showPricing: true, showSpot: false, result: null, status: { tone: 'info', message: 'Run the recommender to populate alternatives.' }, busy: false });
   const [adminState, setAdminState] = useState({ status: null, schedule: { ingest: { intervalMinutes: 0, runOnStartup: false }, livePlacement: { intervalMinutes: 0, runOnStartup: false } }, runtime: { ingest: { intervalMinutes: 0, runOnStartup: false }, livePlacement: { intervalMinutes: 0, runOnStartup: false } }, statusMessage: { tone: 'info', message: 'Data ingestion tools ready.' }, busy: { refreshStatus: false, trigger: false, refreshSchedule: false, saveSchedule: false } });
   const [quotaState, setQuotaState] = useState({ managementGroups: [], selectedManagementGroup: '', quotaGroups: [], selectedQuotaGroup: 'all', candidates: [], quotaRuns: [], selectedAnalysisRunId: '', selectedDonorSubscriptionId: '', selectedMoveCandidate: null, requestedTransferAmount: 0, planRows: [], impactRows: [], applyResults: [], planSummary: {}, candidateFilters: { subscriptionId: 'all', region: 'all', family: '', intent: 'all' }, status: { tone: 'info', message: 'Quota tools ready.' }, busy: { discover: false, generate: false, capture: false, refresh: false, refreshRuns: false, plan: false, simulate: false, apply: false } });
+  const [showSqlPreview, setShowSqlPreview] = useState(false);
+  const [sqlPreviewState, setSqlPreviewState] = useState({ loading: false, error: '', rows: [] });
 
   const queryFilters = useMemo(() => ({
     regionPreset: filters.regionPreset,
@@ -1118,7 +1385,7 @@ function App() {
   const regionHealth = useMemo(() => deriveRegionHealth(filteredAnalyticsRows), [filteredAnalyticsRows]);
   const topSkus = useMemo(() => topSkuRows(filteredAnalyticsRows), [filteredAnalyticsRows]);
   const familySummaryRows = useMemo(() => (familyRows.length > 0 ? familyRows : familySummaryFromRows(filteredAnalyticsRows)), [familyRows, filteredAnalyticsRows]);
-  const matrix = useMemo(() => regionMatrixRows(filteredAnalyticsRows, filters.region), [filteredAnalyticsRows, filters.region]);
+  const matrix = useMemo(() => regionMatrixRows(filteredAnalyticsRows, filters.region, scopedRegionOptions), [filteredAnalyticsRows, filters.region, scopedRegionOptions]);
 
   useEffect(() => {
     if (!recommendedTargetSku) {
@@ -1258,6 +1525,51 @@ function App() {
     }
     loadQuotaGroups();
   }, [auth, quotaState.selectedManagementGroup]);
+
+  useEffect(() => {
+    if (!auth?.canAccessAdmin || !showSqlPreview) {
+      setSqlPreviewState({ loading: false, error: '', rows: [] });
+      return undefined;
+    }
+
+    const previewParams = new URLSearchParams({
+      view: activeView,
+      pageNumber: String(capacityData.pagination.pageNumber || 1),
+      pageSize: String(capacityData.pagination.pageSize || 50),
+      days: '7',
+      desiredCount: '1',
+      regionPreset: filters.regionPreset,
+      region: filters.region,
+      family: filters.family,
+      availability: filters.availability,
+      resourceType: filters.resourceType,
+      subscriptionIds: selectedSubscriptionIds.join(','),
+      managementGroupId: quotaState.selectedManagementGroup || '',
+      groupQuotaName: quotaState.selectedQuotaGroup || '',
+      analysisRunId: quotaState.selectedAnalysisRunId || ''
+    });
+
+    let cancelled = false;
+    setSqlPreviewState((current) => ({ ...current, loading: true, error: '' }));
+
+    fetchJson(`/api/admin/sql-preview?${previewParams.toString()}`)
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        setSqlPreviewState({ loading: false, error: '', rows: Array.isArray(payload.rows) ? payload.rows : [] });
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+        setSqlPreviewState({ loading: false, error: error.message || 'Failed to load SQL preview.', rows: [] });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [auth?.canAccessAdmin, showSqlPreview, activeView, capacityData.pagination.pageNumber, capacityData.pagination.pageSize, filters, selectedSubscriptionIds, quotaState.selectedManagementGroup, quotaState.selectedQuotaGroup, quotaState.selectedAnalysisRunId]);
 
   useEffect(() => {
     if (!auth?.canAccessAdmin || activeView !== 'admin') {
@@ -1658,7 +1970,7 @@ function App() {
       return <div className="rx-view-stack"><section className="rx-panel rx-panel--compact rx-panel--muted"><div className="rx-panel__header"><div><h2>Region Matrix</h2><p>Family-by-region readiness with row rollups and a deployment-status key.</p></div></div><div className="rx-matrix-key"><div className="rx-matrix-key__group"><h3>Row Color</h3><div className="rx-matrix-key__item"><span className="rx-row-swatch rx-row-swatch--ok"></span><div><strong>Green</strong><p>At least one SKU in this family is fully available.</p></div></div><div className="rx-matrix-key__item"><span className="rx-row-swatch rx-row-swatch--caution"></span><div><strong>Yellow</strong><p>Some SKUs may work, but there are constraints.</p></div></div><div className="rx-matrix-key__item"><span className="rx-row-swatch rx-row-swatch--blocked"></span><div><strong>Gray</strong><p>No SKUs from this family available in scanned regions.</p></div></div></div><div className="rx-matrix-key__group"><h3>Cell Status</h3>{['OK', 'CONSTRAINED', 'LIMITED', 'PARTIAL', 'BLOCKED'].map((status) => { const meta = matrixStatusMeta(status); return <div key={status} className="rx-matrix-key__item"><StatusPill value={status} /><div><strong>{meta.short}</strong><p>{meta.description}</p></div></div>; })}</div></div></section><section className="rx-panel rx-panel--table rx-panel--compact"><div className="rx-panel__header"><div><h2>Region Matrix Report</h2><p>Rows are highlighted by family-level readiness across the selected region scope.</p></div></div><div className="rx-table-wrap"><table className="rx-table rx-table--dense rx-matrix-table"><thead><tr><th>Family</th><th>Key</th><th>Ready</th>{matrix.regions.map((region) => <th key={region}>{region}</th>)}</tr></thead><tbody>{matrix.rows.length === 0 ? <tr><td className="rx-empty" colSpan={Math.max(3, matrix.regions.length + 3)}>No matrix rows available.</td></tr> : matrix.rows.map((row) => <tr key={row.family} className={`rx-matrix-row rx-matrix-row--${String(row.rowStatus || 'blocked').toLowerCase()}`}><td className="rx-matrix-family">{row.family}</td><td><StatusPill value={row.rowStatus === 'CAUTION' ? 'PARTIAL' : row.rowStatus} /></td><td>{formatNumber(row.readyRegionCount)}</td>{matrix.regions.map((region) => { const status = matrix.resolveCellStatus(row.regionMap[region]); const meta = matrixStatusMeta(status); return <td key={region} title={meta.description}><div className="rx-matrix-cell"><StatusPill value={status} /></div></td>; })}</tr>)}</tbody></table></div></section></div>;
     }
     if (activeView === 'trend') {
-      return <DataTable key="trend" title="Trend History" subtitle="Recent trend rows based on the current reporting filter scope." columns={[{ key: 'day', label: 'Day' }, { key: 'totalRows', label: 'Total Rows', render: (row) => formatNumber(row.totalRows) }, { key: 'constrainedRows', label: 'Constrained Rows', render: (row) => formatNumber(row.constrainedRows) }, { key: 'totalQuotaAvailable', label: 'Total Quota Available', render: (row) => formatNumber(row.totalQuotaAvailable) }]} rows={trendRows} emptyMessage="No trend history rows available." />;
+      return <TrendReport rows={trendRows} filters={filters} selectedSubscriptionCount={selectedSubscriptionIds.length} totalSubscriptionCount={subscriptionOptions.length} />;
     }
     if (activeView === 'quota-workbench') {
       return <QuotaWorkbenchView managementGroups={quotaState.managementGroups} selectedManagementGroup={quotaState.selectedManagementGroup} onManagementGroupChange={(value) => setQuotaState({ ...quotaState, selectedManagementGroup: value })} quotaGroups={quotaState.quotaGroups} selectedQuotaGroup={quotaState.selectedQuotaGroup} onQuotaGroupChange={(value) => setQuotaState({ ...quotaState, selectedQuotaGroup: value, selectedAnalysisRunId: '', selectedDonorSubscriptionId: '', selectedMoveCandidate: null, requestedTransferAmount: 0, planRows: [], impactRows: [], applyResults: [], planSummary: {} })} candidates={quotaState.candidates} candidateFilters={quotaState.candidateFilters} setCandidateFilters={(value) => setQuotaState({ ...quotaState, candidateFilters: value })} selectedMoveCandidate={quotaState.selectedMoveCandidate} onSelectMoveCandidate={(row) => { const skuOptions = normalizeSkuList(row.skuList); const recipientNeed = getQuotaRecipientNeed(row); const movableQuota = Number(row.movableQuota || row.suggestedMovable || 0); const mode = movableQuota > 0 ? 'donor' : 'recipient'; const requestedTransferAmount = mode === 'donor' ? movableQuota : recipientNeed; setQuotaState((current) => ({ ...current, selectedMoveCandidate: { subscriptionId: row.subscriptionId, subscriptionName: row.subscriptionName || row.subscriptionId, donorSubscriptionId: mode === 'donor' ? row.subscriptionId : '', recipientSubscriptionId: mode === 'recipient' ? row.subscriptionId : '', recipientSubscriptionName: row.subscriptionName || row.subscriptionId, region: row.region, quotaName: row.family || row.quotaName, skuList: skuOptions, selectedSku: '', quotaAvailable: row.quotaAvailable, safetyBuffer: row.safetyBuffer, availability: row.availability, movableQuota, mode }, selectedDonorSubscriptionId: mode === 'donor' ? row.subscriptionId : '', requestedTransferAmount, planRows: [], impactRows: [], applyResults: [], planSummary: {}, status: { tone: 'success', message: `Selected ${row.subscriptionName || row.subscriptionId} as a ${mode} quota row. Continue to Step 3 to build the move.` } })); }} quotaRuns={quotaState.quotaRuns} selectedAnalysisRunId={quotaState.selectedAnalysisRunId} donorOptions={donorOptions} selectedDonorSubscriptionId={quotaState.selectedDonorSubscriptionId} onSelectedSkuChange={(value) => setQuotaState({ ...quotaState, selectedMoveCandidate: quotaState.selectedMoveCandidate ? { ...quotaState.selectedMoveCandidate, selectedSku: value } : null, selectedDonorSubscriptionId: '', planRows: [], impactRows: [], applyResults: [], planSummary: {} })} requestedTransferAmount={quotaState.requestedTransferAmount} onRequestedTransferAmountChange={(value) => setQuotaState({ ...quotaState, requestedTransferAmount: Math.max(0, Number(value || 0)), planRows: [], impactRows: [], applyResults: [], planSummary: {} })} onAnalysisRunChange={(value) => setQuotaState({ ...quotaState, selectedAnalysisRunId: value, selectedDonorSubscriptionId: '', planRows: [], impactRows: [], applyResults: [], planSummary: {} })} onDonorSubscriptionChange={(value) => setQuotaState({ ...quotaState, selectedDonorSubscriptionId: value, planRows: [], impactRows: [], applyResults: [], planSummary: {} })} planRows={quotaState.planRows} impactRows={quotaState.impactRows} applyResults={quotaState.applyResults} summary={quotaState.planSummary} actions={quotaActions} busy={quotaState.busy} status={quotaState.status} />;
@@ -1700,6 +2012,7 @@ function App() {
               <button className="rx-button rx-button--secondary" type="button" disabled={Boolean(exportBusyFormat)} onClick={() => downloadCapacityExport('csv')}>{exportBusyFormat === 'csv' ? 'Exporting CSV...' : 'Export CSV'}</button>
               <button className="rx-button rx-button--secondary" type="button" disabled={Boolean(exportBusyFormat)} onClick={() => downloadCapacityExport('xlsx')}>{exportBusyFormat === 'xlsx' ? 'Exporting Excel...' : 'Export Excel'}</button>
             </> : null}
+            {auth?.canAccessAdmin ? <label className="rx-check rx-check--sql-toggle"><input type="checkbox" checked={showSqlPreview} onChange={(event) => setShowSqlPreview(event.target.checked)} />Show SQL</label> : null}
             <div className="rx-user-chip">
               <strong>{auth?.name || 'Loading user...'}</strong>
               <small>{auth?.username || 'No Entra context yet'}</small>
@@ -1711,6 +2024,7 @@ function App() {
 
         <Banner tone={appStatus.tone} message={appStatus.message} />
         {viewContent}
+        {auth?.canAccessAdmin && showSqlPreview ? <SqlPreviewPanel activeViewLabel={REPORT_VIEWS.find((view) => view.key === activeView)?.label || activeView} loading={sqlPreviewState.loading} error={sqlPreviewState.error} rows={sqlPreviewState.rows} /> : null}
       </main>
 
       <aside className={classNames('rx-drawer', drawerOpen && 'is-open')}>

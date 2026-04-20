@@ -21,10 +21,14 @@ param(
     [Parameter(Mandatory = $false)][string]$EntraClientSecret,
     [Parameter(Mandatory = $false)][string]$AuthRedirectUri,
     [Parameter(Mandatory = $false)][string]$AdminGroupId,
-    [Parameter(Mandatory = $false)][string]$SubscriptionId
+    [Parameter(Mandatory = $false)][string]$SubscriptionId,
+    [Parameter(Mandatory = $false)][bool]$DeployWebApp = $true
 )
 
 $ErrorActionPreference = 'Stop'
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$deployWebAppScript = Join-Path $repoRoot 'deploy-web-app.ps1'
+$webAppName = "app-capdash-$Environment-$WorkloadSuffix"
 
 if ($SubscriptionId) {
     az account set --subscription $SubscriptionId | Out-Null
@@ -155,6 +159,15 @@ if (($WorkerRbacSubscriptionIds.Count -gt 0 -or $WebReaderSubscriptionIds.Count 
 
 try {
     az @deploymentArgs
+
+    if ($DeployWebApp) {
+        if (-not (Test-Path $deployWebAppScript)) {
+            throw "Web deployment script not found: $deployWebAppScript"
+        }
+
+        Write-Host "Infrastructure deployment succeeded. Deploying dashboard web package to $webAppName..."
+        & $deployWebAppScript -ResourceGroup $ResourceGroupName -AppName $webAppName -SourcePath $repoRoot
+    }
 }
 finally {
     if ($temporaryParameterFile -and (Test-Path $temporaryParameterFile)) {

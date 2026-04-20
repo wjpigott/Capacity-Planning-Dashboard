@@ -274,6 +274,13 @@ Use script-based deployment with Central US default:
 	-SubscriptionId "<subscription-id>"
 ```
 
+By default, `./scripts/deploy-infra.ps1` now does both steps:
+
+- provisions the Azure resources from `infra/main.bicep`
+- publishes the dashboard web package, including `react/`, to the target App Service
+
+Use `-DeployWebApp $false` only when you explicitly want an infra-only run.
+
 Stable demo environment:
 
 - Treat `dev` as change-heavy and `test` as the stable demo environment.
@@ -300,8 +307,11 @@ Notes:
 - SQL is configured with Microsoft Entra admin and AAD-only authentication.
 - `SqlAdminPassword` is optional; when omitted, the script generates a strong random value for server bootstrap.
 - The Bicep template now also provisions a Function App plus storage account for the PowerShell 7 worker host.
+- The script-based deployment path now also deploys the dashboard web content, so `/react/` is available immediately after a successful run.
+- Raw `az deployment group create` with the Bicep template still provisions infrastructure only; it does not upload the local dashboard or `react/` files.
 - `-ParameterFile` lets you keep environment defaults in a `.bicepparam` file while still overriding secure/runtime values from the command line.
 - `-WebReaderSubscriptionIds` grants the dashboard web app `Reader` on the listed subscriptions so subscription discovery can see every target subscription.
+- `-WebReaderSubscriptionIds` is the only built-in path that grants the dashboard web app managed identity subscription `Reader` access during deployment. There is no management-group fallback for read access in the current template, so fresh deployments must provide the target subscription list explicitly.
 - `-WorkerRbacSubscriptionIds` triggers subscription-level RBAC assignment for the worker identity (`Compute Recommendations Role`, `Cost Management Reader`, `Billing Reader`) in the same deployment.
 - `-AuthEnabled` plus `-EntraTenantId`, `-EntraClientId`, `-EntraClientSecret`, and optional `-AdminGroupId` configure the built-in Entra sign-in flow used by the dashboard API.
 

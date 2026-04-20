@@ -73,6 +73,13 @@ This template provisions a native Azure baseline for the dashboard solution.
   -SubscriptionId "<subscription-id>"
 ```
 
+The script-based path is the recommended operator workflow because it now:
+
+- deploys the infrastructure from Bicep
+- deploys the dashboard web package, including `react/`, to the matching App Service name
+
+Use `-DeployWebApp $false` only when you intentionally want an infra-only run.
+
 Raw Bicep deployment is also supported:
 
 ```powershell
@@ -86,6 +93,8 @@ az deployment group create \
 ## RBAC At Scale
 
 Use `webQuotaWriterSubscriptionIds` in Bicep when you have a small, curated list of participating subscriptions.
+
+Use `webReaderSubscriptionIds` when you need the dashboard web app managed identity to enumerate subscriptions and run read-only ARM queries. This is a direct subscription-scoped role assignment path; the template does not infer or inherit Reader from a management group.
 
 For customers with hundreds or thousands of subscriptions, do not maintain a large subscription array in the resource-group deployment. Use `scripts/grant-quota-rbac.ps1` to assign `GroupQuota Request Operator` from a management-group-derived subscription list or from a maintained subscription inventory file.
 
@@ -107,7 +116,7 @@ Example:
 
 ## Current gaps for blue-green style Bicep deployments
 
-- The template provisions infrastructure only. App package deployment, Function zip deployment, SQL schema migration, and post-deploy app settings are still separate runbook steps.
+- Raw template deployment still provisions infrastructure only. The script-based workflow now chains the dashboard web app publish, but Function zip deployment, SQL schema migration, and some post-deploy app settings remain separate runbook steps.
 - There is no traffic-routing layer in Bicep yet. `dev` and `test` can coexist, but cutover is manual because Front Door, Traffic Manager, or deployment slots are not modeled.
 - SQL database data-plane grants (for example `db_datareader` and `db_datawriter`) are not ARM resources and still require post-deploy SQL role configuration.
 - If your organization requires billing-scope role assignments (instead of subscription scope), those billing-scope assignments remain external to this resource-group deployment.

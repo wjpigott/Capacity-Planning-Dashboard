@@ -116,6 +116,29 @@ async function createSqlPoolWithAccessToken(accessToken) {
   return pool;
 }
 
+async function tableExists(pool, tableName) {
+  if (!pool || !tableName) {
+    return false;
+  }
+
+  const request = pool.request();
+  request.input('tableName', sql.NVarChar(256), String(tableName));
+  const result = await request.query(`
+    SELECT 1 AS hasTable
+    WHERE OBJECT_ID(@tableName, 'U') IS NOT NULL
+  `);
+
+  return Boolean(result.recordset && result.recordset.length > 0);
+}
+
+function isSchemaPermissionError(err) {
+  const message = String(err?.message || '').toLowerCase();
+  return message.includes('create table permission denied')
+    || message.includes('alter table permission denied')
+    || message.includes('create index permission denied')
+    || message.includes('permission denied in database');
+}
+
 async function insertCapacitySnapshots(rows) {
   if (!Array.isArray(rows) || rows.length === 0) {
     return 0;
@@ -228,10 +251,7 @@ async function getSubscriptionsFromTable({ search, limit } = {}) {
 
   // If the Subscriptions table doesn't exist yet (pre-migration), fall back to
   // deriving the list from CapacityLatest (the old behaviour).
-  const tableCheck = await pool.request().query(
-    `SELECT 1 AS hasTable WHERE OBJECT_ID('dbo.Subscriptions', 'U') IS NOT NULL`
-  );
-  if (!tableCheck.recordset || tableCheck.recordset.length === 0) {
+  if (!(await tableExists(pool, 'dbo.Subscriptions'))) {
     return null; // caller falls back to CapacityLatest GROUP BY
   }
 
@@ -354,7 +374,19 @@ async function insertCapacityScoreSnapshots(rows) {
     throw new Error('SQL connection is not configured for capacity score history.');
   }
 
-  await ensureCapacityScoreSnapshotSchema(pool);
+  try {
+    if (!(await tableExists(pool, 'dbo.CapacityScoreSnapshot'))) {
+      return 0;
+    }
+
+    await ensureCapacityScoreSnapshotSchema(pool);
+  } catch (err) {
+    if (isSchemaPermissionError(err)) {
+      return 0;
+    }
+
+    throw err;
+  }
 
   const transaction = new sql.Transaction(pool);
   await transaction.begin();
@@ -399,7 +431,19 @@ async function getCapacityScoreSnapshotHistory(filters = {}) {
     return [];
   }
 
-  await ensureCapacityScoreSnapshotSchema(pool);
+  try {
+    if (!(await tableExists(pool, 'dbo.CapacityScoreSnapshot'))) {
+      return [];
+    }
+
+    await ensureCapacityScoreSnapshotSchema(pool);
+  } catch (err) {
+    if (isSchemaPermissionError(err)) {
+      return [];
+    }
+
+    throw err;
+  }
 
   const days = Math.max(1, Math.min(Number(filters.days || 30), 365));
   const request = pool.request();
@@ -1047,7 +1091,9 @@ async function getDashboardSettings(prefix = null) {
     return {};
   }
 
-  await ensureDashboardSettingSchema(pool);
+  if (!(await tableExists(pool, 'dbo.DashboardSetting'))) {
+    return {};
+  }
 
   const request = pool.request();
   let where = '';
@@ -1086,7 +1132,9 @@ async function upsertDashboardSettings(entries = {}) {
     return 0;
   }
 
-  await ensureDashboardSettingSchema(pool);
+  if (!(await tableExists(pool, 'dbo.DashboardSetting'))) {
+    throw new Error('Scheduler settings are unavailable until the DashboardSetting table is provisioned in SQL.');
+  }
 
   let updatedCount = 0;
   for (const key of keys) {

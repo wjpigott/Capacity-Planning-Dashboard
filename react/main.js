@@ -1559,7 +1559,7 @@ function App() {
   }, [auth, quotaState.selectedManagementGroup]);
 
   useEffect(() => {
-    if (!isAdminView || !showSqlPreview) {
+    if (!auth?.canAccessAdmin || !showSqlPreview) {
       setSqlPreviewState({ loading: false, error: '', rows: [] });
       return undefined;
     }
@@ -1601,7 +1601,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [isAdminView, showSqlPreview, activeView, capacityData.pagination.pageNumber, capacityData.pagination.pageSize, filters, selectedSubscriptionIds, quotaState.selectedManagementGroup, quotaState.selectedQuotaGroup, quotaState.selectedAnalysisRunId]);
+  }, [auth, showSqlPreview, activeView, capacityData.pagination.pageNumber, capacityData.pagination.pageSize, filters, selectedSubscriptionIds, quotaState.selectedManagementGroup, quotaState.selectedQuotaGroup, quotaState.selectedAnalysisRunId]);
 
   useEffect(() => {
     if (!auth?.canAccessAdmin || activeView !== 'admin') {
@@ -2085,7 +2085,7 @@ function App() {
 
         <Banner tone={appStatus.tone} message={appStatus.message} />
         {viewContent}
-        {isAdminView && showSqlPreview ? <SqlPreviewPanel activeViewLabel={REPORT_VIEWS.find((view) => view.key === activeView)?.label || activeView} loading={sqlPreviewState.loading} error={sqlPreviewState.error} rows={sqlPreviewState.rows} /> : null}
+        {auth?.canAccessAdmin && showSqlPreview ? <SqlPreviewPanel activeViewLabel={REPORT_VIEWS.find((view) => view.key === activeView)?.label || activeView} loading={sqlPreviewState.loading} error={sqlPreviewState.error} rows={sqlPreviewState.rows} /> : null}
       </main>
 
       <aside className={classNames('rx-drawer', drawerOpen && 'is-open')}>

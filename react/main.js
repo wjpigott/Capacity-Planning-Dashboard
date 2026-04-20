@@ -881,6 +881,7 @@ function AdminIngestionView(props) {
     status,
     schedule,
     runtime,
+    persistence,
     selectedRegionPreset,
     actions,
     onScheduleChange,
@@ -892,6 +893,8 @@ function AdminIngestionView(props) {
   const regions = Array.isArray(summary.regions) && summary.regions.length ? summary.regions.join(', ') : 'n/a';
   const families = Array.isArray(summary.familyFilters) && summary.familyFilters.length ? summary.familyFilters.join(', ') : 'n/a';
   const stateLabel = status?.inProgress ? 'Running' : (status?.lastError ? 'Failed' : (status?.lastSuccessUtc ? 'Healthy' : 'Idle'));
+  const schedulerPersistenceAvailable = persistence?.available !== false;
+  const schedulerMessage = persistence?.message || 'Scheduler settings are persisted in SQL and applied to the runtime scheduler when saved.';
 
   return (
     <div className="rx-view-stack">
@@ -921,17 +924,17 @@ function AdminIngestionView(props) {
         </div>
       </section>
       <section className="rx-panel">
-        <div className="rx-panel__header"><div><h2>Scheduler Settings</h2><p>Persisted settings are stored in SQL and applied to the runtime scheduler when saved.</p></div></div>
+        <div className="rx-panel__header"><div><h2>Scheduler Settings</h2><p>{schedulerMessage}</p></div></div>
         <div className="rx-field-grid rx-field-grid--filters">
-          <label className="rx-field"><span>Ingest Interval (minutes)</span><input className="rx-input" type="number" min="0" step="1" value={schedule.ingest.intervalMinutes} onChange={(event) => onScheduleChange('ingest', 'intervalMinutes', Number(event.target.value || 0))} /></label>
-          <label className="rx-field"><span>Live Placement Interval (minutes)</span><input className="rx-input" type="number" min="0" step="1" value={schedule.livePlacement.intervalMinutes} onChange={(event) => onScheduleChange('livePlacement', 'intervalMinutes', Number(event.target.value || 0))} /></label>
-          <label className="rx-check"><input type="checkbox" checked={schedule.ingest.runOnStartup} onChange={(event) => onScheduleChange('ingest', 'runOnStartup', event.target.checked)} />Run ingest on startup</label>
-          <label className="rx-check"><input type="checkbox" checked={schedule.livePlacement.runOnStartup} onChange={(event) => onScheduleChange('livePlacement', 'runOnStartup', event.target.checked)} />Run live placement on startup</label>
+          <label className="rx-field"><span>Ingest Interval (minutes)</span><input className="rx-input" type="number" min="0" step="1" value={schedule.ingest.intervalMinutes} onChange={(event) => onScheduleChange('ingest', 'intervalMinutes', Number(event.target.value || 0))} disabled={!schedulerPersistenceAvailable} /></label>
+          <label className="rx-field"><span>Live Placement Interval (minutes)</span><input className="rx-input" type="number" min="0" step="1" value={schedule.livePlacement.intervalMinutes} onChange={(event) => onScheduleChange('livePlacement', 'intervalMinutes', Number(event.target.value || 0))} disabled={!schedulerPersistenceAvailable} /></label>
+          <label className="rx-check"><input type="checkbox" checked={schedule.ingest.runOnStartup} onChange={(event) => onScheduleChange('ingest', 'runOnStartup', event.target.checked)} disabled={!schedulerPersistenceAvailable} />Run ingest on startup</label>
+          <label className="rx-check"><input type="checkbox" checked={schedule.livePlacement.runOnStartup} onChange={(event) => onScheduleChange('livePlacement', 'runOnStartup', event.target.checked)} disabled={!schedulerPersistenceAvailable} />Run live placement on startup</label>
         </div>
         <div className="rx-inline-actions">
           <span className="rx-selected-count">Runtime ingest interval: {formatNumber(runtime.ingest.intervalMinutes)} min</span>
           <span className="rx-selected-count">Runtime live placement interval: {formatNumber(runtime.livePlacement.intervalMinutes)} min</span>
-          <button className="rx-button" type="button" onClick={actions.saveSchedule} disabled={busy.saveSchedule}>{busy.saveSchedule ? 'Saving...' : 'Save Scheduler Settings'}</button>
+          <button className="rx-button" type="button" onClick={actions.saveSchedule} disabled={!schedulerPersistenceAvailable || busy.saveSchedule}>{busy.saveSchedule ? 'Saving...' : 'Save Scheduler Settings'}</button>
         </div>
       </section>
     </div>
@@ -1375,7 +1378,7 @@ function App() {
   const [capacityScores, setCapacityScores] = useState({ rows: [], pagination: { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false }, subscriptionSummary: [] });
   const [exportBusyFormat, setExportBusyFormat] = useState('');
   const [recommendState, setRecommendState] = useState({ targetSku: '', autoTargetSku: '', regions: '', autoRegions: '', topN: 10, minScore: 50, showPricing: true, showSpot: false, result: null, status: { tone: 'info', message: 'Run the recommender to populate alternatives.' }, busy: false });
-  const [adminState, setAdminState] = useState({ status: null, schedule: { ingest: { intervalMinutes: 0, runOnStartup: false }, livePlacement: { intervalMinutes: 0, runOnStartup: false } }, runtime: { ingest: { intervalMinutes: 0, runOnStartup: false }, livePlacement: { intervalMinutes: 0, runOnStartup: false } }, statusMessage: { tone: 'info', message: 'Data ingestion tools ready.' }, busy: { refreshStatus: false, trigger: false, refreshSchedule: false, saveSchedule: false } });
+  const [adminState, setAdminState] = useState({ status: null, schedule: { ingest: { intervalMinutes: 0, runOnStartup: false }, livePlacement: { intervalMinutes: 0, runOnStartup: false } }, runtime: { ingest: { intervalMinutes: 0, runOnStartup: false }, livePlacement: { intervalMinutes: 0, runOnStartup: false } }, persistence: { available: true, source: 'sql', message: 'SQL scheduler settings are available.' }, statusMessage: { tone: 'info', message: 'Data ingestion tools ready.' }, busy: { refreshStatus: false, trigger: false, refreshSchedule: false, saveSchedule: false } });
   const [quotaState, setQuotaState] = useState({ managementGroups: [], selectedManagementGroup: '', quotaGroups: [], selectedQuotaGroup: 'all', candidates: [], quotaRuns: [], selectedAnalysisRunId: '', selectedDonorSubscriptionId: '', selectedMoveCandidate: null, requestedTransferAmount: 0, planRows: [], impactRows: [], applyResults: [], planSummary: {}, candidateFilters: { subscriptionId: 'all', region: 'all', family: '', intent: 'all' }, status: { tone: 'info', message: 'Quota tools ready.' }, busy: { discover: false, generate: false, capture: false, refresh: false, refreshRuns: false, plan: false, simulate: false, apply: false } });
   const [showSqlPreview, setShowSqlPreview] = useState(false);
   const [sqlPreviewState, setSqlPreviewState] = useState({ loading: false, error: '', rows: [] });
@@ -1622,8 +1625,11 @@ function App() {
           status: statusPayload.status || null,
           schedule: schedulePayload.settings || current.schedule,
           runtime: schedulePayload.runtime || current.runtime,
+          persistence: schedulePayload.persistence || current.persistence,
           busy: { ...current.busy, refreshStatus: false, refreshSchedule: false },
-          statusMessage: { tone: 'success', message: 'Loaded ingestion status and scheduler settings.' }
+          statusMessage: schedulePayload.persistence && schedulePayload.persistence.available === false
+            ? { tone: 'warn', message: schedulePayload.persistence.message || 'Scheduler settings are running in read-only runtime mode.' }
+            : { tone: 'success', message: 'Loaded ingestion status and scheduler settings.' }
         }));
       } catch (error) {
         if (cancelled) {
@@ -1796,17 +1802,21 @@ function App() {
       setAdminState((current) => ({ ...current, busy: { ...current.busy, refreshSchedule: true } }));
       try {
         const payload = await fetchJson('/api/admin/ingest/schedule');
-        setAdminState((current) => ({ ...current, schedule: payload.settings || current.schedule, runtime: payload.runtime || current.runtime, busy: { ...current.busy, refreshSchedule: false }, statusMessage: { tone: 'success', message: 'Scheduler settings reloaded.' } }));
+        setAdminState((current) => ({ ...current, schedule: payload.settings || current.schedule, runtime: payload.runtime || current.runtime, persistence: payload.persistence || current.persistence, busy: { ...current.busy, refreshSchedule: false }, statusMessage: payload.persistence && payload.persistence.available === false ? { tone: 'warn', message: payload.persistence.message || 'Scheduler settings are running in read-only runtime mode.' } : { tone: 'success', message: 'Scheduler settings reloaded.' } }));
       } catch (error) {
         setAdminState((current) => ({ ...current, busy: { ...current.busy, refreshSchedule: false }, statusMessage: { tone: 'error', message: error.message || 'Failed to load scheduler settings.' } }));
       }
     },
     saveSchedule: async () => {
       if (!auth?.canAccessAdmin) return;
+      if (adminState.persistence && adminState.persistence.available === false) {
+        setAdminState((current) => ({ ...current, statusMessage: { tone: 'warn', message: current.persistence?.message || 'Scheduler settings are read-only in this environment.' } }));
+        return;
+      }
       setAdminState((current) => ({ ...current, busy: { ...current.busy, saveSchedule: true }, statusMessage: { tone: 'info', message: 'Saving scheduler settings...' } }));
       try {
         const payload = await fetchJson('/api/admin/ingest/schedule', { method: 'PUT', body: JSON.stringify(adminState.schedule) });
-        setAdminState((current) => ({ ...current, schedule: payload.settings || current.schedule, runtime: payload.runtime || current.runtime, busy: { ...current.busy, saveSchedule: false }, statusMessage: { tone: 'success', message: 'Scheduler settings saved and applied.' } }));
+        setAdminState((current) => ({ ...current, schedule: payload.settings || current.schedule, runtime: payload.runtime || current.runtime, persistence: payload.persistence || current.persistence, busy: { ...current.busy, saveSchedule: false }, statusMessage: { tone: 'success', message: 'Scheduler settings saved and applied.' } }));
       } catch (error) {
         setAdminState((current) => ({ ...current, busy: { ...current.busy, saveSchedule: false }, statusMessage: { tone: 'error', message: error.message || 'Failed to save scheduler settings.' } }));
       }
@@ -2027,7 +2037,7 @@ function App() {
       return <QuotaWorkbenchView managementGroups={quotaState.managementGroups} selectedManagementGroup={quotaState.selectedManagementGroup} onManagementGroupChange={(value) => setQuotaState({ ...quotaState, selectedManagementGroup: value })} quotaGroups={quotaState.quotaGroups} selectedQuotaGroup={quotaState.selectedQuotaGroup} onQuotaGroupChange={(value) => setQuotaState({ ...quotaState, selectedQuotaGroup: value, selectedAnalysisRunId: '', selectedDonorSubscriptionId: '', selectedMoveCandidate: null, requestedTransferAmount: 0, planRows: [], impactRows: [], applyResults: [], planSummary: {} })} candidates={quotaState.candidates} candidateFilters={quotaState.candidateFilters} setCandidateFilters={(value) => setQuotaState({ ...quotaState, candidateFilters: value })} selectedMoveCandidate={quotaState.selectedMoveCandidate} onSelectMoveCandidate={(row) => { const skuOptions = normalizeSkuList(row.skuList); const recipientNeed = getQuotaRecipientNeed(row); const movableQuota = Number(row.movableQuota || row.suggestedMovable || 0); const mode = movableQuota > 0 ? 'donor' : 'recipient'; const requestedTransferAmount = mode === 'donor' ? movableQuota : recipientNeed; setQuotaState((current) => ({ ...current, selectedMoveCandidate: { subscriptionId: row.subscriptionId, subscriptionName: row.subscriptionName || row.subscriptionId, donorSubscriptionId: mode === 'donor' ? row.subscriptionId : '', recipientSubscriptionId: mode === 'recipient' ? row.subscriptionId : '', recipientSubscriptionName: row.subscriptionName || row.subscriptionId, region: row.region, quotaName: row.family || row.quotaName, skuList: skuOptions, selectedSku: '', quotaAvailable: row.quotaAvailable, safetyBuffer: row.safetyBuffer, availability: row.availability, movableQuota, mode }, selectedDonorSubscriptionId: mode === 'donor' ? row.subscriptionId : '', requestedTransferAmount, planRows: [], impactRows: [], applyResults: [], planSummary: {}, status: { tone: 'success', message: `Selected ${row.subscriptionName || row.subscriptionId} as a ${mode} quota row. Continue to Step 3 to build the move.` } })); }} quotaRuns={quotaState.quotaRuns} selectedAnalysisRunId={quotaState.selectedAnalysisRunId} donorOptions={donorOptions} selectedDonorSubscriptionId={quotaState.selectedDonorSubscriptionId} onSelectedSkuChange={(value) => setQuotaState({ ...quotaState, selectedMoveCandidate: quotaState.selectedMoveCandidate ? { ...quotaState.selectedMoveCandidate, selectedSku: value } : null, selectedDonorSubscriptionId: '', planRows: [], impactRows: [], applyResults: [], planSummary: {} })} requestedTransferAmount={quotaState.requestedTransferAmount} onRequestedTransferAmountChange={(value) => setQuotaState({ ...quotaState, requestedTransferAmount: Math.max(0, Number(value || 0)), planRows: [], impactRows: [], applyResults: [], planSummary: {} })} onAnalysisRunChange={(value) => setQuotaState({ ...quotaState, selectedAnalysisRunId: value, selectedDonorSubscriptionId: '', planRows: [], impactRows: [], applyResults: [], planSummary: {} })} onDonorSubscriptionChange={(value) => setQuotaState({ ...quotaState, selectedDonorSubscriptionId: value, planRows: [], impactRows: [], applyResults: [], planSummary: {} })} planRows={quotaState.planRows} impactRows={quotaState.impactRows} applyResults={quotaState.applyResults} summary={quotaState.planSummary} actions={quotaActions} busy={quotaState.busy} status={quotaState.status} />;
     }
     if (activeView === 'admin') {
-      return <AdminIngestionView status={adminState.status} schedule={adminState.schedule} runtime={adminState.runtime} selectedRegionPreset={filters.regionPreset} actions={adminActions} onScheduleChange={(scope, field, value) => setAdminState((current) => ({ ...current, schedule: { ...current.schedule, [scope]: { ...current.schedule[scope], [field]: value } } }))} busy={adminState.busy} viewStatus={adminState.statusMessage} />;
+      return <AdminIngestionView status={adminState.status} schedule={adminState.schedule} runtime={adminState.runtime} persistence={adminState.persistence} selectedRegionPreset={filters.regionPreset} actions={adminActions} onScheduleChange={(scope, field, value) => setAdminState((current) => ({ ...current, schedule: { ...current.schedule, [scope]: { ...current.schedule[scope], [field]: value } } }))} busy={adminState.busy} viewStatus={adminState.statusMessage} />;
     }
     return <section className="rx-panel"><div className="rx-placeholder">View not implemented yet.</div></section>;
   })();

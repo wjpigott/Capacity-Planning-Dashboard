@@ -231,6 +231,9 @@ const livePlacementRunOnStartupInput = document.querySelector('#livePlacementRun
 const saveSchedulerSettingsBtn = document.querySelector('#saveSchedulerSettingsBtn');
 const reloadSchedulerSettingsBtn = document.querySelector('#reloadSchedulerSettingsBtn');
 const scheduleSettingsStatus = document.querySelector('#scheduleSettingsStatus');
+const scheduleSettingsLabel = document.querySelector('#scheduleSettingsLabel');
+const scheduleExplainerPrimary = document.querySelector('#scheduleExplainerPrimary');
+const scheduleExplainerSecondary = document.querySelector('#scheduleExplainerSecondary');
 const adminNavItems = document.querySelectorAll('[data-admin-only="true"]');
 const ingestStateValue = document.querySelector('#ingestStateValue');
 const ingestLastRunValue = document.querySelector('#ingestLastRunValue');
@@ -380,10 +383,49 @@ function setScheduleSettingsStatus(message) {
   scheduleSettingsStatus.textContent = message;
 }
 
-function renderSchedulerSettings(settings, runtime) {
+let schedulerPersistence = {
+  available: true,
+  source: 'sql',
+  message: 'SQL scheduler settings are available.'
+};
+
+function renderSchedulerPersistence(persistence) {
+  schedulerPersistence = persistence || schedulerPersistence;
+  const available = schedulerPersistence.available !== false;
+
+  if (scheduleSettingsLabel) {
+    scheduleSettingsLabel.textContent = available ? 'Scheduler Settings (Stored in SQL)' : 'Scheduler Settings (Runtime Only)';
+  }
+
+  if (scheduleExplainerPrimary) {
+    scheduleExplainerPrimary.innerHTML = available
+      ? '<strong>Capacity ingest</strong> and <strong>Live placement refresh</strong> schedules are stored in SQL and can be updated here without an app restart.'
+      : '<strong>Capacity ingest</strong> and <strong>Live placement refresh</strong> are currently using runtime defaults because SQL-backed scheduler persistence is unavailable in this environment.';
+  }
+
+  if (scheduleExplainerSecondary) {
+    scheduleExplainerSecondary.textContent = available
+      ? 'Use startup toggles when you want a job to run one time after service start, in addition to its repeating interval.'
+      : 'The current runtime intervals are shown below, but scheduler values cannot be edited here until the DashboardSetting table is provisioned.';
+  }
+
+  [ingestIntervalMinutesInput, ingestRunOnStartupInput, livePlacementIntervalMinutesInput, livePlacementRunOnStartupInput].forEach((element) => {
+    if (element) {
+      element.disabled = !available;
+    }
+  });
+
+  if (saveSchedulerSettingsBtn) {
+    saveSchedulerSettingsBtn.disabled = !available;
+  }
+}
+
+function renderSchedulerSettings(settings, runtime, persistence) {
   if (!settings) {
     return;
   }
+
+  renderSchedulerPersistence(persistence);
 
   if (ingestIntervalMinutesInput) {
     ingestIntervalMinutesInput.value = String(normalizeSchedulerInterval(settings.ingest?.intervalMinutes, 0));
@@ -403,6 +445,11 @@ function renderSchedulerSettings(settings, runtime) {
 
   const runtimeIngest = runtime?.ingest?.intervalMinutes;
   const runtimeLive = runtime?.livePlacement?.intervalMinutes;
+  if (schedulerPersistence.available === false) {
+    setScheduleSettingsStatus(`${schedulerPersistence.message} Runtime intervals: ingest ${runtimeIngest ?? 0} min, live placement ${runtimeLive ?? 0} min.`);
+    return;
+  }
+
   if (runtimeIngest == null || runtimeLive == null) {
     setScheduleSettingsStatus('Loaded schedule settings from SQL.');
     return;
@@ -428,11 +475,11 @@ async function reloadSchedulerSettings() {
   }
 
   setButtonBusy(reloadSchedulerSettingsBtn, true, 'Loading...');
-  setScheduleSettingsStatus('Loading schedule settings from SQL...');
+  setScheduleSettingsStatus('Loading scheduler settings...');
 
   try {
     const payload = await fetchSchedulerSettings();
-    renderSchedulerSettings(payload.settings, payload.runtime);
+    renderSchedulerSettings(payload.settings, payload.runtime, payload.persistence);
   } catch (error) {
     setScheduleSettingsStatus(error.message || 'Failed to load scheduler settings.');
   } finally {
@@ -442,6 +489,11 @@ async function reloadSchedulerSettings() {
 
 async function saveSchedulerSettings() {
   if (!saveSchedulerSettingsBtn) {
+    return;
+  }
+
+  if (schedulerPersistence.available === false) {
+    setScheduleSettingsStatus(schedulerPersistence.message || 'Scheduler settings are read-only in this environment.');
     return;
   }
 
@@ -473,7 +525,7 @@ async function saveSchedulerSettings() {
       throw new Error(payload.error || 'Failed to save scheduler settings.');
     }
 
-    renderSchedulerSettings(payload.settings, payload.runtime);
+    renderSchedulerSettings(payload.settings, payload.runtime, payload.persistence);
     setAdminStatus('Scheduler settings saved and applied.', 'success');
   } catch (error) {
     setScheduleSettingsStatus(error.message || 'Failed to save scheduler settings.');

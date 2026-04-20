@@ -1121,6 +1121,31 @@ async function getDashboardSettings(prefix = null) {
   return map;
 }
 
+async function getDashboardSettingsPersistence() {
+  const pool = await getSqlPool();
+  if (!pool) {
+    return {
+      available: false,
+      source: 'runtime-defaults',
+      message: 'SQL scheduler settings are unavailable because SQL connectivity is not configured.'
+    };
+  }
+
+  if (!(await tableExists(pool, 'dbo.DashboardSetting'))) {
+    return {
+      available: false,
+      source: 'runtime-defaults',
+      message: 'SQL scheduler settings are unavailable because the DashboardSetting table is not provisioned.'
+    };
+  }
+
+  return {
+    available: true,
+    source: 'sql',
+    message: 'SQL scheduler settings are available.'
+  };
+}
+
 async function upsertDashboardSettings(entries = {}) {
   const keys = Object.keys(entries || {});
   if (keys.length === 0) {
@@ -1408,6 +1433,7 @@ module.exports = {
   listDashboardOperations,
   ensureDashboardSettingSchema,
   getDashboardSettings,
+  getDashboardSettingsPersistence,
   upsertDashboardSettings,
   ensurePhase3SchemaForPool,
   ensurePhase3Schema

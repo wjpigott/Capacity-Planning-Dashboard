@@ -68,6 +68,7 @@ const {
   logDashboardOperation,
   listDashboardOperations,
   getDashboardSettings,
+  getDashboardSettingsPersistence,
   upsertDashboardSettings
 } = require('./store/sql');
 const { applyIndexes } = require('./maintenance/applyPerformanceIndexes');
@@ -1324,12 +1325,13 @@ app.get('/api/admin/ingest/status', requireAdmin, (_, res) => {
 app.get('/api/admin/ingest/schedule', requireAdmin, async (_, res) => {
   try {
     const persisted = await getEffectiveSchedulerSettings();
+    const persistence = await getDashboardSettingsPersistence();
     const runtime = {
       ingest: getIngestionSchedulerConfig(),
       livePlacement: getLivePlacementSchedulerConfig()
     };
 
-    res.json({ ok: true, settings: persisted, runtime });
+    res.json({ ok: true, settings: persisted, runtime, persistence });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message || 'Failed to load scheduler settings.' });
   }
@@ -1357,6 +1359,19 @@ app.put('/api/admin/ui-settings', requireAdmin, async (req, res) => {
 
 app.put('/api/admin/ingest/schedule', requireAdmin, async (req, res) => {
   try {
+    const persistence = await getDashboardSettingsPersistence();
+    if (!persistence.available) {
+      return res.status(409).json({
+        ok: false,
+        error: `${persistence.message} Runtime schedule remains available, but SQL-backed persistence cannot be updated from the UI.`,
+        runtime: {
+          ingest: getIngestionSchedulerConfig(),
+          livePlacement: getLivePlacementSchedulerConfig()
+        },
+        persistence
+      });
+    }
+
     const candidate = {
       ingest: {
         intervalMinutes: req.body?.ingest?.intervalMinutes,
@@ -1371,7 +1386,7 @@ app.put('/api/admin/ingest/schedule', requireAdmin, async (req, res) => {
     const savedSettings = await saveSchedulerSettings(candidate);
     const runtime = applyRuntimeSchedulerSettings(savedSettings);
 
-    res.json({ ok: true, settings: savedSettings, runtime });
+    res.json({ ok: true, settings: savedSettings, runtime, persistence });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message || 'Failed to save scheduler settings.' });
   }

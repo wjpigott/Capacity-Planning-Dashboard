@@ -488,14 +488,14 @@
         <p class="page-description">Trigger live ingestion from Azure ARM APIs and manage the subscription catalog stored in SQL. These operations write to the database.</p>
         <div class="report-explainer" style="margin-bottom: 12px;">
           <strong>Refresh schedule</strong>
-          <span><strong>Capacity ingest</strong> and <strong>Live placement refresh</strong> schedules are stored in SQL and can be updated here without an app restart.</span>
+          <span id="scheduleExplainerPrimary"><strong>Capacity ingest</strong> and <strong>Live placement refresh</strong> schedules are stored in SQL and can be updated here without an app restart.</span>
           <span><strong>Interval (minutes)</strong> examples: <strong>30</strong> = every 30 minutes, <strong>60</strong> = hourly, <strong>1440</strong> = daily, and <strong>0</strong> = disabled.</span>
-          <span>Use startup toggles when you want a job to run one time after service start, in addition to its repeating interval.</span>
+          <span id="scheduleExplainerSecondary">Use startup toggles when you want a job to run one time after service start, in addition to its repeating interval.</span>
         </div>
         <div id="adminStatus" class="admin-status info">No admin action submitted yet.</div>
 
         <div class="surface" style="margin-top: 12px; margin-bottom: 12px;">
-          <div class="filter-section-label">Scheduler Settings (Stored in SQL)</div>
+          <div id="scheduleSettingsLabel" class="filter-section-label">Scheduler Settings (Stored in SQL)</div>
           <div class="filters" style="align-items: end;">
             <label>Capacity Ingest Interval (minutes)
               <input id="ingestIntervalMinutesInput" type="number" min="0" max="10080" step="1" value="0" />

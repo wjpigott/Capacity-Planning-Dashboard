@@ -60,6 +60,12 @@
 - The AI migration now seeds `ingest.openai.enabled=false`, which keeps fresh environments feature-disabled until rollout validation is complete.
 - Phase 1 Azure AI ingestion remains inside the web app process; the Function worker README should explicitly say no new worker endpoint or host setting is required for this slice.
 
+### 2026-04-21: CapacityLatest sourceType repair
+
+- `dbo.CapacityLatest` must project `sourceType` and partition latest-row selection by it so Compute and AI snapshots do not collapse into the same subscription/region/SKU record.
+- The app-side schema bootstrap (`ensurePhase3SchemaForPool`) and checked-in SQL migrations need to stay aligned, or runtime schema repair can silently reintroduce an older view contract.
+- Both `/api/capacity` and `/api/capacity/paged` should carry `sourceType` through their row shaping so frontend resource-type filters do not rely on family-name heuristics alone.
+
 ## 2026-04-21: Team Coordination Update
 
 **Session:** Azure AI Capacity Tracking — Design Phase (completed 2026-04-21T10:55:47Z)
@@ -147,3 +153,34 @@ Parker's implementation is ready for deployment:
 ### Next Steps
 
 Bishop's critical review will validate cross-layer correctness before merge approval.
+
+## 2026-04-21: Schema Remediation & Merge Gate Validation (16:42:19Z)
+
+**Session:** Parker Backend Schema Remediation — CapacityLatest sourceType Projection Fix
+
+### Remediation Completion
+
+Parker completed fixes for backend schema gaps identified in Bishop's critical review:
+
+**Finding #1 (CRITICAL) - FIXED:** CapacityLatest view missing sourceType projection
+- Updated dbo.CapacityLatest view definition in sql/schema.sql, src/store/sql.js ensureSchema(), and migration
+- Added sourceType to SELECT and PARTITION BY to prevent AI/Compute row collapse
+- Ensures consistent resource-type classification across paged and non-paged capacity APIs
+
+**Finding #2 (MEDIUM) - FIXED:** Paginated query omitting sourceType
+- Added sourceType to paginated capacity query SELECT in src/services/capacityService.js lines 293–307
+- Cross-layer classification logic now consistent with sourceType-present and sourceType-null fallback tested
+
+### Validation Status
+
+All remediation items completed:
+- View definition updated consistently across all schema paths
+- sourceType included in PARTITION BY to prevent dedup collisions
+- Paginated query includes sourceType in SELECT
+- Cross-layer classification tested with both present and null sourceType rows
+- Migration idempotent for both fresh and existing database states
+
+### Merge Gate Ready
+
+Schema remediation complete and verified. Ready for Bishop re-run validation to clear final merge gate.
+

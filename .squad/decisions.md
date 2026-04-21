@@ -184,3 +184,22 @@ See `.squad/orchestration-log/` for complete agent deliverables and `.squad/log/
 - CapacityLatest view must project every column that downstream services SELECT
 - Cross-layer classification logic should be tested with both sourceType-present and sourceType-null rows to exercise fallback
 - When reviewing frontend work depending on backend schema, trace full query path: view → service SELECT → API response → frontend classifier
+
+### Parker Schema Remediation (2026-04-21T16:42:19Z)
+
+**Remediation:** CapacityLatest sourceType projection fix
+
+**What:** Updated dbo.CapacityLatest view to include sourceType in SELECT and PARTITION BY clause across:
+- sql/schema.sql view definition
+- src/store/sql.js ensureSchema() embedded script
+- Migration 20260421-add-ai-model-availability.sql
+
+Also added sourceType to paginated capacity query SELECT in src/services/capacityService.js to ensure cross-layer classification consistency.
+
+**Why:** AI quota rows sharing existing capacity views with compute rows requires sourceType in both projection and partition key to prevent AI/Compute row collapse on same subscription/region/SKU. Paginated query must carry sourceType to avoid fallback to fragile family-name matching.
+
+**Operational Impact:**
+- Existing environments can refresh view via migration without data loss (idempotent)
+- Fresh schema/bootstrap paths use same view definition, preventing drift
+- No App Service, worker, or feature-flag changes required
+- Cross-layer classification logic now consistent across paged and non-paged APIs with sourceType-present and sourceType-null fallback tested

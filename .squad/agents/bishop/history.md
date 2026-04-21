@@ -52,3 +52,41 @@ Dallas's three-layer classification approach is robust:
 ### Merge Gate Status
 
 Blocked on Parker's backend schema remediation. All other implementation work complete and approved.
+
+## 2026-04-21: Final Verification — Remediation Validation (16:42:19Z)
+
+**Session:** Bishop Final Verification — Parker Schema Remediation Re-Run Validation
+
+### Remediation Verification
+
+Parker completed CapacityLatest sourceType projection fix and paginated query update. Verification confirms:
+
+**Finding #1 (CRITICAL) - REMEDIATED ✅:**
+- View definition updated in sql/schema.sql, src/store/sql.js ensureSchema(), and migration
+- sourceType added to SELECT and PARTITION BY clauses
+- Prevents AI/Compute row collapse on same subscription/region/SKU
+
+**Finding #2 (MEDIUM) - REMEDIATED ✅:**
+- Paginated query SELECT updated to include sourceType in src/services/capacityService.js
+- Cross-layer classification now consistent across paged and non-paged APIs
+- Both present and null sourceType rows tested for fallback behavior
+
+**Migration Validation ✅:**
+- Idempotent migration valid for both fresh and existing environments
+- No data loss; view can be refreshed without schema reset
+
+### Merge Gate Decision
+
+**STATUS: CLEARED ✅**
+
+All remediation items verified and validated. Cross-layer correctness confirmed. Ready for merge to main.
+
+### Final Sign-Off
+
+- Dallas frontend: ✅ APPROVED (unchanged from prior review)
+- Backend schema: ✅ REMEDIATED & VERIFIED
+- Parker platform: ✅ COMPLETE
+- Ash backend implementation: ✅ COMPLETE
+- Lambert testing: ✅ COMPLETE
+
+Team ready for merge.

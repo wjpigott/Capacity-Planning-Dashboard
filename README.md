@@ -422,6 +422,32 @@ Example with Entra sign-in enabled:
 	-SubscriptionId "<subscription-id>"
 ```
 
+Full example with the most commonly needed inputs:
+
+- Use this when you want one copy/paste example that shows the full parameter shape for a real environment.
+- Keep the environment and parameter file aligned. For example, use a production parameter file for `prod`, or omit `-ParameterFile` if you are not using one.
+- `-WebQuotaWriterSubscriptionIds` is only needed when the dashboard web app should perform quota write operations.
+
+```powershell
+./scripts/deploy-infra.ps1 `
+	-ResourceGroupName "<rg-name>" `
+	-Environment prod `
+	-WorkloadSuffix "cap001" `
+	-ParameterFile "./infra/<prod-or-env>.bicepparam" `
+	-SqlEntraAdminLogin "<entra-upn>" `
+	-SqlEntraAdminObjectId "<entra-object-id>" `
+	-SubscriptionId "<subscription-id>" `
+	-QuotaManagementGroupId "<management-group-id>" `
+	-WebReaderSubscriptionIds @("<sub-1>","<sub-2>") `
+	-WebQuotaWriterSubscriptionIds @("<sub-1>","<sub-2>") `
+	-WorkerRbacSubscriptionIds @("<sub-1>","<sub-2>") `
+	-AuthEnabled $true `
+	-EntraTenantId "<tenant-id>" `
+	-EntraClientId "<app-registration-client-id>" `
+	-EntraClientSecret "<app-registration-client-secret>" `
+	-AdminGroupId "<entra-group-object-id>"
+```
+
 Current Bicep deployment gaps for a fuller blue-green model are tracked in `infra/README.md`.
 
 ## Worker deployment

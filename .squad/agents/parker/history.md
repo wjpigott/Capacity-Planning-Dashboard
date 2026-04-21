@@ -84,6 +84,39 @@ Parker's design is complete and implementation-ready:
 
 Next: Validate database migration idempotency on scratch database; test feature flag deployment sequence; document in .env.sample and operational runbooks
 
+## 2026-04-21: Critical Review Findings & Reassignment (16:36:04Z)
+
+**Session:** Bishop Critical Review — Dallas Frontend APPROVED; Backend Schema Remediation Required
+
+### Reassignment Rationale
+
+Bishop's critical review of Dallas's frontend identified two backend schema gaps that block the AI resource-type filter in capacity grid. Per reviewer protocol, Parker (not Ash) assigned to remediate schema because:
+1. Ash authored the original CapacitySnapshot schema
+2. Fresh eyes needed on view contract to prevent confirmation bias in schema update
+3. Platform role well-positioned to validate view/migration contract alignment
+
+### Assignment: Fix CapacityLatest View Projection (BLOCKING)
+
+**What:** Update dbo.CapacityLatest to include sourceType in SELECT and PARTITION BY  
+**Why:** capacityService.getCapacityRows() issues `SELECT sourceType FROM dbo.CapacityLatest` → throws "Invalid column name 'sourceType'" → crashes non-paginated capacity grid → breaks AI resource-type filter  
+**Locations:**
+- `sql/schema.sql` lines 104–143 (view definition)
+- `src/store/sql.js` ensureSchema() (embedded view script)
+- `sql/migrations/20260421-add-ai-model-availability.sql` (migration)
+
+**Validation:** sourceType must be in PARTITION BY to avoid dedup collisions between Compute and AI rows on same subscription/region/skuName
+
+### Assignment: Fix Paginated Query sourceType SELECT (CONDITIONAL)
+
+**What:** Add sourceType to paginated capacity query SELECT list  
+**Why:** Paginated query omits sourceType → r.sourceType resolves to undefined → classification falls back to fragile family-name matching; works for 'openai' families today but breaks for any AI family not starting with 'openai'  
+**Location:** `src/services/capacityService.js` lines 293–307  
+**Blocker:** Depends on CapacityLatest view projection (Task 1)
+
+### Merge Gate
+
+Blocked on Parker's remediation. All other implementation work (Ash backend, Dallas frontend, Lambert testing) complete and approved. Once Parker's fixes validated and re-run Bishop approval triggered, merge gate clears.
+
 ## 2026-04-21: Implementation Wave Coordination (16:30:09Z)
 
 **Session:** Azure AI Capacity Implementation — Wave 2 Delivery (in progress)

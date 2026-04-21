@@ -129,3 +129,58 @@ The following design decisions were captured by agents during implementation and
 - **Ripley (Lead):** Architecture decisions D1–D7, staged implementation plan, CI/CD guidance, handoff notes
 
 See `.squad/orchestration-log/` for complete agent deliverables and `.squad/log/` for session logs.
+
+### Critical Review Findings & Verdicts (2026-04-21T16:36:04Z)
+
+**Reviewer:** Bishop  
+**Scope:** Dallas frontend integration + backend schema validation  
+**Overall Verdict:** Dallas frontend APPROVED; backend schema requires remediation before merge
+
+#### Dallas Frontend: APPROVED ✅
+
+**Artifacts Approved:**
+- `react/main.js` — RESOURCE_TYPE_OPTIONS + getRowResourceType (AI option correctly added; classification logic consistent across 3 layers)
+- `react/main.js` — AIModelAvailabilityView component (clean wiring to /api/ai/models + /api/ai/models/regions; summary cards, DataTable, filters all correct)
+- `react/main.js` — Admin scheduler (aiModelCatalog.intervalMinutes; hours↔minutes conversion correct)
+- `app.js` — getRowResourceType + rowMatchesSelectedResourceType (identical classification logic to service + React layers)
+- `app.js` — AI Model Availability report (lazy-loaded, filter wiring complete)
+- `app.js` — Admin scheduler (correctly wired to schedule save payload)
+- `index.html` — AI filter option + AI report panel + admin input (markup matches all JS selectors; nav item present)
+- `src/services/capacityService.js` — getRowResourceType (same classification logic; applyFilters uses it correctly)
+
+**What Dallas Got Right:**
+1. Classification consistency: getRowResourceType() uses identical logic in all three layers with proper sourceType OR family-based detection precedence
+2. AI report isolation: Queries dedicated API endpoints bypassing the problematic CapacityLatest path
+3. Existing view protection: Family summary scopes to 'Compute' explicitly, so AI rows won't corrupt existing reports
+4. Admin scheduler: aiModelCatalog.intervalMinutes setting correctly wired with hours↔minutes conversion
+5. Safe defaults: Migration seeds ingest.openai.enabled to 'false'
+6. Empty states: Both UIs handle pre-data scenario gracefully
+
+#### Backend Schema: REQUIRES REMEDIATION ❌
+
+**Finding #1: CapacityLatest Missing sourceType (CRITICAL/BLOCKING)**
+- **Location:** `src/store/sql.js` lines 1294–1318; `sql/schema.sql` lines 104–143; migration `20260421-add-ai-model-availability.sql`
+- **Severity:** Critical — SQL runtime errors
+- **Impact:** capacityService.getCapacityRows() issues `SELECT sourceType FROM dbo.CapacityLatest` → throws "Invalid column name 'sourceType'" → crashes non-paginated capacity grid API → breaks AI resource-type filter on both UIs
+- **Root Cause:** CapacityLatest view never updated when sourceType was added to CapacitySnapshot
+- **Fix Required:** Update dbo.CapacityLatest view in sql/schema.sql, src/store/sql.js:ensureSchema(), and migration to include sourceType in SELECT and PARTITION BY clause
+- **Assigned To:** Parker (fresh eyes needed; Ash authored original schema)
+
+**Finding #2: Paginated Query Silent Misclassification (MEDIUM)**
+- **Location:** `src/services/capacityService.js` lines 293–307
+- **Severity:** Medium — silent classification failure
+- **Impact:** Paginated query omits sourceType from SELECT. At line 323, r.sourceType resolves to undefined; AI classification falls back to fragile family-name matching. Works for OpenAI today but breaks for any AI family not starting with 'openai'
+- **Fix Required:** Add sourceType to paginated SELECT list (depends on Finding #1 view projection)
+- **Assigned To:** Parker (same fix scope)
+
+**Validation Checklist for Parker:**
+- [ ] View definition updated in both sql/schema.sql and src/store/sql.js
+- [ ] Migration file created and tested for idempotency
+- [ ] Paginated query SELECT updated to include sourceType
+- [ ] Cross-layer classification logic validated with sourceType-present and sourceType-null rows
+- [ ] Merge gate cleared after re-run validation
+
+#### Learning Transfer to Team
+- CapacityLatest view must project every column that downstream services SELECT
+- Cross-layer classification logic should be tested with both sourceType-present and sourceType-null rows to exercise fallback
+- When reviewing frontend work depending on backend schema, trace full query path: view → service SELECT → API response → frontend classifier

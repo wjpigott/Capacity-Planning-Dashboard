@@ -85,6 +85,7 @@ const DASHBOARD_SETTING_KEYS = {
   ingestRunOnStartup: 'schedule.ingest.runOnStartup',
   livePlacementIntervalMinutes: 'schedule.livePlacement.intervalMinutes',
   livePlacementRunOnStartup: 'schedule.livePlacement.runOnStartup',
+  aiModelCatalogIntervalMinutes: 'schedule.aiModelCatalog.intervalMinutes',
   showSqlPreview: 'ui.showSqlPreview'
 };
 
@@ -108,6 +109,20 @@ function normalizeBoolean(value, fallback = false) {
 
   const raw = String(value).trim().toLowerCase();
   return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on';
+}
+
+async function sqlObjectExists(pool, objectName, objectTypes = ['U']) {
+  const checks = objectTypes
+    .map((objectType) => `OBJECT_ID(@objectName, '${String(objectType).replace(/'/g, "''")}') IS NOT NULL`)
+    .join(' OR ');
+
+  const result = await pool.request()
+    .input('objectName', sql.NVarChar(256), objectName)
+    .query(`
+      SELECT CASE WHEN ${checks} THEN 1 ELSE 0 END AS existsFlag
+    `);
+
+  return Boolean(result.recordset?.[0]?.existsFlag);
 }
 
 function cleanupQuotaApplyJobs() {
@@ -599,6 +614,9 @@ function getDefaultSchedulerSettings() {
     livePlacement: {
       intervalMinutes: normalizeIntervalMinutes(process.env.LIVE_PLACEMENT_REFRESH_INTERVAL_MINUTES, 0),
       runOnStartup: normalizeBoolean(process.env.LIVE_PLACEMENT_REFRESH_ON_STARTUP, false)
+    },
+    aiModelCatalog: {
+      intervalMinutes: normalizeIntervalMinutes(process.env.INGEST_OPENAI_MODEL_CATALOG_INTERVAL_MINUTES, 1440)
     }
   };
 }
@@ -615,6 +633,12 @@ function parseSchedulerSettingsFromDb(dbMap = {}) {
     livePlacement: {
       intervalMinutes: normalizeIntervalMinutes(readValue(DASHBOARD_SETTING_KEYS.livePlacementIntervalMinutes), defaults.livePlacement.intervalMinutes),
       runOnStartup: normalizeBoolean(readValue(DASHBOARD_SETTING_KEYS.livePlacementRunOnStartup), defaults.livePlacement.runOnStartup)
+    },
+    aiModelCatalog: {
+      intervalMinutes: normalizeIntervalMinutes(
+        readValue(DASHBOARD_SETTING_KEYS.aiModelCatalogIntervalMinutes),
+        defaults.aiModelCatalog.intervalMinutes
+      )
     }
   };
 }
@@ -637,6 +661,9 @@ function applyRuntimeSchedulerSettings(settings = {}) {
     livePlacement: {
       intervalMinutes: normalizeIntervalMinutes(settings?.livePlacement?.intervalMinutes, 0),
       runOnStartup: normalizeBoolean(settings?.livePlacement?.runOnStartup, false)
+    },
+    aiModelCatalog: {
+      intervalMinutes: normalizeIntervalMinutes(settings?.aiModelCatalog?.intervalMinutes, 1440)
     }
   };
 
@@ -654,6 +681,9 @@ async function saveSchedulerSettings(settings = {}) {
     livePlacement: {
       intervalMinutes: normalizeIntervalMinutes(settings?.livePlacement?.intervalMinutes, 0),
       runOnStartup: normalizeBoolean(settings?.livePlacement?.runOnStartup, false)
+    },
+    aiModelCatalog: {
+      intervalMinutes: normalizeIntervalMinutes(settings?.aiModelCatalog?.intervalMinutes, 1440)
     }
   };
 
@@ -661,10 +691,11 @@ async function saveSchedulerSettings(settings = {}) {
     [DASHBOARD_SETTING_KEYS.ingestIntervalMinutes]: String(normalized.ingest.intervalMinutes),
     [DASHBOARD_SETTING_KEYS.ingestRunOnStartup]: normalized.ingest.runOnStartup ? 'true' : 'false',
     [DASHBOARD_SETTING_KEYS.livePlacementIntervalMinutes]: String(normalized.livePlacement.intervalMinutes),
-    [DASHBOARD_SETTING_KEYS.livePlacementRunOnStartup]: normalized.livePlacement.runOnStartup ? 'true' : 'false'
+    [DASHBOARD_SETTING_KEYS.livePlacementRunOnStartup]: normalized.livePlacement.runOnStartup ? 'true' : 'false',
+    [DASHBOARD_SETTING_KEYS.aiModelCatalogIntervalMinutes]: String(normalized.aiModelCatalog.intervalMinutes)
   });
 
-  if (savedCount < 4) {
+  if (savedCount < 5) {
     throw new Error('SQL scheduler settings could not be saved. Verify SQL connectivity and permissions.');
   }
 
@@ -1446,6 +1477,11 @@ app.get('/api/ai/models', async (req, res) => {
       res.status(503).json({ error: 'Database not configured' });
       return;
     }
+
+    if (!(await sqlObjectExists(pool, 'dbo.AIModelAvailabilityLatest', ['V']))) {
+      res.json({ rows: [] });
+      return;
+    }
     
     const region = req.query.region;
     const modelName = req.query.modelName;
@@ -1485,6 +1521,11 @@ app.get('/api/ai/models/regions', async (req, res) => {
       res.status(503).json({ error: 'Database not configured' });
       return;
     }
+
+    if (!(await sqlObjectExists(pool, 'dbo.AIModelAvailabilityLatest', ['V']))) {
+      res.json({ regions: [] });
+      return;
+    }
     
     const result = await pool.request().query(`
       SELECT DISTINCT region 
@@ -1510,32 +1551,39 @@ app.get('/api/ai/quota', async (req, res) => {
     const modelName = req.query.modelName;
     
     let query = `
+      WITH LatestAICapture AS (
+        SELECT MAX(capturedAtUtc) AS capturedAtUtc
+        FROM dbo.CapacitySnapshot
+        WHERE sourceType = 'live-azure-openai-ingest'
+      )
       SELECT 
-        region,
-        skuFamily,
-        skuName,
-        quotaCurrent,
-        quotaLimit,
-        availabilityState,
-        capturedAtUtc,
-        subscriptionName
-      FROM dbo.CapacityLatest
-      WHERE sourceType = 'live-azure-openai-ingest'
+        snapshot.region,
+        snapshot.skuFamily,
+        snapshot.skuName,
+        snapshot.quotaCurrent,
+        snapshot.quotaLimit,
+        snapshot.availabilityState,
+        snapshot.capturedAtUtc,
+        snapshot.subscriptionName
+      FROM dbo.CapacitySnapshot AS snapshot
+      INNER JOIN LatestAICapture
+        ON snapshot.capturedAtUtc = LatestAICapture.capturedAtUtc
+      WHERE snapshot.sourceType = 'live-azure-openai-ingest'
     `;
     
     const request = pool.request();
     
     if (region) {
-      query += ' AND region = @region';
+      query += ' AND snapshot.region = @region';
       request.input('region', sql.NVarChar, region);
     }
     
     if (modelName) {
-      query += ' AND (skuFamily LIKE @modelName OR skuName LIKE @modelName)';
+      query += ' AND (snapshot.skuFamily LIKE @modelName OR snapshot.skuName LIKE @modelName)';
       request.input('modelName', sql.NVarChar, `%${modelName}%`);
     }
     
-    query += ' ORDER BY region, skuFamily';
+    query += ' ORDER BY snapshot.region, snapshot.skuFamily';
     
     const result = await request.query(query);
     res.json({ rows: result.recordset });
@@ -1582,7 +1630,10 @@ app.get('/api/admin/ingest/schedule', requireAdmin, async (_, res) => {
     const persistence = await getDashboardSettingsPersistence();
     const runtime = {
       ingest: getIngestionSchedulerConfig(),
-      livePlacement: getLivePlacementSchedulerConfig()
+      livePlacement: getLivePlacementSchedulerConfig(),
+      aiModelCatalog: {
+        intervalMinutes: persisted.aiModelCatalog.intervalMinutes
+      }
     };
 
     res.json({ ok: true, settings: persisted, runtime, persistence });
@@ -1620,7 +1671,13 @@ app.put('/api/admin/ingest/schedule', requireAdmin, async (req, res) => {
         error: `${persistence.message} Runtime schedule remains available, but SQL-backed persistence cannot be updated from the UI.`,
         runtime: {
           ingest: getIngestionSchedulerConfig(),
-          livePlacement: getLivePlacementSchedulerConfig()
+          livePlacement: getLivePlacementSchedulerConfig(),
+          aiModelCatalog: {
+            intervalMinutes: normalizeIntervalMinutes(
+              req.body?.aiModelCatalog?.intervalMinutes,
+              process.env.INGEST_OPENAI_MODEL_CATALOG_INTERVAL_MINUTES || 1440
+            )
+          }
         },
         persistence
       });
@@ -1634,6 +1691,9 @@ app.put('/api/admin/ingest/schedule', requireAdmin, async (req, res) => {
       livePlacement: {
         intervalMinutes: req.body?.livePlacement?.intervalMinutes,
         runOnStartup: req.body?.livePlacement?.runOnStartup
+      },
+      aiModelCatalog: {
+        intervalMinutes: req.body?.aiModelCatalog?.intervalMinutes
       }
     };
 

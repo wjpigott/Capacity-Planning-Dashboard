@@ -76,10 +76,36 @@ CREATE TABLE dbo.DashboardSetting (
 );
 GO
 
+CREATE TABLE dbo.AIModelAvailability (
+    availabilityId BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    capturedAtUtc DATETIME2 NOT NULL,
+    subscriptionId NVARCHAR(64) NOT NULL,
+    region NVARCHAR(64) NOT NULL,
+    modelName NVARCHAR(128) NOT NULL,
+    modelVersion NVARCHAR(64) NULL,
+    deploymentTypes NVARCHAR(512) NULL,
+    finetuneCapable BIT NOT NULL DEFAULT 0,
+    deprecationDate DATETIME2 NULL,
+    skuName NVARCHAR(128) NULL,
+    modelFormat NVARCHAR(64) NULL,
+    isDefault BIT NOT NULL DEFAULT 0,
+    capabilities NVARCHAR(MAX) NULL
+);
+GO
+
+CREATE NONCLUSTERED INDEX IX_AIModelAvailability_Region_Model
+    ON dbo.AIModelAvailability(region, modelName, capturedAtUtc DESC);
+GO
+
+CREATE NONCLUSTERED INDEX IX_AIModelAvailability_CapturedAt
+    ON dbo.AIModelAvailability(capturedAtUtc DESC);
+GO
+
 CREATE OR ALTER VIEW dbo.CapacityLatest AS
 WITH Ranked AS (
     SELECT
         capturedAtUtc,
+        sourceType,
         subscriptionKey,
         subscriptionId,
         subscriptionName,
@@ -94,13 +120,14 @@ WITH Ranked AS (
         quotaLimit,
         monthlyCostEstimate,
         ROW_NUMBER() OVER (
-            PARTITION BY ISNULL(subscriptionKey, 'legacy-data'), region, skuName
+            PARTITION BY ISNULL(subscriptionKey, 'legacy-data'), ISNULL(sourceType, 'live-azure-ingest'), region, skuName
             ORDER BY capturedAtUtc DESC
         ) AS rn
     FROM dbo.CapacitySnapshot
 )
 SELECT
     capturedAtUtc,
+    sourceType,
     subscriptionKey,
     subscriptionId,
     subscriptionName,
@@ -114,6 +141,44 @@ SELECT
     quotaCurrent,
     quotaLimit,
     monthlyCostEstimate
+FROM Ranked
+WHERE rn = 1;
+GO
+
+CREATE OR ALTER VIEW dbo.AIModelAvailabilityLatest AS
+WITH Ranked AS (
+    SELECT
+        capturedAtUtc,
+        subscriptionId,
+        region,
+        modelName,
+        modelVersion,
+        deploymentTypes,
+        finetuneCapable,
+        deprecationDate,
+        skuName,
+        modelFormat,
+        isDefault,
+        capabilities,
+        ROW_NUMBER() OVER (
+            PARTITION BY region, modelName, modelVersion
+            ORDER BY capturedAtUtc DESC
+        ) AS rn
+    FROM dbo.AIModelAvailability
+)
+SELECT
+    capturedAtUtc,
+    subscriptionId,
+    region,
+    modelName,
+    modelVersion,
+    deploymentTypes,
+    finetuneCapable,
+    deprecationDate,
+    skuName,
+    modelFormat,
+    isDefault,
+    capabilities
 FROM Ranked
 WHERE rn = 1;
 GO

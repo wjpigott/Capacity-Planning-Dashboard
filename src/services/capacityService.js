@@ -84,8 +84,12 @@ function applyRegionPreset(rows, regionPreset) {
 }
 
 function getRowResourceType(row) {
+  const sourceType = String(row?.sourceType || '').toLowerCase();
   const family = String(row?.family || '').toLowerCase();
   const sku = String(row?.sku || '').toLowerCase();
+  if (sourceType.includes('openai') || family.startsWith('openai')) {
+    return 'AI';
+  }
   if (family.includes('disk') || sku.includes('disk') || sku.includes('snapshot')) {
     return 'Disk';
   }
@@ -219,7 +223,7 @@ async function getCapacityRows(filters) {
 
   const request = pool.request();
   let query = `
-      SELECT capturedAtUtc, subscriptionKey, subscriptionId, subscriptionName, region, skuName AS sku, skuFamily AS family, availabilityState AS availability,
+      SELECT capturedAtUtc, sourceType, subscriptionKey, subscriptionId, subscriptionName, region, skuName AS sku, skuFamily AS family, availabilityState AS availability,
         quotaCurrent, quotaLimit, monthlyCostEstimate AS monthlyCost, vCpu, memoryGB, zonesCsv
     FROM dbo.CapacityLatest
     WHERE 1 = 1
@@ -230,6 +234,7 @@ async function getCapacityRows(filters) {
   const result = await request.query(query);
   const rows = result.recordset.map((r) => normalizeCapacityRow({
     capturedAtUtc: r.capturedAtUtc,
+    sourceType: r.sourceType || null,
     subscriptionKey: r.subscriptionKey || 'legacy-data',
     subscriptionId: r.subscriptionId || 'legacy-data',
     subscriptionName: r.subscriptionName || 'Legacy data',
@@ -287,6 +292,7 @@ async function getCapacityRowsPaginated(filters) {
   let query = `
     SELECT 
       capturedAtUtc,
+      sourceType,
       subscriptionKey,
       ISNULL(subscriptionId, 'legacy-data') AS subscriptionId,
       ISNULL(subscriptionName, 'Legacy data') AS subscriptionName,
@@ -315,6 +321,7 @@ async function getCapacityRowsPaginated(filters) {
   const allRows = applyFilters(
     result.recordset.map((r) => normalizeCapacityRow({
       capturedAtUtc: r.capturedAtUtc,
+      sourceType: r.sourceType || null,
       subscriptionKey: r.subscriptionKey || 'legacy-data',
       subscriptionId: r.subscriptionId || 'legacy-data',
       subscriptionName: r.subscriptionName || 'Legacy data',
@@ -400,6 +407,33 @@ async function getSubscriptions({ search, limit } = {}) {
 }
 
 async function getSubscriptionSummary(filters) {
+  if (filters.resourceType && filters.resourceType !== 'all') {
+    const rows = await getCapacityRows(filters);
+    const bySubscription = new Map();
+
+    for (const row of rows) {
+      const key = row.subscriptionKey || 'legacy-data';
+      if (!bySubscription.has(key)) {
+        bySubscription.set(key, {
+          subscriptionKey: key,
+          rowCount: 0,
+          constrainedRows: 0,
+          totalQuotaAvailable: 0
+        });
+      }
+
+      const entry = bySubscription.get(key);
+      entry.rowCount += 1;
+      if (row.availability === 'CONSTRAINED') {
+        entry.constrainedRows += 1;
+      }
+      entry.totalQuotaAvailable += Number(row.quotaLimit || 0) - Number(row.quotaCurrent || 0);
+    }
+
+    return [...bySubscription.values()]
+      .sort((left, right) => right.rowCount - left.rowCount || left.subscriptionKey.localeCompare(right.subscriptionKey));
+  }
+
   const pool = await getSqlPool();
 
   const sourceRows = applyFilters(applyRegionPreset(mockRows, filters.regionPreset), filters);

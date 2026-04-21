@@ -6,17 +6,17 @@ flowchart LR
     classDef ops fill:#FFF0F0,stroke:#C53030,stroke-width:1.5px,color:#4A1111;
 
     User[Platform and Capacity Team]
-    Browser[Browser UI\nCapacity Explorer\nUSMajor preset default]
+    Browser[Browser UI\nCapacity Explorer + Admin controls\nFeature-gated AI views]
 
     subgraph Experience[Experience Layer]
         direction TB
         WebApp[Azure App Service\nStatic UI + Express API\nSystem-assigned managed identity]
-        Api[Node / Express endpoints\nhealthz\napi/capacity\napi/quota/groups placeholder]
+        Api[Node / Express endpoints\nhealthz\napi/capacity + api/ai/*\nApp Service flags gate AI ingest]
     end
 
     subgraph Data[Data Platform]
         direction TB
-        Sql[(Azure SQL Database\nCapacitySnapshot\nCapacityLatest view)]
+        Sql[(Azure SQL Database\nCapacitySnapshot + AIModelAvailability\nCapacityLatest + AIModelAvailabilityLatest\nDashboardSetting AI cadence defaults)]
         Seed[Seed / schema scripts\nEntra-auth sqlcmd]
     end
 

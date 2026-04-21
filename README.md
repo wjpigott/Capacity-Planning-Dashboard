@@ -532,6 +532,7 @@ Approvals are required before:
 - **Auto-discover**: If `INGEST_SUBSCRIPTION_IDS` is not set, the service calls `/subscriptions` to enumerate all accessible subscriptions.
 - **Explicit list**: Set `INGEST_SUBSCRIPTION_IDS=sub-1,sub-2,sub-3` to ingest only those subscriptions.
 - **Frequency**: Use Admin -> Data Ingestion -> Scheduler Settings to store cadence in SQL (for example 30 = every 30 minutes). `INGEST_INTERVAL_MINUTES` remains the fallback default when SQL settings are unavailable.
+- **AI model catalog cadence**: Admin -> Data Ingestion -> Scheduler Settings also stores `schedule.aiModelCatalog.intervalMinutes`. `INGEST_OPENAI_MODEL_CATALOG_INTERVAL_MINUTES` remains the fallback default when SQL settings are unavailable.
 - **Scheduler persistence**: `Admin -> Data Ingestion -> Scheduler Settings` reads and writes `dbo.DashboardSetting`. If that table is missing, treat it as an incomplete bootstrap/migration state, not as a signal to let the app create tables during normal runtime.
 - **Batch tuning**: Subscription batch size (100) and inter-batch delay (2s) are hardcoded; adjust in `azureIngestionService.js` if needed for different ARM throttle profiles.
 
@@ -540,6 +541,8 @@ This design avoids the performance and cost penalties of real-time API calls dur
 ## Live ingestion (Phase 1)
 
 The dashboard now supports a secure internal ingestion path that reads Azure Compute quota usage and writes snapshots to `dbo.CapacitySnapshot`.
+
+Phase 1 also adds Azure OpenAI quota + model catalog ingestion behind safe-off rollout controls so existing environments can deploy the code without activating AI collection.
 
 Defaults:
 
@@ -556,6 +559,9 @@ Required app settings:
 - `INGEST_SUBSCRIPTION_IDS` (optional comma-separated list; if omitted, enabled subscriptions are auto-discovered)
 - `INGEST_ON_STARTUP` (`true`/`false`, fallback default when SQL schedule settings are not present)
 - `INGEST_INTERVAL_MINUTES` (`0` disables scheduling, fallback default when SQL schedule settings are not present)
+- `INGEST_OPENAI_ENABLED` (`true`/`false`, default `false`; App Service rollout flag for Azure OpenAI quota + catalog ingestion)
+- `INGEST_OPENAI_MODEL_CATALOG` (`true`/`false`, default `true`; only evaluated when `INGEST_OPENAI_ENABLED=true`)
+- `INGEST_OPENAI_MODEL_CATALOG_INTERVAL_MINUTES` (`1440` by default; fallback cadence for model catalog refresh when SQL schedule settings are not present)
 - `AUTH_ENABLED` (`true` enables the dashboard Entra sign-in flow)
 - `ENTRA_TENANT_ID` (tenant ID used for Microsoft Entra sign-in)
 - `ENTRA_CLIENT_ID` (app registration/client ID for the dashboard)
@@ -577,6 +583,13 @@ Required app settings:
 - `LIVE_PLACEMENT_REFRESH_FAMILY` (optional family filter, default `all`)
 - `LIVE_PLACEMENT_REFRESH_AVAILABILITY` (optional availability filter, default `all`)
 - `LIVE_PLACEMENT_REFRESH_EXTRA_SKUS` (optional comma-separated extra SKUs for scheduled placement checks)
+
+DB-backed AI defaults:
+
+- `ingest.openai.enabled` in `dbo.DashboardSetting` defaults to `false`
+- `ingest.openai.modelCatalog.enabled` in `dbo.DashboardSetting` defaults to `true`
+- `schedule.aiModelCatalog.intervalMinutes` in `dbo.DashboardSetting` defaults to `1440` (`0` disables catalog refresh)
+- Explicit App Service values for `INGEST_OPENAI_ENABLED` / `INGEST_OPENAI_MODEL_CATALOG` override the database defaults for rollout control
 
 Runtime note:
 
@@ -607,6 +620,17 @@ Read APIs for analytics:
 - `GET /api/capacity/subscriptions` (masked subscription summary)
 - `GET /api/capacity/trends?days=7` (daily trend rollup)
 - `GET /api/capacity/families` (quota-style family summary)
+- `GET /api/ai/quota` (AI quota rows sourced from `dbo.CapacitySnapshot`)
+- `GET /api/ai/models` (latest AI model availability rows)
+- `GET /api/ai/models/regions` (distinct regions in the AI model catalog)
+
+Recommended Phase 1 rollout order:
+
+1. Apply the SQL migration chain so the AI settings + `dbo.AIModelAvailability` objects exist.
+2. Deploy the web app with `INGEST_OPENAI_ENABLED=false`.
+3. Validate that existing Compute ingestion and dashboard paths are unchanged.
+4. Enable `INGEST_OPENAI_ENABLED=true` in the target environment when you are ready for AI collection.
+5. Adjust `schedule.aiModelCatalog.intervalMinutes` through the admin-backed setting path only after the first end-to-end validation.
 
 Example trigger (all families — omit `familyFilters` or pass empty array):
 

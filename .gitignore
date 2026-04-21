@@ -39,6 +39,14 @@ __pycache__/
 .vscode/
 .idea/
 
+# Copilot / GitHub / Squad (local only)
+.copilot/
+.github/
+.squad/
+
+# Local-only docs (not tracked in git)
+.localdocs/
+
 # Local debug markers
 tools/Get-AzVMAvailability/TEST_MARKER.txt
 
@@ -46,3 +54,5 @@ tools/Get-AzVMAvailability/TEST_MARKER.txt
 *.tfstate
 *.tfstate.*
 .bicep/
+# Squad: SubSquad activation file (local to this machine)
+.squad-workstream

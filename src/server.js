@@ -984,6 +984,117 @@ async function runDatabaseBootstrapWithPool(poolOverride = null) {
   };
 }
 
+async function runNamedDatabaseMigration(migrationName, poolOverride = null) {
+  const normalizedMigrationName = path.basename(String(migrationName || '').trim());
+  if (!normalizedMigrationName) {
+    throw new Error('migrationName is required.');
+  }
+
+  const pool = poolOverride || await getSqlPool();
+  if (!pool) {
+    throw new Error('SQL connection is not configured.');
+  }
+
+  const migrationsDir = path.resolve(__dirname, '..', 'sql', 'migrations');
+  const migrationPath = path.resolve(migrationsDir, normalizedMigrationName);
+  if (!migrationPath.startsWith(migrationsDir + path.sep) || !fs.existsSync(migrationPath)) {
+    throw new Error(`Migration file not found: ${normalizedMigrationName}`);
+  }
+
+  const batchesApplied = await executeSqlScriptFile(pool, migrationPath);
+  await ensurePhase3SchemaForPool(pool);
+
+  return {
+    ok: true,
+    migrationApplied: normalizedMigrationName,
+    batchesApplied,
+    phase3Ensured: true
+  };
+}
+
+async function runFamilyCasingNormalizationBatch(batchSize = 1000, poolOverride = null) {
+  const normalizedBatchSize = Math.max(1, Math.min(Number(batchSize || 1000), 10000));
+  const pool = poolOverride || await getSqlPool();
+  if (!pool) {
+    throw new Error('SQL connection is not configured.');
+  }
+
+  async function updateInBatches(queryText) {
+    const result = await pool.request()
+      .input('batchSize', sql.Int, normalizedBatchSize)
+      .query(queryText);
+    return Number(result.recordset?.[0]?.rowsAffected || 0);
+  }
+
+  const updates = {
+    capacitySnapshotStandardUnderscore: await updateInBatches(`
+      UPDATE TOP (@batchSize) dbo.CapacitySnapshot
+      SET skuFamily = 'standard' + SUBSTRING(skuFamily, 10, 119)
+      WHERE LOWER(LEFT(skuFamily, 9)) = 'standard_';
+      SELECT @@ROWCOUNT AS rowsAffected;
+    `),
+    capacitySnapshotStandardPrefix: await updateInBatches(`
+      UPDATE TOP (@batchSize) dbo.CapacitySnapshot
+      SET skuFamily = 'standard' + SUBSTRING(skuFamily, 9, 120)
+      WHERE LOWER(LEFT(skuFamily, 8)) = 'standard'
+        AND LOWER(LEFT(skuFamily, 9)) <> 'standard_'
+        AND LEFT(skuFamily COLLATE Latin1_General_100_BIN2, 8) <> 'standard';
+      SELECT @@ROWCOUNT AS rowsAffected;
+    `),
+    capacitySnapshotBasicUnderscore: await updateInBatches(`
+      UPDATE TOP (@batchSize) dbo.CapacitySnapshot
+      SET skuFamily = 'basic' + SUBSTRING(skuFamily, 7, 121)
+      WHERE LOWER(LEFT(skuFamily, 6)) = 'basic_';
+      SELECT @@ROWCOUNT AS rowsAffected;
+    `),
+    capacitySnapshotBasicPrefix: await updateInBatches(`
+      UPDATE TOP (@batchSize) dbo.CapacitySnapshot
+      SET skuFamily = 'basic' + SUBSTRING(skuFamily, 6, 122)
+      WHERE LOWER(LEFT(skuFamily, 5)) = 'basic'
+        AND LOWER(LEFT(skuFamily, 6)) <> 'basic_'
+        AND LEFT(skuFamily COLLATE Latin1_General_100_BIN2, 5) <> 'basic';
+      SELECT @@ROWCOUNT AS rowsAffected;
+    `),
+    capacityScoreStandardUnderscore: await updateInBatches(`
+      UPDATE TOP (@batchSize) dbo.CapacityScoreSnapshot
+      SET skuFamily = 'standard' + SUBSTRING(skuFamily, 10, 119)
+      WHERE LOWER(LEFT(skuFamily, 9)) = 'standard_';
+      SELECT @@ROWCOUNT AS rowsAffected;
+    `),
+    capacityScoreStandardPrefix: await updateInBatches(`
+      UPDATE TOP (@batchSize) dbo.CapacityScoreSnapshot
+      SET skuFamily = 'standard' + SUBSTRING(skuFamily, 9, 120)
+      WHERE LOWER(LEFT(skuFamily, 8)) = 'standard'
+        AND LOWER(LEFT(skuFamily, 9)) <> 'standard_'
+        AND LEFT(skuFamily COLLATE Latin1_General_100_BIN2, 8) <> 'standard';
+      SELECT @@ROWCOUNT AS rowsAffected;
+    `),
+    capacityScoreBasicUnderscore: await updateInBatches(`
+      UPDATE TOP (@batchSize) dbo.CapacityScoreSnapshot
+      SET skuFamily = 'basic' + SUBSTRING(skuFamily, 7, 121)
+      WHERE LOWER(LEFT(skuFamily, 6)) = 'basic_';
+      SELECT @@ROWCOUNT AS rowsAffected;
+    `),
+    capacityScoreBasicPrefix: await updateInBatches(`
+      UPDATE TOP (@batchSize) dbo.CapacityScoreSnapshot
+      SET skuFamily = 'basic' + SUBSTRING(skuFamily, 6, 122)
+      WHERE LOWER(LEFT(skuFamily, 5)) = 'basic'
+        AND LOWER(LEFT(skuFamily, 6)) <> 'basic_'
+        AND LEFT(skuFamily COLLATE Latin1_General_100_BIN2, 5) <> 'basic';
+      SELECT @@ROWCOUNT AS rowsAffected;
+    `)
+  };
+
+  const totalUpdated = Object.values(updates).reduce((sum, count) => sum + Number(count || 0), 0);
+  return {
+    ok: true,
+    batchSize: normalizedBatchSize,
+    updates,
+    totalUpdated,
+    done: totalUpdated === 0
+  };
+}
+
 function normalizeDatabasePrincipalName(value, fallback = '') {
   const normalized = String(value == null ? fallback : value).trim().replace(/^[\[]|[\]]$/g, '');
   return normalized;
@@ -1653,6 +1764,24 @@ app.post('/internal/db/ensure-phase3-schema', requireIngestKey, async (_, res) =
 app.post('/internal/db/bootstrap', requireIngestKey, async (_, res) => {
   try {
     const result = await runDatabaseBootstrap();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/internal/db/migrate', requireIngestKey, express.json(), async (req, res) => {
+  try {
+    const result = await runNamedDatabaseMigration(req.body?.migrationName);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/internal/db/normalize-family-casing', requireIngestKey, express.json(), async (req, res) => {
+  try {
+    const result = await runFamilyCasingNormalizationBatch(req.body?.batchSize);
     res.json(result);
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });

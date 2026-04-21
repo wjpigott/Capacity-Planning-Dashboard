@@ -23,6 +23,8 @@ function buildSqlConfig({ accessToken } = {}) {
   const config = {
     server,
     database,
+    requestTimeout: 600000,
+    connectionTimeout: 30000,
     options: {
       encrypt: true,
       trustServerCertificate: false

@@ -510,80 +510,11 @@ async function getCapacityScoreSnapshotHistory(filters = {}) {
   }));
 }
 
-async function ensureQuotaCandidateSnapshotSchema(pool) {
-  const createScript = `
-    IF OBJECT_ID('dbo.QuotaCandidateSnapshot', 'U') IS NULL
-    BEGIN
-      CREATE TABLE dbo.QuotaCandidateSnapshot (
-        candidateId BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
-        analysisRunId UNIQUEIDENTIFIER NOT NULL,
-        capturedAtUtc DATETIME2 NOT NULL,
-        sourceCapturedAtUtc DATETIME2 NULL,
-        managementGroupId NVARCHAR(128) NOT NULL,
-        groupQuotaName NVARCHAR(128) NOT NULL,
-        subscriptionId NVARCHAR(64) NOT NULL,
-        subscriptionName NVARCHAR(256) NOT NULL,
-        region NVARCHAR(64) NOT NULL,
-        quotaName NVARCHAR(128) NOT NULL,
-        skuList NVARCHAR(MAX) NULL,
-        skuCount INT NOT NULL DEFAULT 0,
-        availabilityState NVARCHAR(32) NOT NULL,
-        quotaCurrent INT NOT NULL,
-        quotaLimit INT NOT NULL,
-        quotaAvailable INT NOT NULL,
-        suggestedMovable INT NOT NULL,
-        safetyBuffer INT NOT NULL,
-        subscriptionHash NVARCHAR(128) NOT NULL,
-        candidateStatus NVARCHAR(32) NOT NULL
-      )
-    END;
-  `;
-
-  const alterStatements = [
-    "IF COL_LENGTH('dbo.QuotaCandidateSnapshot', 'analysisRunId') IS NULL ALTER TABLE dbo.QuotaCandidateSnapshot ADD analysisRunId UNIQUEIDENTIFIER NULL;",
-    "IF COL_LENGTH('dbo.QuotaCandidateSnapshot', 'sourceCapturedAtUtc') IS NULL ALTER TABLE dbo.QuotaCandidateSnapshot ADD sourceCapturedAtUtc DATETIME2 NULL;",
-    "IF COL_LENGTH('dbo.QuotaCandidateSnapshot', 'managementGroupId') IS NULL ALTER TABLE dbo.QuotaCandidateSnapshot ADD managementGroupId NVARCHAR(128) NULL;",
-    "IF COL_LENGTH('dbo.QuotaCandidateSnapshot', 'groupQuotaName') IS NULL ALTER TABLE dbo.QuotaCandidateSnapshot ADD groupQuotaName NVARCHAR(128) NULL;",
-    "IF COL_LENGTH('dbo.QuotaCandidateSnapshot', 'subscriptionId') IS NULL ALTER TABLE dbo.QuotaCandidateSnapshot ADD subscriptionId NVARCHAR(64) NULL;",
-    "IF COL_LENGTH('dbo.QuotaCandidateSnapshot', 'subscriptionName') IS NULL ALTER TABLE dbo.QuotaCandidateSnapshot ADD subscriptionName NVARCHAR(256) NULL;",
-    "IF COL_LENGTH('dbo.QuotaCandidateSnapshot', 'skuList') IS NULL ALTER TABLE dbo.QuotaCandidateSnapshot ADD skuList NVARCHAR(MAX) NULL;",
-    "IF COL_LENGTH('dbo.QuotaCandidateSnapshot', 'skuCount') IS NULL ALTER TABLE dbo.QuotaCandidateSnapshot ADD skuCount INT NULL;",
-    "IF COL_LENGTH('dbo.QuotaCandidateSnapshot', 'availabilityState') IS NULL ALTER TABLE dbo.QuotaCandidateSnapshot ADD availabilityState NVARCHAR(32) NULL;",
-    "IF COL_LENGTH('dbo.QuotaCandidateSnapshot', 'quotaCurrent') IS NULL ALTER TABLE dbo.QuotaCandidateSnapshot ADD quotaCurrent INT NULL;",
-    "IF COL_LENGTH('dbo.QuotaCandidateSnapshot', 'quotaLimit') IS NULL ALTER TABLE dbo.QuotaCandidateSnapshot ADD quotaLimit INT NULL;",
-    "IF COL_LENGTH('dbo.QuotaCandidateSnapshot', 'quotaAvailable') IS NULL ALTER TABLE dbo.QuotaCandidateSnapshot ADD quotaAvailable INT NULL;"
-  ];
-
-  const backfillScript = `
-    UPDATE dbo.QuotaCandidateSnapshot
-    SET
-      analysisRunId = ISNULL(analysisRunId, NEWID()),
-      managementGroupId = ISNULL(managementGroupId, 'legacy-mg'),
-      groupQuotaName = ISNULL(groupQuotaName, 'legacy-quota-group'),
-      subscriptionId = ISNULL(subscriptionId, subscriptionHash),
-      subscriptionName = ISNULL(subscriptionName, subscriptionHash),
-      skuCount = ISNULL(skuCount, 0),
-      availabilityState = ISNULL(availabilityState, 'Unknown'),
-      quotaCurrent = ISNULL(quotaCurrent, 0),
-      quotaLimit = ISNULL(quotaLimit, 0),
-      quotaAvailable = ISNULL(quotaAvailable, 0)
-    WHERE analysisRunId IS NULL
-       OR managementGroupId IS NULL
-       OR groupQuotaName IS NULL
-       OR subscriptionId IS NULL
-       OR subscriptionName IS NULL
-      OR skuCount IS NULL
-       OR availabilityState IS NULL
-       OR quotaCurrent IS NULL
-       OR quotaLimit IS NULL
-       OR quotaAvailable IS NULL;
-  `;
-
-  await pool.request().query(createScript);
-  for (const statement of alterStatements) {
-    await pool.request().query(statement);
+async function ensureQuotaCandidateSnapshotTable(pool) {
+  const hasTable = await tableExists(pool, 'dbo.QuotaCandidateSnapshot');
+  if (!hasTable) {
+    throw new Error('Quota candidate history is unavailable because the QuotaCandidateSnapshot table is not provisioned. Run the SQL schema/bootstrap migration for this environment.');
   }
-  await pool.request().query(backfillScript);
 }
 
 async function insertQuotaCandidateSnapshots(rows) {
@@ -596,7 +527,7 @@ async function insertQuotaCandidateSnapshots(rows) {
     throw new Error('SQL connection is not configured for quota candidate capture.');
   }
 
-  await ensureQuotaCandidateSnapshotSchema(pool);
+  await ensureQuotaCandidateSnapshotTable(pool);
 
   const transaction = new sql.Transaction(pool);
   await transaction.begin();
@@ -660,7 +591,7 @@ async function getQuotaCandidateSnapshots(filters = {}) {
     throw new Error('groupQuotaName is required.');
   }
 
-  await ensureQuotaCandidateSnapshotSchema(pool);
+  await ensureQuotaCandidateSnapshotTable(pool);
 
   const request = pool.request();
   request.input('managementGroupId', sql.NVarChar(128), managementGroupId);
@@ -733,7 +664,7 @@ async function listQuotaCandidateRuns(filters = {}) {
     throw new Error('groupQuotaName is required.');
   }
 
-  await ensureQuotaCandidateSnapshotSchema(pool);
+  await ensureQuotaCandidateSnapshotTable(pool);
 
   const request = pool.request();
   request.input('managementGroupId', sql.NVarChar(128), managementGroupId);

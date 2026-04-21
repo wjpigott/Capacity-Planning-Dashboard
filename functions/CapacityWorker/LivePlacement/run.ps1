@@ -50,7 +50,10 @@ Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
             azComputeModuleVersions = @($azComputeModules)
             hasAzContext = [bool]$hasAzContext
             loginAttempted = [bool]$caches.LoginAttempted
+            currentSubscriptionId = $caches.CurrentSubscriptionId
             warning = $caches.LastPlacementWarning
+            errorType = $caches.LastPlacementErrorType
+            errorRecord = $caches.LastPlacementErrorRecord
         }
     }
 })

@@ -76,7 +76,9 @@ const { applyIndexes } = require('./maintenance/applyPerformanceIndexes');
 const app = express();
 const port = process.env.PORT || 3000;
 const QUOTA_APPLY_JOB_TTL_MS = 6 * 60 * 60 * 1000;
+const INGEST_JOB_TTL_MS = 6 * 60 * 60 * 1000;
 const quotaApplyJobs = new Map();
+const ingestionJobs = new Map();
 
 const DASHBOARD_SETTING_KEYS = {
   ingestIntervalMinutes: 'schedule.ingest.intervalMinutes',
@@ -116,6 +118,122 @@ function cleanupQuotaApplyJobs() {
       quotaApplyJobs.delete(jobId);
     }
   }
+}
+
+function cleanupIngestionJobs() {
+  const expiresBefore = Date.now() - INGEST_JOB_TTL_MS;
+  for (const [jobId, job] of ingestionJobs.entries()) {
+    const completedAt = job.completedAtUtc ? new Date(job.completedAtUtc).getTime() : 0;
+    if (completedAt && completedAt < expiresBefore) {
+      ingestionJobs.delete(jobId);
+    }
+  }
+}
+
+function buildCapacityIngestionOptions(body = {}) {
+  return {
+    regionPreset: body.regionPreset,
+    regions: body.regions,
+    subscriptionIds: body.subscriptionIds,
+    familyFilters: body.familyFilters
+  };
+}
+
+function serializeIngestionJob(job) {
+  return {
+    ok: true,
+    queued: job.status === 'queued' || job.status === 'running',
+    jobId: job.jobId,
+    status: job.status,
+    createdAtUtc: job.createdAtUtc,
+    startedAtUtc: job.startedAtUtc,
+    completedAtUtc: job.completedAtUtc,
+    error: job.error || null,
+    result: job.result || null,
+    options: job.options || null
+  };
+}
+
+function getActiveIngestionJob() {
+  cleanupIngestionJobs();
+  let candidate = null;
+  for (const job of ingestionJobs.values()) {
+    if (job.status !== 'queued' && job.status !== 'running') {
+      continue;
+    }
+    if (!candidate || new Date(job.createdAtUtc).getTime() > new Date(candidate.createdAtUtc).getTime()) {
+      candidate = job;
+    }
+  }
+  return candidate;
+}
+
+function queueCapacityIngestionJob(options) {
+  cleanupIngestionJobs();
+
+  const existing = getActiveIngestionJob();
+  if (existing) {
+    return existing;
+  }
+
+  const createdAtUtc = new Date().toISOString();
+  const job = {
+    jobId: randomUUID(),
+    status: 'queued',
+    createdAtUtc,
+    startedAtUtc: null,
+    completedAtUtc: null,
+    options,
+    result: null,
+    error: null
+  };
+
+  ingestionJobs.set(job.jobId, job);
+
+  setImmediate(async () => {
+    const startedAt = Date.now();
+    job.status = 'running';
+    job.startedAtUtc = new Date(startedAt).toISOString();
+
+    try {
+      const result = await runCapacityIngestion(options);
+      job.status = 'completed';
+      job.completedAtUtc = new Date().toISOString();
+      job.result = result;
+
+      await logDashboardOperation({
+        type: 'capacity-ingest',
+        name: 'Capacity Ingestion',
+        status: 'success',
+        triggerSource: 'manual',
+        startedAtUtc: job.startedAtUtc,
+        completedAtUtc: job.completedAtUtc,
+        durationMs: Date.now() - startedAt,
+        rowsAffected: Number.isFinite(result?.insertedRows) ? result.insertedRows : null,
+        subscriptionCount: Number.isFinite(result?.subscriptionCount) ? result.subscriptionCount : null,
+        regionPreset: options.regionPreset || null,
+        note: Array.isArray(result?.regions) && result.regions.length ? result.regions.join(', ') : null
+      });
+    } catch (err) {
+      job.status = 'failed';
+      job.completedAtUtc = new Date().toISOString();
+      job.error = err.message;
+
+      await logDashboardOperation({
+        type: 'capacity-ingest',
+        name: 'Capacity Ingestion',
+        status: 'failed',
+        triggerSource: 'manual',
+        startedAtUtc: job.startedAtUtc || job.createdAtUtc,
+        completedAtUtc: job.completedAtUtc,
+        durationMs: Date.now() - startedAt,
+        regionPreset: options.regionPreset || null,
+        errorMessage: err.message
+      });
+    }
+  });
+
+  return job;
 }
 
 function buildQuotaApplyFilters(body = {}) {
@@ -662,6 +780,21 @@ function buildSessionStore() {
   }
 }
 
+function createSessionMiddleware(useConfiguredStore = false) {
+  return session({
+    store: useConfiguredStore ? buildSessionStore() : undefined,
+    secret: process.env.SESSION_SECRET || 'dev-session-secret-change-in-production',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 8 * 60 * 60 * 1000
+    }
+  });
+}
+
 async function ensureSessionStoreSchema() {
   if (!shouldUseSqlSessionStore()) {
     return;
@@ -695,18 +828,9 @@ async function ensureSessionStoreSchema() {
   console.log(`[session] SQL session table ready: dbo.${sessionTable}`);
 }
 
-app.use(session({
-  store: buildSessionStore(),
-  secret: process.env.SESSION_SECRET || 'dev-session-secret-change-in-production',
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    maxAge: 8 * 60 * 60 * 1000 // 8 hours
-  }
-}));
+let activeSessionMiddleware = createSessionMiddleware(false);
+
+app.use((req, res, next) => activeSessionMiddleware(req, res, next));
 
 // Auth routes (/auth/login, /auth/callback, /auth/logout) — always accessible
 app.use('/auth', buildAuthRouter());
@@ -1242,7 +1366,8 @@ app.get('/api/capacity/scores', async (req, res) => {
       subscriptionIds: req.query.subscriptionIds,
       region: req.query.region,
       family: req.query.family,
-      availability: req.query.availability
+      availability: req.query.availability,
+      desiredCount: req.query.desiredCount
     }, pageNumber, pageSize);
     
     res.json(payload);
@@ -1279,8 +1404,9 @@ app.post('/api/capacity/scores/live', async (req, res) => {
     });
     res.json(result);
   } catch (err) {
-    const status = err.message.includes('not found') || err.message.includes('not configured') ? 503 : 500;
-    res.status(status).json({ error: 'Failed to retrieve live placement scores', detail: err.message, rows: [] });
+    const status = err.statusCode
+      || (err.message.includes('not found') || err.message.includes('not configured') ? 503 : 500);
+    res.status(status).json({ error: 'Failed to retrieve live placement scores', detail: err.message, rows: [], diagnostics: err.details || null });
   }
 });
 
@@ -1313,22 +1439,35 @@ app.get('/api/admin/recommendations/diagnostics', requireAdmin, (req, res) => {
 });
 
 app.post('/api/admin/ingest/capacity', requireAdmin, async (req, res) => {
-  try {
-    const result = await runCapacityIngestion({
-      regionPreset: req.body?.regionPreset,
-      regions: req.body?.regions,
-      subscriptionIds: req.body?.subscriptionIds,
-      familyFilters: req.body?.familyFilters
-    });
-    res.json({ ok: true, result, status: getIngestionStatus() });
-  } catch (err) {
-    const code = err.message === 'Capacity ingestion is already running.' ? 409 : 500;
-    res.status(code).json({ ok: false, error: err.message, status: getIngestionStatus() });
+  const activeJob = getActiveIngestionJob();
+  if (activeJob) {
+    res.json({ ...serializeIngestionJob(activeJob), statusSnapshot: getIngestionStatus() });
+    return;
   }
+
+  if (getIngestionStatus().inProgress) {
+    res.status(409).json({ ok: false, error: 'Capacity ingestion is already running.', status: getIngestionStatus() });
+    return;
+  }
+
+  const job = queueCapacityIngestionJob(buildCapacityIngestionOptions(req.body));
+  res.status(202).json({ ...serializeIngestionJob(job), statusSnapshot: getIngestionStatus() });
 });
 
 app.get('/api/admin/ingest/status', requireAdmin, (_, res) => {
-  res.json({ ok: true, status: getIngestionStatus() });
+  const activeJob = getActiveIngestionJob();
+  res.json({ ok: true, status: getIngestionStatus(), activeJob: activeJob ? serializeIngestionJob(activeJob) : null });
+});
+
+app.get('/api/admin/ingest/jobs/:jobId', requireAdmin, (req, res) => {
+  cleanupIngestionJobs();
+  const job = ingestionJobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ ok: false, error: 'Capacity ingestion job was not found or has expired.' });
+    return;
+  }
+
+  res.json(serializeIngestionJob(job));
 });
 
 app.get('/api/admin/ingest/schedule', requireAdmin, async (_, res) => {
@@ -1584,6 +1723,10 @@ app.get('*', (_, res) => {
 async function startServer() {
   try {
     await ensureSessionStoreSchema();
+    if (shouldUseSqlSessionStore()) {
+      activeSessionMiddleware = createSessionMiddleware(true);
+      console.log('[session] SQL session store enabled');
+    }
   } catch (err) {
     console.warn('⚠ Session store schema setup failed, continuing with current session configuration:', err.message);
   }

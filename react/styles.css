@@ -681,6 +681,25 @@ body {
   padding: 14px 18px;
   margin-bottom: 18px;
   font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
+
+.rx-banner__message {
+  white-space: normal;
+}
+
+.rx-banner__detail {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(23, 50, 77, 0.12);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .rx-banner--info {
@@ -723,8 +742,14 @@ body {
   color: var(--rx-success-ink);
 }
 
+.rx-pill--high {
+  background: var(--rx-success-bg);
+  color: var(--rx-success-ink);
+}
+
 .rx-pill--limited,
 .rx-pill--warn,
+.rx-pill--medium,
 .rx-pill--50,
 .rx-pill--60,
 .rx-pill--70,
@@ -735,6 +760,7 @@ body {
 
 .rx-pill--constrained,
 .rx-pill--restricted,
+.rx-pill--low,
 .rx-pill--error,
 .rx-pill--blocked,
 .rx-pill--0,
@@ -747,6 +773,8 @@ body {
 }
 
 .rx-pill--none,
+.rx-pill--unavailable,
+.rx-pill--unknown,
 .rx-pill--n\/a,
 .rx-pill--default {
   background: #eef3f8;
@@ -796,9 +824,26 @@ body {
   letter-spacing: 0.08em;
 }
 
+.rx-th--sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.rx-th--sortable:hover {
+  background: #e0ecf7;
+}
+
+.rx-th--sorted {
+  color: var(--rx-accent, #0b63b8);
+}
+
 .rx-table--dense th,
 .rx-table--dense td {
   padding: 7px 8px;
+}
+
+.rx-capacity-grid__subscription {
+  min-width: 19ch;
 }
 
 .rx-empty {
@@ -883,6 +928,17 @@ body {
   gap: 6px 14px;
 }
 
+.rx-matrix-key--compact {
+  grid-template-columns: repeat(2, max-content);
+  justify-content: start;
+  align-items: start;
+  gap: 2px 12px;
+}
+
+.rx-matrix-key--compact .rx-matrix-key__group {
+  min-width: 0;
+}
+
 .rx-matrix-key__group h3 {
   margin: 0 0 4px;
   font-size: 11px;
@@ -898,11 +954,20 @@ body {
   padding: 2px 0;
 }
 
+.rx-matrix-key--compact .rx-matrix-key__item {
+  gap: 5px;
+  padding: 0;
+}
+
 .rx-matrix-key__item > div {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 6px;
+}
+
+.rx-matrix-key--compact .rx-matrix-key__item > div {
+  gap: 4px;
 }
 
 .rx-matrix-key__item strong {
@@ -915,6 +980,10 @@ body {
   color: var(--rx-muted);
   font-size: 11px;
   line-height: 1.2;
+}
+
+.rx-matrix-key--compact .rx-matrix-key__item p {
+  line-height: 1.1;
 }
 
 .rx-row-swatch {

@@ -81,6 +81,9 @@ Status legend:
 - [x] `GET /api/capacity/families` (quota-style family summary)
 - [x] `GET /api/capacity/subscriptions` (masked subscription summary)
 - [x] `GET /api/capacity/trends` (daily trend rollups)
+- [x] `GET /api/capacity/scores` (derived capacity score view with desired-count-aware live snapshot reads)
+- [x] `POST /api/capacity/scores/live` (scoped live placement refresh for one subscription + one family)
+- [x] `POST /api/capacity/recommendations` (worker-first recommendation flow with diagnostics and fallback handling)
 - [x] `POST /internal/ingest/capacity`
 - [x] `GET /internal/ingest/status`
 - [x] `GET /api/quota/groups` live implementation
@@ -101,7 +104,13 @@ Status legend:
 - [x] Derived High/Medium/Low regional SKU capacity score view in reporting
 - [x] On-demand live placement refresh using `Get-AzVMAvailability` placement scores
 - [x] Worker-first live placement routing with local fallback for rollback safety
+- [x] Capacity Score report legend, last-checked timestamp, and sortable report columns in the React experience
+- [x] Live placement refresh is intentionally scoped to exactly one subscription and one family per run to avoid over-broad worker fanout
+- [x] Placeholder and aggregate SKUs are filtered out of live refresh requests and report filter lists
+- [x] Region-level live placement failures are retried/resolved per region, with unavailable rows persisted as the newest snapshot state
+- [x] Capacity Recommender falls back to the local runner when the remote worker fails, and zero-result runs now return clearer warning/detail text
 - [x] Ingestion status widget in UI
+- [x] Admin ingestion trigger is queued/polled as a background job instead of holding the browser request open
 - [x] Admin UI setting for scheduled refresh rates (capacity ingestion and live placement refresh stored in SQL)
 - [ ] Admin UI setting for quota discovery scope selection (management group and, if needed, quota group picker/default)
 - [ ] Clean up Quota Workbench button interactions, emphasis, and color treatment so step actions read clearly and consistently
@@ -162,13 +171,28 @@ Optional worker-first settings:
 - `CAPACITY_WORKER_BASE_URL`
 - `CAPACITY_WORKER_SHARED_SECRET`
 - `CAPACITY_WORKER_TIMEOUT_MS`
+- `CAPACITY_RECOMMEND_WORKER_TIMEOUT_MS`
+- `CAPACITY_LIVE_REFRESH_MAX_CALLS`
 - `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK`
 
 When `CAPACITY_WORKER_BASE_URL` is set, live placement refresh calls the Azure Function worker first. If the worker is unavailable and `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK` is not `true`, the dashboard falls back to the in-process App Service path to preserve rollback safety.
 
+Current live placement refresh guardrails:
+
+- The React Capacity Score refresh action only runs when exactly one subscription and one family are selected.
+- Refreshes use the requested desired count, but the service will reject scopes that would exceed the configured call limit (`CAPACITY_LIVE_REFRESH_MAX_CALLS`, default `10`).
+- Placeholder or aggregate SKUs are skipped because Azure live placement does not return meaningful results for those synthetic rows.
+- Explicit unavailable results are persisted so a failed or unavailable refresh does not silently resurrect an older successful snapshot.
+
 Capacity Recommender settings:
 
 - `GET_AZ_VM_AVAILABILITY_ROOT` — Path to the `Get-AzVMAvailability` repository root (optional in local dev; required in App Service production if recommender feature is used). Default: `../../Get-AzVMAvailability` relative to the `tools/` folder. If the external repository is not available at this location, set this environment variable to the correct path, or the Capacity Recommender will fail with "repo root not found."
+
+Current recommender behavior:
+
+- Recommendation requests use the remote worker first when configured.
+- If the remote worker fails and local fallback is allowed, the dashboard retries through the local runner and surfaces that fallback in warnings/diagnostics instead of failing the whole UI path.
+- The React banner snapshots the submitted target SKU and region scope so the status text always matches the request that actually ran.
 
 ## Dashboard web app deployment
 
@@ -286,6 +310,7 @@ Private or DBA-managed SQL note:
 - `scripts/deploy-infra.ps1` now tries two install paths: app-identity bootstrap first, then an Azure-side admin-assisted bootstrap using the current Azure CLI login if that login is an Entra SQL admin.
 - If neither path can administer the database, hand off `scripts/initialize-database.ps1` to the DBA team. That script applies `sql/schema.sql`, runs all files in `sql/migrations/`, and grants the dashboard web app identity the runtime roles it needs.
 - `dbo.DashboardSetting` is part of the provisioned schema and is also backfilled by `sql/migrations/20260420-add-dashboard-setting.sql`. Scheduler settings are expected to come from schema/bootstrap, not from opportunistic runtime table creation.
+- `dbo.QuotaCandidateSnapshot` is also expected to be provisioned by schema/bootstrap. The app now fails fast if that table is missing instead of attempting runtime table creation.
 - If the React Data Ingestion page reports that SQL scheduler settings are unavailable because `DashboardSetting` is not provisioned, rerun the database bootstrap path instead of re-enabling runtime `CREATE TABLE` behavior.
 - Example DBA handoff command:
 

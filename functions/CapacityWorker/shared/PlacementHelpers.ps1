@@ -46,6 +46,86 @@ function Ensure-AzureContext {
         [System.Collections.IDictionary]$Caches = @{}
     )
 
+    function Get-PreferredSubscriptionId {
+        $explicit = @(
+            [System.Environment]::GetEnvironmentVariable('CAPACITY_SUBSCRIPTION_ID'),
+            [System.Environment]::GetEnvironmentVariable('AZURE_SUBSCRIPTION_ID'),
+            [System.Environment]::GetEnvironmentVariable('ARM_SUBSCRIPTION_ID')
+        ) | Where-Object { $_ } | Select-Object -First 1
+
+        if ($explicit) {
+            return $explicit
+        }
+
+        $websiteOwnerName = [System.Environment]::GetEnvironmentVariable('WEBSITE_OWNER_NAME')
+        if ($websiteOwnerName -match '^[0-9a-fA-F-]{36}') {
+            return $matches[0]
+        }
+
+        return $null
+    }
+
+    function Set-UsableSubscriptionContext {
+        param([object]$Context)
+
+        $preferredSubscriptionId = Get-PreferredSubscriptionId
+
+        if ($preferredSubscriptionId -and (Get-Command -Name 'Set-AzContext' -ErrorAction SilentlyContinue)) {
+            try {
+                $preferredSubscription = $null
+                if (Get-Command -Name 'Get-AzSubscription' -ErrorAction SilentlyContinue) {
+                    $preferredSubscription = Get-AzSubscription -SubscriptionId $preferredSubscriptionId -ErrorAction Stop | Select-Object -First 1
+                }
+
+                if ($preferredSubscription) {
+                    $null = Set-AzContext -SubscriptionId $preferredSubscription.Id -TenantId $preferredSubscription.TenantId -ErrorAction Stop
+                    $Caches.CurrentSubscriptionId = $preferredSubscription.Id
+                    $Caches.LastPlacementWarning = $null
+                    return $true
+                }
+            }
+            catch {
+            }
+        }
+
+        if ($Context -and $Context.Subscription -and $Context.Subscription.Id) {
+            if (Get-Command -Name 'Set-AzContext' -ErrorAction SilentlyContinue) {
+                try {
+                    $null = Set-AzContext -SubscriptionId $Context.Subscription.Id -TenantId $Context.Tenant.Id -ErrorAction Stop
+                }
+                catch {
+                }
+            }
+
+            $Caches.CurrentSubscriptionId = $Context.Subscription.Id
+            $Caches.LastPlacementWarning = $null
+            return $true
+        }
+
+        if (-not (Get-Command -Name 'Get-AzSubscription' -ErrorAction SilentlyContinue)) {
+            return $false
+        }
+
+        try {
+            $subscription = Get-AzSubscription -ErrorAction Stop | Select-Object -First 1
+            if (-not $subscription -or -not $subscription.Id) {
+                return $false
+            }
+
+            if (Get-Command -Name 'Set-AzContext' -ErrorAction SilentlyContinue) {
+                $null = Set-AzContext -SubscriptionId $subscription.Id -TenantId $subscription.TenantId -ErrorAction Stop
+            }
+
+            $Caches.CurrentSubscriptionId = $subscription.Id
+            $Caches.LastPlacementWarning = $null
+            return $true
+        }
+        catch {
+            $Caches.LastPlacementWarning = "Failed to set Azure subscription context: $($_.Exception.Message)"
+            return $false
+        }
+    }
+
     if (-not (Get-Command -Name 'Get-AzContext' -ErrorAction SilentlyContinue)) {
         $Caches.LastPlacementWarning = 'Get-AzContext is not available in this PowerShell host.'
         return $false
@@ -53,7 +133,7 @@ function Ensure-AzureContext {
 
     try {
         $currentContext = Get-AzContext -ErrorAction SilentlyContinue
-        if ($currentContext -and $currentContext.Subscription) {
+        if (Set-UsableSubscriptionContext -Context $currentContext) {
             return $true
         }
     }
@@ -64,7 +144,7 @@ function Ensure-AzureContext {
         $null = Connect-AzAccount -Identity -ErrorAction Stop
         $Caches.LoginAttempted = $true
         $currentContext = Get-AzContext -ErrorAction SilentlyContinue
-        if ($currentContext -and $currentContext.Subscription) {
+        if (Set-UsableSubscriptionContext -Context $currentContext) {
             return $true
         }
     }
@@ -80,6 +160,7 @@ function Ensure-AzureContext {
 
 function Get-PlacementScores {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'DesiredCount', Justification = 'Used inside Invoke-WithRetry scriptblock closure')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'IncludeAvailabilityZone', Justification = 'Used inside Invoke-WithRetry scriptblock closure')]
     param(
         [Parameter(Mandatory)]
         [string[]]$SkuNames,
@@ -98,10 +179,18 @@ function Get-PlacementScores {
     )
 
     $scores = @{}
-    $uniqueSkus = @($SkuNames | Where-Object { $_ } | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique | Select-Object -First 5)
-    $uniqueRegions = @($Regions | Where-Object { $_ } | ForEach-Object { $_.Trim().ToLower() } | Where-Object { $_ } | Select-Object -Unique | Select-Object -First 8)
+    $uniqueSkus = @($SkuNames | Where-Object { $_ } | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
+    $uniqueRegions = @($Regions | Where-Object { $_ } | ForEach-Object { $_.Trim().ToLower() } | Where-Object { $_ } | Select-Object -Unique)
+    if ($uniqueSkus.Count -gt 5) {
+        Write-Verbose "Placement score: truncating from $($uniqueSkus.Count) to 5 SKUs (API limit)."
+    }
+    if ($uniqueRegions.Count -gt 8) {
+        Write-Verbose "Placement score: truncating from $($uniqueRegions.Count) to 8 regions (API limit)."
+    }
+    $normalizedSkus = @($uniqueSkus | Select-Object -First 5)
+    $normalizedRegions = @($uniqueRegions | Select-Object -First 8)
 
-    if ($uniqueSkus.Count -eq 0 -or $uniqueRegions.Count -eq 0) {
+    if ($normalizedSkus.Count -eq 0 -or $normalizedRegions.Count -eq 0) {
         $Caches.LastPlacementWarning = 'No valid SKU or region values were provided to the live placement lookup.'
         return $scores
     }
@@ -111,24 +200,38 @@ function Get-PlacementScores {
         return $scores
     }
 
-    $anchorRegion = $uniqueRegions[0]
-    $desiredSizes = @($uniqueSkus | ForEach-Object {
+    $anchorRegion = $normalizedRegions[0]
+    $desiredSizes = @($normalizedSkus | ForEach-Object {
         @{ sku = $_ }
     })
 
     try {
         $response = Invoke-WithRetry -MaxRetries $MaxRetries -OperationName 'Spot Placement Score API' -ScriptBlock {
-            Invoke-AzSpotPlacementScore -Location $anchorRegion -DesiredLocation $uniqueRegions -DesiredSize $desiredSizes -DesiredCount $DesiredCount -AvailabilityZone:$IncludeAvailabilityZone.IsPresent -ErrorAction Stop
+            Invoke-AzSpotPlacementScore -Location $anchorRegion -DesiredLocation $normalizedRegions -DesiredSize $desiredSizes -DesiredCount $DesiredCount -AvailabilityZone:$IncludeAvailabilityZone.IsPresent -ErrorAction Stop
         }
     }
     catch {
         $errorText = $_.Exception.Message
+        $Caches.LastPlacementErrorType = $_.Exception.GetType().FullName
+        $Caches.LastPlacementErrorRecord = ($_ | Out-String).Trim()
+        $isForbidden = $errorText -match '403|forbidden|authorization|not authorized|insufficient privileges'
+        if ($isForbidden) {
+            $Caches.LastPlacementWarning = 'Live placement lookup skipped: missing permissions (Compute Recommendations Role).'
+            return $scores
+        }
+
         $Caches.LastPlacementWarning = "Live placement lookup failed: $errorText"
         return $scores
     }
 
     $placementRows = @()
-    foreach ($item in @($response)) {
+    if ($null -eq $response) {
+        return $scores
+    }
+
+    $responseRows = if ($response -is [System.Collections.IEnumerable] -and $response -isnot [string]) { @($response) } else { @($response) }
+
+    foreach ($item in $responseRows) {
         if ($null -eq $item) { continue }
 
         if ($item.PSObject.Properties.Match('PlacementScore').Count -gt 0 -and $item.PlacementScore) {
@@ -150,7 +253,7 @@ function Get-PlacementScores {
 
         $scores["$sku|$($region.ToString().ToLower())"] = [pscustomobject]@{
             Score        = if ($score) { $score.ToString() } else { 'N/A' }
-            IsAvailable  = if ($null -ne $row.IsAvailable) { [bool]$row.IsAvailable } elseif ($null -ne $row.IsQuotaAvailable) { [bool]$row.IsQuotaAvailable } else { $null }
+            IsAvailable  = if ($null -ne $row.IsAvailable) { [bool]$row.IsAvailable } else { $null }
             IsRestricted = if ($null -ne $row.IsRestricted) { [bool]$row.IsRestricted } else { $null }
         }
     }

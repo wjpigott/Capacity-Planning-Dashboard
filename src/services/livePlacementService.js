@@ -7,11 +7,14 @@ const { getCapacityScoreSummary } = require('./capacityService');
 const { getRegionsForPreset } = require('../config/regionPresets');
 const { saveLivePlacementSnapshots, logDashboardOperation, insertDashboardErrorLog } = require('../store/sql');
 
-const DEFAULT_MAX_SKUS_PER_CALL = 5;
+// The current Dev worker/Az.Compute path is reliable for one SKU per request.
+// Larger multi-SKU batches can return a non-JSON service payload that the cmdlet cannot parse.
+const DEFAULT_MAX_SKUS_PER_CALL = 1;
 const DEFAULT_MAX_REGIONS_PER_CALL = 8;
 const POWERSHELL_RELEASE_API = 'https://api.github.com/repos/PowerShell/PowerShell/releases/latest';
 const DEFAULT_WORKER_TIMEOUT_MS = 60000;
 const DEFAULT_RECOMMENDATION_WORKER_TIMEOUT_MS = 180000;
+const DEFAULT_MAX_LIVE_PLACEMENT_CALLS = 10;
 
 let portablePowerShellPromise;
 let azModuleBootstrapPromise;
@@ -185,6 +188,15 @@ function useWorkerFirstMode() {
 
 function shouldDisableLocalFallback() {
   return String(process.env.CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK || '').toLowerCase() === 'true';
+}
+
+function resolveLivePlacementCallLimit() {
+  const configuredLimit = Number(process.env.CAPACITY_LIVE_REFRESH_MAX_CALLS || DEFAULT_MAX_LIVE_PLACEMENT_CALLS);
+  if (!Number.isFinite(configuredLimit) || configuredLimit < 1) {
+    return DEFAULT_MAX_LIVE_PLACEMENT_CALLS;
+  }
+
+  return Math.floor(configuredLimit);
 }
 
 function resolveProjectRoot() {
@@ -825,6 +837,164 @@ async function runPlacementLookup({ skus, regions, desiredCount }) {
   return runPlacementLookupLocal({ skus, regions, desiredCount });
 }
 
+function buildRegionUnavailableWarning(skus, region) {
+  const skuLabel = Array.isArray(skus) && skus.length > 0 ? skus.join(', ') : 'requested SKU(s)';
+  return `Live placement was unavailable for SKU(s) ${skuLabel} in region ${region}. Those rows were left as N/A.`;
+}
+
+function isRegionUnavailableError(error) {
+  const message = String(error?.message || '').toLowerCase();
+  return message.includes("expected '{' or '['")
+    || message.includes('was string: you')
+    || message.includes('returned invalid json')
+    || message.includes('restrictedskunotavailable')
+    || message.includes('skunotavailable')
+    || message.includes('live placement lookup failed');
+}
+
+function isRegionUnavailableWarningText(text) {
+  return isRegionUnavailableError({ message: text });
+}
+
+function batchProducedNoUsefulRows(result) {
+  const rows = Array.isArray(result?.rows) ? result.rows : [];
+  const warning = result?.diagnostics?.warning || null;
+  if (rows.length > 0) {
+    return false;
+  }
+  if (warning && isRegionUnavailableWarningText(warning)) {
+    return true;
+  }
+  return false;
+}
+
+async function runPlacementLookupResilient({ skus, regions, desiredCount }) {
+  let initialResult = null;
+  let initialError = null;
+  try {
+    initialResult = await runPlacementLookup({ skus, regions, desiredCount });
+  } catch (error) {
+    initialError = error;
+  }
+
+  const needsPerRegionRetry = Boolean(initialError) || batchProducedNoUsefulRows(initialResult);
+
+  if (!needsPerRegionRetry) {
+    return {
+      rows: Array.isArray(initialResult?.rows) ? initialResult.rows : [],
+      diagnostics: initialResult?.diagnostics ? [initialResult.diagnostics] : [],
+      warnings: []
+    };
+  }
+
+  // Single-region batch: nothing to split further. Translate to humanized warning if possible.
+  if (!Array.isArray(regions) || regions.length <= 1) {
+    const singleRegion = Array.isArray(regions) && regions.length === 1 ? regions[0] : null;
+    const batchWarning = initialResult?.diagnostics?.warning || null;
+
+    if (initialError) {
+      if (singleRegion && isRegionUnavailableError(initialError)) {
+        return {
+          rows: [],
+          diagnostics: [{
+            warning: initialError.message,
+            errorType: initialError.name || 'LivePlacementLookupError',
+            errorRecord: initialError.stack || null,
+            requestedSkus: skus,
+            requestedRegions: [singleRegion],
+            requestedDesiredCount: desiredCount
+          }],
+          warnings: [buildRegionUnavailableWarning(skus, singleRegion)]
+        };
+      }
+      throw initialError;
+    }
+
+    if (singleRegion && batchWarning && isRegionUnavailableWarningText(batchWarning)) {
+      return {
+        rows: [],
+        diagnostics: initialResult?.diagnostics ? [initialResult.diagnostics] : [],
+        warnings: [buildRegionUnavailableWarning(skus, singleRegion)]
+      };
+    }
+
+    return {
+      rows: Array.isArray(initialResult?.rows) ? initialResult.rows : [],
+      diagnostics: initialResult?.diagnostics ? [initialResult.diagnostics] : [],
+      warnings: []
+    };
+  }
+
+  const rows = [];
+  const diagnostics = [];
+  const warnings = [];
+  const regionWarnings = [];
+  let hasSuccessfulRegion = false;
+
+  const addRegionWarning = (region, message) => {
+    warnings.push(message);
+    regionWarnings.push({ skus: [...skus], region, message });
+  };
+
+  for (const region of regions) {
+    try {
+      const result = await runPlacementLookup({ skus, regions: [region], desiredCount });
+      const regionRows = Array.isArray(result?.rows) ? result.rows : [];
+      const regionWarning = result?.diagnostics?.warning || null;
+
+      if (regionRows.length > 0) {
+        hasSuccessfulRegion = true;
+        rows.push(...regionRows);
+        if (result?.diagnostics) {
+          diagnostics.push(result.diagnostics);
+        }
+      } else if (regionWarning && isRegionUnavailableWarningText(regionWarning)) {
+        // Confirmed unavailable — surface the humanized warning.
+        addRegionWarning(region, buildRegionUnavailableWarning(skus, region));
+        if (result?.diagnostics) {
+          diagnostics.push(result.diagnostics);
+        }
+      } else {
+        // Empty rows without a recognized error — treat as a soft miss, log only.
+        if (result?.diagnostics) {
+          diagnostics.push({
+            ...result.diagnostics,
+            warning: result.diagnostics.warning || 'Live placement returned no rows for this region.',
+            softMiss: true,
+            requestedSkus: skus,
+            requestedRegions: [region]
+          });
+        }
+      }
+    } catch (regionError) {
+      if (isRegionUnavailableError(regionError)) {
+        addRegionWarning(region, buildRegionUnavailableWarning(skus, region));
+      } else {
+        addRegionWarning(region, `Live placement lookup failed for SKU(s) ${skus.join(', ')} in region(s) ${region}: ${regionError.message}`);
+      }
+      diagnostics.push({
+        warning: regionError.message,
+        errorType: regionError.name || 'LivePlacementLookupError',
+        errorRecord: regionError.stack || null,
+        requestedSkus: skus,
+        requestedRegions: [region],
+        requestedDesiredCount: desiredCount
+      });
+    }
+  }
+
+  if (!hasSuccessfulRegion && initialError && warnings.length === 0) {
+    throw initialError;
+  }
+
+  return {
+    rows,
+    diagnostics,
+    warnings,
+    regionWarnings
+  };
+}
+
 async function runRecommendationLookupLocal({ targetSku, regions, topN, minScore, showPricing, showSpot }) {
   const wrapperPath = resolveRecommendationWrapperPath();
   const repoRoot = resolvePlacementRepoRoot();
@@ -971,9 +1141,12 @@ async function getCapacityRecommendations(options = {}) {
     throw new Error('Target SKU is required for recommendations.');
   }
 
-  const explicitRegions = Array.isArray(options.regions)
-    ? options.regions.map((region) => String(region || '').trim().toLowerCase()).filter(Boolean)
-    : [];
+  const explicitRegions = (Array.isArray(options.regions)
+    ? options.regions
+    : parseCsv(options.regions)
+  )
+    .map((region) => String(region || '').trim().toLowerCase())
+    .filter(Boolean);
   const presetRegions = getRegionsForPreset(options.regionPreset);
   const resolvedRegions = explicitRegions.length > 0
     ? [...new Set(explicitRegions)]
@@ -1013,27 +1186,58 @@ async function getCapacityRecommendations(options = {}) {
       });
     }
   } catch (error) {
-    const errorText = String(error?.message || '').toLowerCase();
-    const isNoOutputFailure = errorText.includes('returned no json output') || errorText.includes('no output was returned by the recommendation wrapper');
-
-    if (showSpot && isNoOutputFailure) {
-      contract = await runRecommendationLookupLocal({
+    if (useWorkerFirstMode() && !shouldDisableLocalFallback()) {
+      const localResult = await runRecommendationLookupLocal({
         targetSku,
         regions: resolvedRegions,
         topN,
         minScore,
         showPricing,
-        showSpot: false
+        showSpot
       });
+      contract = {
+        ...localResult,
+        diagnostics: localResult?.diagnostics
+          ? {
+              ...localResult.diagnostics,
+              executionMode: 'function-app-fallback',
+              workerUrl: resolveWorkerBaseUrl(),
+              fallbackReason: error.message
+            }
+          : {
+              executionMode: 'function-app-fallback',
+              workerUrl: resolveWorkerBaseUrl(),
+              fallbackReason: error.message
+            }
+      };
       fallbackApplied = true;
     } else {
-      throw error;
+      const errorText = String(error?.message || '').toLowerCase();
+      const isNoOutputFailure = errorText.includes('returned no json output') || errorText.includes('no output was returned by the recommendation wrapper');
+
+      if (showSpot && isNoOutputFailure) {
+        contract = await runRecommendationLookupLocal({
+          targetSku,
+          regions: resolvedRegions,
+          topN,
+          minScore,
+          showPricing,
+          showSpot: false
+        });
+        fallbackApplied = true;
+      } else {
+        throw error;
+      }
     }
   }
 
   if (fallbackApplied) {
     const warnings = Array.isArray(contract?.warnings) ? contract.warnings : [];
-    warnings.push('Spot pricing request was retried with Show Spot disabled after an empty-output runner response.');
+    if (!warnings.some((warning) => /fallback/i.test(String(warning || '')))) {
+      warnings.push(useWorkerFirstMode()
+        ? 'Recommendations were served from the local fallback runner after the remote worker failed.'
+        : 'Spot pricing request was retried with Show Spot disabled after an empty-output runner response.');
+    }
     contract = {
       ...contract,
       warnings
@@ -1052,6 +1256,29 @@ async function getCapacityRecommendations(options = {}) {
 }
 
 async function getLivePlacementScoreRows(filters = {}) {
+  const selectedSubscriptionIds = parseCsv(filters.subscriptionIds);
+  if (selectedSubscriptionIds.length !== 1) {
+    const scopeError = new Error(selectedSubscriptionIds.length === 0
+      ? 'Live placement refresh requires exactly one selected subscription. Choose the specific subscription that needs additional capacity before refreshing.'
+      : `Live placement refresh requires exactly one selected subscription. ${selectedSubscriptionIds.length} subscriptions are currently selected.`);
+    scopeError.statusCode = 400;
+    scopeError.details = {
+      selectedSubscriptionCount: selectedSubscriptionIds.length,
+      selectedSubscriptionIds
+    };
+    throw scopeError;
+  }
+
+  if (!filters.family || String(filters.family).trim().toLowerCase() === 'all') {
+    const scopeError = new Error('Live placement refresh requires a specific family. Choose the family you want to validate before refreshing live placement.');
+    scopeError.statusCode = 400;
+    scopeError.details = {
+      selectedSubscriptionCount: selectedSubscriptionIds.length,
+      family: filters.family || 'all'
+    };
+    throw scopeError;
+  }
+
   const currentRows = await getCapacityScoreSummary(filters);
   const extraSkus = parseExtraSkus(filters.extraSkus);
   const targetRegions = resolveTargetRegions(filters, currentRows);
@@ -1107,59 +1334,168 @@ async function getLivePlacementScoreRows(filters = {}) {
     };
   }
 
-  const uniqueSkus = [...new Set(workingRows.map((row) => row.sku).filter(Boolean))];
+  const placeholderSkuPattern = /-aggregate$|family-aggregate/i;
+  const isRealSku = (sku) => {
+    if (!sku) return false;
+    const text = String(sku).trim();
+    if (!text) return false;
+    if (placeholderSkuPattern.test(text)) return false;
+    if (!/^Standard_/i.test(text) && !/^Basic_/i.test(text)) return false;
+    return true;
+  };
+  const placeholderSkus = new Set(workingRows.map((row) => row.sku).filter((sku) => sku && !isRealSku(sku)));
+  if (placeholderSkus.size > 0) {
+    warnings.push(`Skipped ${placeholderSkus.size} aggregate/placeholder SKU(s) that cannot be scored via live placement: ${[...placeholderSkus].join(', ')}.`);
+  }
+
+  const uniqueSkus = [...new Set(workingRows.map((row) => row.sku).filter(isRealSku))];
   const uniqueRegions = [...new Set(workingRows.map((row) => row.region).filter(Boolean))];
   const skuChunks = chunk(uniqueSkus, DEFAULT_MAX_SKUS_PER_CALL);
   const regionChunks = chunk(uniqueRegions, DEFAULT_MAX_REGIONS_PER_CALL);
+  const estimatedCallCount = skuChunks.length * regionChunks.length;
+  const maxCallCount = resolveLivePlacementCallLimit();
+
+  if (estimatedCallCount > maxCallCount) {
+    const scopeError = new Error(`Live placement refresh scope is too large: ${uniqueSkus.length} SKU(s) across ${uniqueRegions.length} region(s) would require ${estimatedCallCount} lookup call(s). Narrow the filters to fewer subscriptions, a single family, or a smaller region scope.`);
+    scopeError.statusCode = 400;
+    scopeError.details = {
+      uniqueSkuCount: uniqueSkus.length,
+      uniqueRegionCount: uniqueRegions.length,
+      estimatedCallCount,
+      maxCallCount
+    };
+    throw scopeError;
+  }
+
   const liveCheckedAtUtc = new Date().toISOString();
   const liveMap = new Map();
   const diagnostics = [];
+  const pendingRegionWarnings = [];
+  const unavailableKeySet = new Set();
 
   for (const skuChunk of skuChunks) {
     for (const regionChunk of regionChunks) {
-      const result = await runPlacementLookup({
-        skus: skuChunk,
-        regions: regionChunk,
-        desiredCount: effectiveDesiredCount
-      });
+      try {
+        const chunkResult = await runPlacementLookupResilient({
+          skus: skuChunk,
+          regions: regionChunk,
+          desiredCount: effectiveDesiredCount
+        });
 
-      if (result.diagnostics) {
-        diagnostics.push(result.diagnostics);
-      }
+        if (Array.isArray(chunkResult.regionWarnings) && chunkResult.regionWarnings.length > 0) {
+          pendingRegionWarnings.push(...chunkResult.regionWarnings);
+        } else if (Array.isArray(chunkResult.warnings) && chunkResult.warnings.length > 0) {
+          // Backwards-compat: warnings without per-region metadata apply to the whole chunk.
+          for (const message of chunkResult.warnings) {
+            pendingRegionWarnings.push({ skus: skuChunk, region: null, message });
+          }
+        }
 
-      for (const row of result.rows) {
-        liveMap.set(`${row.sku}|${String(row.region || '').toLowerCase()}`, row);
+        if (Array.isArray(chunkResult.diagnostics) && chunkResult.diagnostics.length > 0) {
+          diagnostics.push(...chunkResult.diagnostics.filter(Boolean));
+        }
+
+        for (const row of chunkResult.rows) {
+          liveMap.set(`${row.sku}|${String(row.region || '').toLowerCase()}`, row);
+        }
+      } catch (err) {
+        const chunkSkuLabel = skuChunk.join(', ');
+        const chunkRegionLabel = regionChunk.join(', ');
+        const message = isRegionUnavailableError(err)
+          ? `Live placement was unavailable for SKU(s) ${chunkSkuLabel} in region(s) ${chunkRegionLabel}. Those rows were left as N/A.`
+          : `Live placement lookup failed for SKU(s) ${chunkSkuLabel} in region(s) ${chunkRegionLabel}: ${err.message}`;
+        pendingRegionWarnings.push({ skus: skuChunk, region: null, message, chunkRegions: regionChunk });
+        diagnostics.push({
+          warning: err.message,
+          errorType: err.name || 'LivePlacementLookupError',
+          errorRecord: err.stack || null,
+          requestedSkus: skuChunk,
+          requestedRegions: regionChunk,
+          requestedDesiredCount: effectiveDesiredCount
+        });
+        continue;
       }
     }
   }
 
-  const diagnosticWarning = diagnostics.map((item) => item?.warning).find(Boolean) || null;
+  // Drop warnings for sku/region combinations that were actually resolved with live data.
+  for (const entry of pendingRegionWarnings) {
+    const entrySkus = Array.isArray(entry.skus) ? entry.skus : [];
+    const regionsToCheck = entry.region
+      ? [entry.region]
+      : (Array.isArray(entry.chunkRegions) ? entry.chunkRegions : uniqueRegions);
+    let allCovered = entrySkus.length > 0 && regionsToCheck.length > 0;
+    for (const sku of entrySkus) {
+      for (const region of regionsToCheck) {
+        if (!liveMap.has(`${sku}|${String(region || '').toLowerCase()}`)) {
+          allCovered = false;
+          break;
+        }
+      }
+      if (!allCovered) break;
+    }
+    if (!allCovered) {
+      warnings.push(entry.message);
+      const isUnavailableWarning = /^Live placement was unavailable for SKU\(s\)/.test(String(entry.message || ''));
+      if (isUnavailableWarning) {
+        for (const sku of entrySkus) {
+          for (const region of regionsToCheck) {
+            const key = `${sku}|${String(region || '').toLowerCase()}`;
+            if (!liveMap.has(key)) {
+              unavailableKeySet.add(key);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const rawDiagnosticWarning = warnings.length === 0
+    ? (diagnostics.map((item) => item?.warning).find(Boolean) || null)
+    : null;
+  // Never leak raw worker/PowerShell exception text into the user-facing banner.
+  const diagnosticWarning = rawDiagnosticWarning && !isRegionUnavailableWarningText(rawDiagnosticWarning)
+    ? rawDiagnosticWarning
+    : null;
   const primaryDiagnostic = diagnostics.find(Boolean) || null;
   const combinedWarning = [...warnings, diagnosticWarning].filter(Boolean).join(' ');
 
   const enrichedRows = workingRows.map((row) => {
-    const live = liveMap.get(`${row.sku}|${String(row.region || '').toLowerCase()}`);
+    const rowKey = `${row.sku}|${String(row.region || '').toLowerCase()}`;
+    const live = liveMap.get(rowKey);
+    const isUnavailableThisRun = unavailableKeySet.has(rowKey);
     return {
       ...row,
-      livePlacementScore: live?.score || 'N/A',
-      livePlacementAvailable: typeof live?.isAvailable === 'boolean' ? live.isAvailable : null,
-      livePlacementRestricted: typeof live?.isRestricted === 'boolean' ? live.isRestricted : null,
-      liveCheckedAtUtc
+      livePlacementScore: live?.score || (isUnavailableThisRun ? 'N/A' : (row.livePlacementScore || 'N/A')),
+      livePlacementAvailable: typeof live?.isAvailable === 'boolean'
+        ? live.isAvailable
+        : (isUnavailableThisRun ? null : (typeof row.livePlacementAvailable === 'boolean' ? row.livePlacementAvailable : null)),
+      livePlacementRestricted: typeof live?.isRestricted === 'boolean'
+        ? live.isRestricted
+        : (isUnavailableThisRun ? null : (typeof row.livePlacementRestricted === 'boolean' ? row.livePlacementRestricted : null)),
+      liveCheckedAtUtc: live ? liveCheckedAtUtc : (isUnavailableThisRun ? null : (row.liveCheckedAtUtc || null))
     };
   });
 
   const snapshotsToSave = enrichedRows
-    .filter((row) => row.livePlacementScore && row.livePlacementScore !== 'N/A')
-    .map((row) => ({
-      capturedAtUtc: liveCheckedAtUtc,
-      desiredCount: effectiveDesiredCount,
-      region: row.region,
-      sku: row.sku,
-      livePlacementScore: row.livePlacementScore,
-      livePlacementAvailable: row.livePlacementAvailable,
-      livePlacementRestricted: row.livePlacementRestricted,
-      warning: null
-    }));
+    .filter((row) => {
+      const rowKey = `${row.sku}|${String(row.region || '').toLowerCase()}`;
+      return Boolean(liveMap.has(rowKey) || unavailableKeySet.has(rowKey));
+    })
+    .map((row) => {
+      const rowKey = `${row.sku}|${String(row.region || '').toLowerCase()}`;
+      const isUnavailableThisRun = unavailableKeySet.has(rowKey);
+      return {
+        capturedAtUtc: liveCheckedAtUtc,
+        desiredCount: effectiveDesiredCount,
+        region: row.region,
+        sku: row.sku,
+        livePlacementScore: isUnavailableThisRun ? 'N/A' : row.livePlacementScore,
+        livePlacementAvailable: isUnavailableThisRun ? null : row.livePlacementAvailable,
+        livePlacementRestricted: isUnavailableThisRun ? null : row.livePlacementRestricted,
+        warning: isUnavailableThisRun ? 'Live placement was unavailable during the latest refresh.' : null
+      };
+    });
 
   if (snapshotsToSave.length > 0) {
     saveLivePlacementSnapshots(snapshotsToSave).catch((saveErr) => {
@@ -1174,6 +1510,7 @@ async function getLivePlacementScoreRows(filters = {}) {
     source: 'Get-AzVMAvailability:Get-PlacementScores',
     requestedDesiredCount,
     effectiveDesiredCount,
+    estimatedCallCount,
     warning: combinedWarning || null,
     diagnostics: primaryDiagnostic
   };

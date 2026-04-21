@@ -349,6 +349,7 @@ function redirectToLoginOnce() {
 
 let ingestStatusPollHandle = null;
 let operationHistoryPollHandle = null;
+let currentIngestJobId = null;
 
 function setAdminStatus(message, tone = 'info') {
   if (!adminStatus) return;
@@ -825,9 +826,13 @@ function setButtonBusy(button, isBusy, busyLabel) {
   button.textContent = isBusy ? busyLabel : button.dataset.defaultLabel;
 }
 
-function summarizeIngestionStatus(status) {
+function summarizeIngestionStatus(status, activeJob = null) {
   if (!status) {
     return 'Ingestion status unavailable.';
+  }
+
+  if (activeJob && activeJob.status === 'queued') {
+    return `Capacity ingestion is queued${activeJob.jobId ? ` (${activeJob.jobId.slice(0, 8)})` : ''}.`;
   }
 
   if (status.inProgress) {
@@ -866,28 +871,40 @@ async function fetchAdminIngestStatus() {
     throw new Error(payload.error || 'Failed to retrieve ingestion status.');
   }
 
-  return payload.status;
+  return payload;
 }
 
 async function syncIngestStatus() {
-  const status = await fetchAdminIngestStatus();
+  const payload = await fetchAdminIngestStatus();
+  const status = payload.status;
+  const activeJob = payload.activeJob || null;
   renderIngestionStatusCard(status);
 
-  if (status.inProgress) {
+  if (activeJob && activeJob.jobId) {
+    currentIngestJobId = activeJob.jobId;
+  }
+
+  if ((activeJob && (activeJob.status === 'queued' || activeJob.status === 'running')) || status.inProgress) {
     setButtonBusy(triggerIngestBtn, true, 'Ingest Running...');
-    setAdminStatus(summarizeIngestionStatus(status), 'info');
+    setAdminStatus(summarizeIngestionStatus(status, activeJob), activeJob?.status === 'queued' ? 'warn' : 'info');
     return status;
   }
 
   stopIngestStatusPolling();
   setButtonBusy(triggerIngestBtn, false);
 
+  const completedTrackedJob = Boolean(currentIngestJobId);
+  currentIngestJobId = null;
+
   if (status.lastError) {
-    setAdminStatus(summarizeIngestionStatus(status), 'error');
+    setAdminStatus(summarizeIngestionStatus(status, activeJob), 'error');
     return status;
   }
 
-  setAdminStatus(summarizeIngestionStatus(status), 'success');
+  setAdminStatus(summarizeIngestionStatus(status, activeJob), 'success');
+  if (completedTrackedJob) {
+    await Promise.all([loadSubscriptions(), loadCapacityRows()]).catch(() => {});
+  }
   return status;
 }
 
@@ -933,9 +950,11 @@ async function triggerCapacityIngest() {
       throw error;
     }
 
-    setButtonBusy(triggerIngestBtn, false);
-    setAdminStatus(summarizeIngestionStatus(payload.status), 'success');
-    await Promise.all([loadSubscriptions(), loadCapacityRows()]);
+    currentIngestJobId = payload.jobId || currentIngestJobId;
+    setButtonBusy(triggerIngestBtn, true, 'Ingest Running...');
+    setAdminStatus(payload.status === 'queued' ? 'Capacity ingestion queued. Monitoring progress...' : 'Capacity ingestion started. Monitoring progress...', 'info');
+    startIngestStatusPolling();
+    await syncIngestStatus().catch(() => {});
   } catch (error) {
     if (error.status === 409) {
       setAdminStatus('Capacity ingestion is already running. Polling current status.', 'warn');

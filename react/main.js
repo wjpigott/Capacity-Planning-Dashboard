@@ -27,10 +27,24 @@ const RESOURCE_TYPE_OPTIONS = [
   { value: 'Other', label: 'Other' }
 ];
 
+const PAAS_SERVICE_OPTIONS = [
+  { value: 'All', label: 'All services' },
+  { value: 'SqlDatabase', label: 'SQL Database' },
+  { value: 'CosmosDB', label: 'Cosmos DB' },
+  { value: 'PostgreSQL', label: 'PostgreSQL' },
+  { value: 'MySQL', label: 'MySQL' },
+  { value: 'AppService', label: 'App Service' },
+  { value: 'ContainerApps', label: 'Container Apps' },
+  { value: 'AKS', label: 'AKS' },
+  { value: 'Functions', label: 'Functions' },
+  { value: 'Storage', label: 'Storage' }
+];
+
 const REPORT_VIEWS = [
   { key: 'capacity-grid', label: 'Capacity Grid', adminOnly: false },
   { key: 'region-health', label: 'Region Health', adminOnly: false },
   { key: 'recommender', label: 'Capacity Recommender', adminOnly: false },
+  { key: 'paas-availability', label: 'PaaS Availability', adminOnly: false },
   { key: 'sku-chart', label: 'Top SKUs', adminOnly: false },
   { key: 'capacity-score', label: 'Capacity Score', adminOnly: false },
   { key: 'family-summary', label: 'Family Summary', adminOnly: false },
@@ -774,6 +788,17 @@ function normalizeSearchText(value) {
   return String(value || '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '');
+}
+
+function formatNullableNumber(value) {
+  return value == null || value === '' ? 'n/a' : formatNumber(value);
+}
+
+function formatPaaSMetric(row) {
+  const primary = row.metricPrimary == null || row.metricPrimary === '' ? '' : String(row.metricPrimary);
+  const secondary = row.metricSecondary == null || row.metricSecondary === '' ? '' : String(row.metricSecondary);
+  if (primary && secondary) return `${primary} / ${secondary}`;
+  return primary || secondary || 'n/a';
 }
 
 function compareSortValues(a, b) {
@@ -1693,6 +1718,7 @@ function App() {
   const [trendRows, setTrendRows] = useState([]);
   const [familyRows, setFamilyRows] = useState([]);
   const [capacityScores, setCapacityScores] = useState({ rows: [], pagination: { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false }, subscriptionSummary: [], desiredCount: '1', status: { tone: 'info', message: 'Load or refresh live placement to populate saved capacity score snapshots.', detail: '' }, busy: false });
+  const [paasState, setPaaSState] = useState({ rows: [], summary: { rowCount: 0, serviceSummary: [], requestedService: 'All', requestedRegionPreset: 'USMajor', requestedRegions: [] }, facets: { services: [], regions: [], categories: [] }, filters: { service: 'All', regionPreset: 'USMajor' }, status: { tone: 'info', message: 'Load cached PaaS availability or refresh to run a live scan.' }, busy: { load: false, refresh: false }, capturedAtUtc: null });
   const [exportBusyFormat, setExportBusyFormat] = useState('');
   const [recommendState, setRecommendState] = useState({ targetSku: '', autoTargetSku: '', regions: '', autoRegions: '', topN: 10, minScore: 50, showPricing: true, showSpot: false, result: null, status: { tone: 'info', message: 'Run the recommender to populate alternatives.' }, busy: false });
   const [adminState, setAdminState] = useState({ job: null, status: null, schedule: { ingest: { intervalMinutes: 0, runOnStartup: false }, livePlacement: { intervalMinutes: 0, runOnStartup: false } }, runtime: { ingest: { intervalMinutes: 0, runOnStartup: false }, livePlacement: { intervalMinutes: 0, runOnStartup: false } }, persistence: { available: true, source: 'sql', message: 'SQL scheduler settings are available.' }, statusMessage: { tone: 'info', message: 'Data ingestion tools ready.' }, busy: { refreshStatus: false, trigger: false, refreshSchedule: false, saveSchedule: false } });
@@ -1862,6 +1888,55 @@ function App() {
     }
     initialize();
   }, []);
+
+  useEffect(() => {
+    if (!authResolved) {
+      return;
+    }
+
+    async function loadPaaSSnapshot() {
+      setPaaSState((current) => ({
+        ...current,
+        busy: { ...current.busy, load: true },
+        status: current.rows.length > 0
+          ? current.status
+          : { tone: 'info', message: 'Loading cached PaaS availability snapshot...' }
+      }));
+
+      try {
+        const query = new URLSearchParams();
+        if (paasState.filters.service && paasState.filters.service !== 'All') {
+          query.set('service', paasState.filters.service);
+        }
+
+        const payload = await fetchJson(`/api/paas-availability${query.toString() ? `?${query.toString()}` : ''}`);
+        const rows = Array.isArray(payload.rows) ? payload.rows : [];
+        setPaaSState((current) => ({
+          ...current,
+          rows,
+          summary: payload.summary || { rowCount: rows.length, serviceSummary: [] },
+          facets: payload.facets || { services: [], regions: [], categories: [] },
+          capturedAtUtc: payload.capturedAtUtc || null,
+          busy: { ...current.busy, load: false },
+          status: rows.length > 0
+            ? { tone: 'success', message: `Showing cached PaaS availability snapshot from ${formatTimestamp(payload.capturedAtUtc)}.` }
+            : { tone: 'warn', message: 'No cached PaaS availability snapshot found yet. Run Refresh to capture one.' }
+        }));
+      } catch (error) {
+        setPaaSState((current) => ({
+          ...current,
+          rows: [],
+          summary: { rowCount: 0, serviceSummary: [], requestedService: current.filters.service, requestedRegionPreset: current.filters.regionPreset, requestedRegions: [] },
+          facets: { services: [], regions: [], categories: [] },
+          capturedAtUtc: null,
+          busy: { ...current.busy, load: false },
+          status: { tone: 'error', message: error.message || 'Failed to load cached PaaS availability.' }
+        }));
+      }
+    }
+
+    loadPaaSSnapshot();
+  }, [authResolved, paasState.filters.service]);
 
   useEffect(() => {
     if (filters.region === 'all') {
@@ -2193,6 +2268,45 @@ function App() {
       setRecommendState((current) => ({ ...current, result, busy: false, status: { tone: count === 0 ? 'warn' : 'success', message: zeroResultMessage, detail: zeroResultDetailParts.join(' ') || null } }));
     } catch (error) {
       setRecommendState((current) => ({ ...current, result: null, busy: false, status: { tone: 'error', message: error.message || 'Failed to run recommendations.' } }));
+    }
+  }
+
+  async function refreshPaaSAvailability() {
+    const requestService = paasState.filters.service || 'All';
+    const requestRegionPreset = paasState.filters.regionPreset || 'USMajor';
+
+    setPaaSState((current) => ({
+      ...current,
+      busy: { ...current.busy, refresh: true },
+      status: { tone: 'info', message: `Refreshing PaaS availability for ${requestService}...` }
+    }));
+
+    try {
+      const payload = await fetchJson('/api/paas-availability/refresh', {
+        method: 'POST',
+        body: JSON.stringify({
+          service: requestService,
+          regionPreset: requestRegionPreset,
+          sqlResourceType: 'SqlDatabase'
+        })
+      });
+
+      const rows = Array.isArray(payload.rows) ? payload.rows : [];
+      setPaaSState((current) => ({
+        ...current,
+        rows,
+        summary: payload.summary || { rowCount: rows.length, serviceSummary: [] },
+        facets: payload.facets || { services: [], regions: [], categories: [] },
+        capturedAtUtc: payload.capturedAtUtc || null,
+        busy: { ...current.busy, refresh: false },
+        status: { tone: 'success', message: `PaaS availability refreshed and saved at ${formatTimestamp(payload.capturedAtUtc)}.` }
+      }));
+    } catch (error) {
+      setPaaSState((current) => ({
+        ...current,
+        busy: { ...current.busy, refresh: false },
+        status: { tone: 'error', message: error.message || 'Failed to refresh PaaS availability.' }
+      }));
     }
   }
 
@@ -2566,6 +2680,9 @@ function App() {
     if (activeView === 'recommender') {
       const recommendations = Array.isArray(recommendState.result && recommendState.result.recommendations) ? recommendState.result.recommendations : [];
       return <div className="rx-view-stack"><Banner tone={recommendState.status.tone} message={recommendState.status.message} detail={recommendState.status.detail} /><section className="rx-panel"><div className="rx-panel__header"><div><h2>Capacity Recommender</h2><p>Same backend recommendation API, but staged into a clearer React workflow.</p></div></div><div className="rx-field-grid rx-field-grid--filters"><label className="rx-field"><span>Target SKU</span><input className="rx-input" value={recommendState.targetSku} onChange={(event) => setRecommendState({ ...recommendState, targetSku: normalizeSkuName(event.target.value), autoTargetSku: recommendState.autoTargetSku })} placeholder="Standard_D4s_v5" /></label><label className="rx-field"><span>Regions</span><input className="rx-input" value={recommendState.regions} onChange={(event) => setRecommendState({ ...recommendState, regions: event.target.value, autoRegions: recommendState.autoRegions })} placeholder="eastus,westus2" /></label><label className="rx-field"><span>Top N</span><input className="rx-input" type="number" min="1" max="25" value={recommendState.topN} onChange={(event) => setRecommendState({ ...recommendState, topN: Number(event.target.value || 10) })} /></label><label className="rx-field"><span>Min Score</span><input className="rx-input" type="number" min="0" max="100" value={recommendState.minScore} onChange={(event) => setRecommendState({ ...recommendState, minScore: Number(event.target.value || 50) })} /></label></div><div className="rx-inline-actions"><span className="rx-selected-count">Scoped default SKU: {recommendedTargetSku || 'n/a'}</span><span className="rx-selected-count">Scoped default Regions: {recommendedRegions || 'n/a'}</span><label className="rx-check"><input type="checkbox" checked={recommendState.showPricing} onChange={(event) => setRecommendState({ ...recommendState, showPricing: event.target.checked })} />Show pricing</label><label className="rx-check"><input type="checkbox" checked={recommendState.showSpot} onChange={(event) => setRecommendState({ ...recommendState, showSpot: event.target.checked })} />Show spot</label><button className="rx-button" type="button" disabled={recommendState.busy} onClick={runRecommendation}>{recommendState.busy ? 'Running...' : 'Run Recommendation'}</button></div></section><DataTable title="Recommendation Results" columns={[{ key: 'rank', label: '#' }, { key: 'sku', label: 'SKU', render: (row) => normalizeSkuName(row.sku) || 'n/a' }, { key: 'region', label: 'Region' }, { key: 'vCPU', label: 'vCPU' }, { key: 'memGiB', label: 'Mem(GB)' }, { key: 'score', label: 'Score', render: (row) => `${row.score || 0}%` }, { key: 'cpu', label: 'CPU' }, { key: 'disk', label: 'Disk' }, { key: 'purpose', label: 'Type' }, { key: 'capacity', label: 'Capacity', render: (row) => <StatusPill value={row.capacity} /> }, { key: 'zonesOK', label: 'Zones' }, { key: 'priceHr', label: '$/Hr', render: (row) => formatMoney(row.priceHr, 2) }, { key: 'priceMo', label: '$/Mo', render: (row) => formatMoney(row.priceMo, 0) }]} rows={recommendations} emptyMessage="Run a recommendation to see results." /></div>;
+    }
+    if (activeView === 'paas-availability') {
+      return <div className="rx-view-stack"><section className="rx-panel rx-panel--compact"><div className="rx-panel__header"><div><h2>PaaS Availability</h2><p>Runs the vendored Get-AzPaaSAvailability scanner, then serves the latest saved snapshot from SQL for fast reloads.</p></div></div><div className="rx-field-grid rx-field-grid--filters"><label className="rx-field"><span>Service Scope</span><select value={paasState.filters.service} onChange={(event) => setPaaSState((current) => ({ ...current, filters: { ...current.filters, service: event.target.value } }))}>{PAAS_SERVICE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label><label className="rx-field"><span>Region Preset</span><select value={paasState.filters.regionPreset} onChange={(event) => setPaaSState((current) => ({ ...current, filters: { ...current.filters, regionPreset: event.target.value } }))}>{REGION_PRESET_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label></div><div className="rx-inline-actions"><span className="rx-selected-count">Latest run: {paasState.capturedAtUtc ? formatTimestamp(paasState.capturedAtUtc) : 'none yet'}</span><button className="rx-button" type="button" disabled={paasState.busy.refresh} onClick={refreshPaaSAvailability}>{paasState.busy.refresh ? 'Refreshing...' : 'Refresh PaaS Availability'}</button></div><Banner tone={paasState.status.tone} message={paasState.status.message} detail={paasState.status.detail} /></section><section className="rx-panel rx-panel--compact rx-panel--muted"><div className="rx-panel__header"><div><h2>Snapshot Summary</h2><p>Cached results are stored by scan run, so this view stays fast until you explicitly refresh it.</p></div></div><div className="rx-summary-grid"><article className="rx-metric-card"><span>Rows</span><strong>{formatNumber(paasState.summary.rowCount || paasState.rows.length || 0)}</strong></article><article className="rx-metric-card"><span>Services</span><strong>{formatNumber((paasState.facets.services || []).length)}</strong></article><article className="rx-metric-card"><span>Regions</span><strong>{formatNumber((paasState.facets.regions || []).length)}</strong></article><article className="rx-metric-card"><span>Categories</span><strong>{formatNumber((paasState.facets.categories || []).length)}</strong></article></div></section><DataTable title="Service Summary" subtitle="Counts per service in the latest saved scan." tableClassName="rx-table--dense" sectionClassName="rx-panel--compact" columns={[{ key: 'service', label: 'Service' }, { key: 'rowCount', label: 'Rows', render: (row) => formatNumber(row.rowCount) }, { key: 'availableCount', label: 'Available', render: (row) => formatNumber(row.availableCount) }]} rows={Array.isArray(paasState.summary.serviceSummary) ? paasState.summary.serviceSummary : []} emptyMessage="No PaaS service summary available." /><DataTable title="PaaS Snapshot Rows" subtitle="Latest persisted scan rows served from SQL." tableClassName="rx-table--dense" sectionClassName="rx-panel--compact" columns={[{ key: 'service', label: 'Service' }, { key: 'region', label: 'Region' }, { key: 'category', label: 'Category' }, { key: 'name', label: 'Name', render: (row) => row.displayName || row.name || 'n/a' }, { key: 'edition', label: 'Edition', render: (row) => row.edition || 'n/a' }, { key: 'tier', label: 'Tier', render: (row) => row.tier || 'n/a' }, { key: 'status', label: 'Status', render: (row) => <StatusPill value={row.status || (row.available ? 'Available' : 'Unknown')} /> }, { key: 'quotaCurrent', label: 'Quota Used', render: (row) => formatNullableNumber(row.quotaCurrent) }, { key: 'quotaLimit', label: 'Quota Limit', render: (row) => formatNullableNumber(row.quotaLimit) }, { key: 'metric', label: 'Metric', render: (row) => formatPaaSMetric(row), sortValue: (row) => `${row.metricPrimary || ''}|${row.metricSecondary || ''}` }]} rows={paasState.rows} emptyMessage="No PaaS snapshot rows available yet. Refresh the scan to capture one." /></div>;
     }
     if (activeView === 'sku-chart') {
       return <DataTable key="sku-chart" title="Top SKUs" subtitle="Ranked by total available quota across the current filter scope." columns={[{ key: 'sku', label: 'SKU' }, { key: 'available', label: 'Available Quota', render: (row) => formatNumber(row.available) }]} rows={topSkus} emptyMessage="No SKU rollup data available." />;

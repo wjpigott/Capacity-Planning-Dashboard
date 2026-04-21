@@ -45,6 +45,10 @@ const {
   updateLivePlacementScheduler,
   getLivePlacementSchedulerConfig
 } = require('./services/livePlacementService');
+const {
+  runPaaSAvailabilityScan,
+  getPaaSAvailabilitySnapshot
+} = require('./services/paasAvailabilityService');
 const { getQuotaCandidates, captureQuotaCandidateSnapshots } = require('./services/quotaCandidateService');
 const { buildQuotaMovePlan, getQuotaCandidateRunHistory, simulateQuotaMovePlan } = require('./services/quotaPlanService');
 const { applyQuotaMovePlan } = require('./services/quotaApplyService');
@@ -1653,6 +1657,37 @@ app.post('/api/capacity/recommendations', async (req, res) => {
   } catch (err) {
     const status = err.message.includes('not found') || err.message.includes('not configured') ? 503 : 500;
     sendErrorResponse(res, { status, clientMessage: 'Failed to retrieve capacity recommendations.', err, scope: 'api/capacity/recommendations' });
+  }
+});
+
+app.get('/api/paas-availability', async (req, res) => {
+  try {
+    const result = await getPaaSAvailabilitySnapshot({
+      service: req.query.service,
+      maxAgeHours: req.query.maxAgeHours
+    });
+    res.json(result);
+  } catch (err) {
+    sendErrorResponse(res, { clientMessage: 'Failed to retrieve cached PaaS availability.', err, scope: 'api/paas-availability:get', extra: { rows: [] } });
+  }
+});
+
+app.post('/api/paas-availability/refresh', async (req, res) => {
+  try {
+    const result = await runPaaSAvailabilityScan({
+      service: req.body?.service,
+      regions: req.body?.regions,
+      regionPreset: req.body?.regionPreset,
+      edition: req.body?.edition,
+      computeModel: req.body?.computeModel,
+      sqlResourceType: req.body?.sqlResourceType,
+      includeDisabled: req.body?.includeDisabled,
+      fetchPricing: req.body?.fetchPricing
+    });
+    res.json(result);
+  } catch (err) {
+    const status = err.message.includes('not found') || err.message.includes('not configured') ? 503 : 500;
+    sendErrorResponse(res, { status, clientMessage: 'Failed to refresh PaaS availability.', err, scope: 'api/paas-availability:refresh', extra: { rows: [] } });
   }
 });
 

@@ -1438,6 +1438,112 @@ app.get('/api/admin/recommendations/diagnostics', requireAdmin, (req, res) => {
   }
 });
 
+// AI Model Availability endpoints
+app.get('/api/ai/models', async (req, res) => {
+  try {
+    const pool = await getSqlPool();
+    if (!pool) {
+      res.status(503).json({ error: 'Database not configured' });
+      return;
+    }
+    
+    const region = req.query.region;
+    const modelName = req.query.modelName;
+    const deploymentType = req.query.deploymentType;
+    
+    let query = 'SELECT * FROM dbo.AIModelAvailabilityLatest WHERE 1=1';
+    const request = pool.request();
+    
+    if (region) {
+      query += ' AND region = @region';
+      request.input('region', sql.NVarChar, region);
+    }
+    
+    if (modelName) {
+      query += ' AND modelName LIKE @modelName';
+      request.input('modelName', sql.NVarChar, `%${modelName}%`);
+    }
+    
+    if (deploymentType) {
+      query += ' AND deploymentTypes LIKE @deploymentType';
+      request.input('deploymentType', sql.NVarChar, `%${deploymentType}%`);
+    }
+    
+    query += ' ORDER BY region, modelName, modelVersion';
+    
+    const result = await request.query(query);
+    res.json({ rows: result.recordset });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve AI model availability', detail: err.message });
+  }
+});
+
+app.get('/api/ai/models/regions', async (req, res) => {
+  try {
+    const pool = await getSqlPool();
+    if (!pool) {
+      res.status(503).json({ error: 'Database not configured' });
+      return;
+    }
+    
+    const result = await pool.request().query(`
+      SELECT DISTINCT region 
+      FROM dbo.AIModelAvailabilityLatest 
+      ORDER BY region
+    `);
+    
+    res.json({ regions: result.recordset.map(r => r.region) });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve AI regions', detail: err.message });
+  }
+});
+
+app.get('/api/ai/quota', async (req, res) => {
+  try {
+    const pool = await getSqlPool();
+    if (!pool) {
+      res.status(503).json({ error: 'Database not configured' });
+      return;
+    }
+    
+    const region = req.query.region;
+    const modelName = req.query.modelName;
+    
+    let query = `
+      SELECT 
+        region,
+        skuFamily,
+        skuName,
+        quotaCurrent,
+        quotaLimit,
+        availabilityState,
+        capturedAtUtc,
+        subscriptionName
+      FROM dbo.CapacityLatest
+      WHERE sourceType = 'live-azure-openai-ingest'
+    `;
+    
+    const request = pool.request();
+    
+    if (region) {
+      query += ' AND region = @region';
+      request.input('region', sql.NVarChar, region);
+    }
+    
+    if (modelName) {
+      query += ' AND (skuFamily LIKE @modelName OR skuName LIKE @modelName)';
+      request.input('modelName', sql.NVarChar, `%${modelName}%`);
+    }
+    
+    query += ' ORDER BY region, skuFamily';
+    
+    const result = await request.query(query);
+    res.json({ rows: result.recordset });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve AI quota', detail: err.message });
+  }
+});
+
 app.post('/api/admin/ingest/capacity', requireAdmin, async (req, res) => {
   const activeJob = getActiveIngestionJob();
   if (activeJob) {

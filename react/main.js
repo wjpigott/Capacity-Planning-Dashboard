@@ -129,7 +129,8 @@ async function fetchJson(url, options) {
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload.ok === false) {
-    const reason = payload.detail || payload.error || `Request failed (${response.status})`;
+    const baseReason = payload.error || `Request failed (${response.status})`;
+    const reason = payload.requestId ? `${baseReason} [Ref ${payload.requestId}]` : baseReason;
     throw new Error(`${String(url)}: ${reason}`);
   }
 
@@ -1171,9 +1172,9 @@ function SubscriptionPicker({ options, selectedIds, search, onSearch, onToggle, 
         {filtered.map((option) => (
           <label key={option.subscriptionId} className="rx-subscription-item">
             <input type="checkbox" checked={selectedIds.includes(option.subscriptionId)} onChange={() => onToggle(option.subscriptionId)} />
-            <span>
-              <strong>{option.subscriptionName || option.subscriptionId}</strong>
-              <small>{option.subscriptionId}</small>
+            <span className="rx-subscription-item__text">
+              <strong className="rx-subscription-item__name">{option.subscriptionName || option.subscriptionId}</strong>
+              <small className="rx-subscription-item__id">{option.subscriptionId}</small>
             </span>
           </label>
         ))}
@@ -2128,7 +2129,7 @@ function App() {
         let errorMessage = `Export failed (${response.status})`;
         try {
           const payload = await response.json();
-          errorMessage = payload.error || payload.detail || errorMessage;
+          errorMessage = payload.error || errorMessage;
         } catch {
           const text = await response.text();
           if (text) {
@@ -2290,7 +2291,7 @@ function App() {
         status: {
           tone: 'error',
           message: error.message || 'Failed to refresh live placement scores.',
-          detail: error.stack || error.message || 'Failed to refresh live placement scores.'
+          detail: error.message || 'Failed to refresh live placement scores.'
         }
       }));
     }
@@ -2536,7 +2537,7 @@ function App() {
         <section className="rx-panel rx-access-gate__panel">
           <div className="rx-kicker">Checking Access</div>
           <h1>Loading</h1>
-          <p>Verifying your session for the React dashboard.</p>
+          <p>Verifying your session for the Capacity Dashboard.</p>
         </section>
       </div>
     );
@@ -2548,7 +2549,7 @@ function App() {
         <section className="rx-panel rx-access-gate__panel">
           <div className="rx-kicker">Access Restricted</div>
           <h1>You do not have access</h1>
-          <p>This React dashboard is only available to authenticated users.</p>
+          <p>This Capacity Dashboard is only available to authenticated users.</p>
           <a className="rx-link-button" href="/auth/login">Sign In</a>
         </section>
       </div>

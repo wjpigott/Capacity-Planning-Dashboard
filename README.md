@@ -216,17 +216,20 @@ Practical guidance for new environments:
 
 Examples:
 
-- `app-capdash-dev-cap001.azurewebsites.net` -> `Dev`
-- `app-capdash-test-cap001.azurewebsites.net` -> `Test`
+- `app-capdash-dev-<suffix>.azurewebsites.net` -> `Dev`
+- `app-capdash-test-<suffix>.azurewebsites.net` -> `Test`
 - `capacity-demo.contoso.com` -> `Test`
 - `capacity.contoso.com` -> default styling unless you change the detection logic
 
 Use zip/web package deploy for the dashboard App Service.
 
-Current target:
+Deployment target values are environment-specific. Set them with variables or substitute your own names when you run the commands below.
 
-- Resource group: `CapacityDashboard`
-- App Service: `app-capdash-dev-cap001`
+Example target variables:
+
+- `$resourceGroup = "<resource-group-name>"`
+- `$webAppName = "<web-app-name>"`
+- `$webAppHost = "https://<web-app-host>"`
 
 Important packaging rule:
 
@@ -262,17 +265,17 @@ Deploy the package with:
 
 ```powershell
 az webapp deploy \
-	--resource-group CapacityDashboard \
-	--name app-capdash-dev-cap001 \
+	--resource-group $resourceGroup \
+	--name $webAppName \
 	--src-path ..\webpackage-capdash-clean.zip \
 	--type zip
 ```
 
 Verification checks after deploy:
 
-- `curl.exe -i -s https://app-capdash-dev-cap001.azurewebsites.net/`
-- `curl.exe -i -s https://app-capdash-dev-cap001.azurewebsites.net/react/`
-- `curl.exe -i -s https://app-capdash-dev-cap001.azurewebsites.net/api/auth/me`
+- `curl.exe -i -s "$webAppHost/"`
+- `curl.exe -i -s "$webAppHost/react/"`
+- `curl.exe -i -s "$webAppHost/api/auth/me"`
 
 Expected behavior:
 
@@ -291,12 +294,12 @@ az account set --subscription "<subscription-name-or-id>"
 
 Notes:
 
-- The deployment script already stages the correct runtime files and publishes them to `app-capdash-dev-cap001`.
+- The deployment script already stages the correct runtime files and publishes them to the App Service name you pass in.
 - The deployment package stages the repo's `react/` folder, root `server.js`, and root `web.config`, so a fresh pull plus redeploy publishes the current React experience and keeps `/api/*` routed to Express on Windows App Service.
 - Keep the package source-shaped. Do not ship local `node_modules`; App Service restores production dependencies during deployment.
 - `/react/` now sends `no-store` cache headers because the React shell uses stable filenames such as `react/main.js`; after a redeploy, the live environment should pick up the current React navigation without relying on a stale browser cache.
-- If `az webapp deploy` fails with `AuthorizationFailed`, refresh Azure credentials with `az login`, confirm the correct subscription with `az account show`, and make sure the signed-in identity has App Service access on the `CapacityDashboard` resource group.
-- The React experience is served from `https://app-capdash-dev-cap001.azurewebsites.net/react/`.
+- If `az webapp deploy` fails with `AuthorizationFailed`, refresh Azure credentials with `az login`, confirm the correct subscription with `az account show`, and make sure the signed-in identity has App Service access on the resource group that hosts the web app.
+- The React experience is served from `https://<web-app-host>/react/`.
 - Plan the production UI around the React experience. The classic root experience is still present for compatibility, but it should not be treated as the long-term production surface.
 
 Repo refresh guidance:
@@ -316,9 +319,9 @@ Private or DBA-managed SQL note:
 
 ```powershell
 ./scripts/initialize-database.ps1 \
-	-SqlServer "sql-capdash-test-cap001.database.windows.net" \
-	-SqlDatabase "sqldb-capdash-test" \
-	-AppIdentityName "app-capdash-test-cap001"
+	-SqlServer "<sql-server-name>.database.windows.net" \
+	-SqlDatabase "<sql-database-name>" \
+	-AppIdentityName "<web-app-managed-identity-name>"
 ```
 
 **Capacity Recommender configuration:**
@@ -327,8 +330,8 @@ If you plan to use the Capacity Recommender feature (which requires the `Get-AzV
 
 ```powershell
 az webapp config appsettings set \
-	--resource-group CapacityDashboard \
-	--name app-capdash-dev-cap001 \
+	--resource-group $resourceGroup \
+	--name $webAppName \
 	--settings GET_AZ_VM_AVAILABILITY_ROOT="/path/to/Get-AzVMAvailability"
 ```
 
@@ -363,14 +366,14 @@ Use `-DeployWebApp $false` only when you explicitly want an infra-only run.
 Stable demo environment:
 
 - Treat `dev` as change-heavy and `test` as the stable demo environment.
-- Use the same naming pattern with the environment token changed to `test`, for example `app-capdash-test-cap001` and `func-capdash-test-cap001-appsvc`.
-- Use `./infra/test.bicepparam` plus a dedicated resource group such as `CapacityDashboard-Test` when deploying the demo environment.
+- Use the same naming pattern with the environment token changed to `test`, for example `<web-app-name-with-test-token>` and `<function-app-name-with-test-token>`.
+- Use `./infra/test.bicepparam` plus a dedicated resource group such as `<test-resource-group-name>` when deploying the demo environment.
 
 Example:
 
 ```powershell
 ./scripts/deploy-infra.ps1 \
-	-ResourceGroupName "CapacityDashboard-Test" \
+	-ResourceGroupName "<test-resource-group-name>" \
 	-Environment test \
 	-WorkloadSuffix "cap001" \
 	-ParameterFile "./infra/test.bicepparam" \
@@ -403,7 +406,7 @@ Example with Entra sign-in enabled:
 
 ```powershell
 ./scripts/deploy-infra.ps1 \
-	-ResourceGroupName "CapacityDashboard-Test" \
+	-ResourceGroupName "<test-resource-group-name>" \
 	-Environment test \
 	-WorkloadSuffix "cap001" \
 	-ParameterFile "./infra/test.bicepparam" \
@@ -428,7 +431,7 @@ Package and deploy the worker host separately from the dashboard web app:
 ```powershell
 ./scripts/deploy-worker.ps1 \
 	-ResourceGroupName "<rg-name>" \
-	-FunctionAppName "func-capdash-dev-cap001-appsvc"
+	-FunctionAppName "<function-app-name>"
 ```
 
 After the worker is deployed, point the dashboard at it by setting:
@@ -531,7 +534,7 @@ Required app settings:
 - `ENTRA_TENANT_ID` (tenant ID used for Microsoft Entra sign-in)
 - `ENTRA_CLIENT_ID` (app registration/client ID for the dashboard)
 - `ENTRA_CLIENT_SECRET` (app registration client secret for the dashboard)
-- `AUTH_REDIRECT_URI` (OAuth callback URI, for example `https://app-capdash-dev-cap001.azurewebsites.net/auth/callback`)
+- `AUTH_REDIRECT_URI` (OAuth callback URI, for example `https://<web-app-host>/auth/callback`)
 - `ADMIN_GROUP_ID` (Object ID of the Entra security group whose members can access Admin sections)
 - `QUOTA_MANAGEMENT_GROUP_ID` (required for live quota discovery)
 - `CAPACITY_WORKER_BASE_URL` (optional Function App base URL for worker-first live placement execution)

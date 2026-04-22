@@ -1055,6 +1055,46 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
+}
+
+.rx-matrix-cell__count {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--rx-ink);
+}
+
+.rx-matrix-cell__empty {
+  font-weight: 700;
+  color: var(--rx-muted);
+}
+
+.rx-table-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.rx-pagination {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rx-table-footer--server {
+  justify-content: center;
+}
+
+.rx-pagination__page-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rx-pagination__page-size select {
+  min-width: 72px;
 }
 
 .rx-capacity-score-table {

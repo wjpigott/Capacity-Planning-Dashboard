@@ -5,6 +5,7 @@ This function app is the PowerShell 7 execution host for operations that should 
 Current endpoints:
 
 - `POST /api/live-placement`
+- `POST /api/paas-availability`
 - `POST /api/quota-move-apply` (placeholder scaffold)
 
 The dashboard can call this worker when `CAPACITY_WORKER_BASE_URL` is configured.

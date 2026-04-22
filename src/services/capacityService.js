@@ -146,7 +146,11 @@ function parseSubscriptionIds(filterValue) {
   }
 
   if (Array.isArray(filterValue)) {
-    return filterValue.map((v) => String(v).trim()).filter(Boolean);
+    return filterValue
+      .flatMap((value) => String(value)
+        .split(',')
+        .map((part) => part.trim()))
+      .filter(Boolean);
   }
 
   return String(filterValue)
@@ -160,8 +164,14 @@ function parseSubscriptionIds(filterValue) {
  * Supports page-based pagination (pageNumber starting at 1)
  */
 function parsePaginationParams(filters) {
-  const pageSize = Math.max(10, Math.min(Number(filters.pageSize || 100), 500));
-  const pageNumber = Math.max(1, Number(filters.pageNumber || 1));
+  const parsedPageSize = Number(filters.pageSize);
+  const parsedPageNumber = Number(filters.pageNumber);
+  const pageSize = Number.isFinite(parsedPageSize)
+    ? Math.max(10, Math.min(parsedPageSize, 500))
+    : 100;
+  const pageNumber = Number.isFinite(parsedPageNumber)
+    ? Math.max(1, parsedPageNumber)
+    : 1;
   const offset = (pageNumber - 1) * pageSize;
   return { pageSize, pageNumber, offset };
 }
@@ -201,7 +211,7 @@ function appendCommonSqlFilters(filters, request) {
       request.input(paramName, subId);
       subParams.push(`@${paramName}`);
     });
-    where += ` AND ISNULL(subscriptionId, 'legacy-data') IN (${subParams.join(',')})`;
+    where += ` AND CONVERT(nvarchar(64), subscriptionId) IN (${subParams.join(',')})`;
   }
 
   // NOTE: resourceType filtering is applied in-memory after SQL retrieval
@@ -290,8 +300,8 @@ async function getCapacityRowsPaginated(filters) {
     SELECT 
       capturedAtUtc,
       subscriptionKey,
-      ISNULL(subscriptionId, 'legacy-data') AS subscriptionId,
-      ISNULL(subscriptionName, 'Legacy data') AS subscriptionName,
+      COALESCE(CONVERT(nvarchar(64), subscriptionId), 'legacy-data') AS subscriptionId,
+      COALESCE(subscriptionName, 'Legacy data') AS subscriptionName,
       region,
       skuName AS sku,
       skuFamily AS family,
@@ -375,8 +385,8 @@ async function getSubscriptions({ search, limit } = {}) {
 
   let query = `
     SELECT TOP (@limitRows)
-      ISNULL(subscriptionId, 'legacy-data') AS subscriptionId,
-      ISNULL(subscriptionName, 'Legacy data') AS subscriptionName
+      COALESCE(CONVERT(nvarchar(64), subscriptionId), 'legacy-data') AS subscriptionId,
+      COALESCE(subscriptionName, 'Legacy data') AS subscriptionName
     FROM dbo.CapacityLatest
     WHERE 1 = 1
   `;
@@ -384,14 +394,14 @@ async function getSubscriptions({ search, limit } = {}) {
   if (search && search.trim()) {
     request.input('search', `%${search.trim()}%`);
     query += ` AND (
-      ISNULL(subscriptionId, 'legacy-data') LIKE @search
-      OR ISNULL(subscriptionName, 'Legacy data') LIKE @search
+      COALESCE(CONVERT(nvarchar(64), subscriptionId), 'legacy-data') LIKE @search
+      OR COALESCE(subscriptionName, 'Legacy data') LIKE @search
     )`;
   }
 
   query += `
-    GROUP BY ISNULL(subscriptionId, 'legacy-data'), ISNULL(subscriptionName, 'Legacy data')
-    ORDER BY ISNULL(subscriptionName, 'Legacy data') ASC
+    GROUP BY COALESCE(CONVERT(nvarchar(64), subscriptionId), 'legacy-data'), COALESCE(subscriptionName, 'Legacy data')
+    ORDER BY COALESCE(subscriptionName, 'Legacy data') ASC
   `;
 
   const result = await request.query(query);

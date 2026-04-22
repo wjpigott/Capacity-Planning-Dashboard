@@ -1,0 +1,27 @@
+## Description
+
+<!-- Brief summary of what this PR does and why -->
+
+## Type of Change
+
+- [ ] Bug fix (non-breaking change that fixes an issue)
+- [ ] New feature (non-breaking change that adds functionality)
+- [ ] Code quality (refactoring, comments, tests — no behavior change)
+- [ ] Breaking change (fix or feature that would cause existing functionality to change)
+- [ ] Documentation update
+
+## Quality Checklist
+
+- [ ] **PR markdown renders correctly** — no literal escaped `\n` sequences in title/body
+- [ ] **No AI instructional comments** — no "Must be after", "This ensures", "Handle potential" comments
+- [ ] **No empty catch blocks** — every catch handles the error visibly
+- [ ] **No magic numbers** — numeric literals are named constants
+- [ ] **PSScriptAnalyzer clean** — `Invoke-ScriptAnalyzer -Path . -Recurse -Settings PSScriptAnalyzerSettings.psd1`
+- [ ] **Pester tests pass** — `Invoke-Pester ./tests -Output Detailed`
+- [ ] **CHANGELOG.md updated** (if functional change)
+- [ ] **New functions have Pester test coverage** (if adding functions)
+
+## Validation
+
+- [ ] Ran `tools/Validate-Script.ps1` with all checks passing
+- [ ] Tested with at least one Azure region (if applicable)

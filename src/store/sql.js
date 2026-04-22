@@ -1,3 +1,4 @@
+const { randomUUID } = require('crypto');
 const sql = require('mssql');
 const { normalizeFamilyName } = require('../lib/familyNormalization');
 
@@ -1170,6 +1171,56 @@ async function ensureLivePlacementSnapshotSchema(pool) {
   await pool.request().query(createIndexScript);
 }
 
+async function ensurePaaSAvailabilitySnapshotSchema(pool) {
+  const createScript = `
+    IF OBJECT_ID('dbo.PaaSAvailabilitySnapshot', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.PaaSAvailabilitySnapshot (
+        paasAvailabilitySnapshotId BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        runId UNIQUEIDENTIFIER NOT NULL,
+        capturedAtUtc DATETIME2 NOT NULL,
+        requestedService NVARCHAR(64) NOT NULL,
+        requestedRegionPreset NVARCHAR(64) NULL,
+        requestedRegionsJson NVARCHAR(MAX) NULL,
+        metadataJson NVARCHAR(MAX) NULL,
+        category NVARCHAR(64) NOT NULL,
+        service NVARCHAR(64) NOT NULL,
+        region NVARCHAR(64) NOT NULL,
+        resourceType NVARCHAR(64) NULL,
+        name NVARCHAR(256) NOT NULL,
+        displayName NVARCHAR(256) NULL,
+        edition NVARCHAR(128) NULL,
+        tier NVARCHAR(256) NULL,
+        family NVARCHAR(128) NULL,
+        status NVARCHAR(64) NULL,
+        available BIT NULL,
+        zoneRedundant BIT NULL,
+        quotaCurrent INT NULL,
+        quotaLimit INT NULL,
+        metricPrimary NVARCHAR(256) NULL,
+        metricSecondary NVARCHAR(256) NULL,
+        detailsJson NVARCHAR(MAX) NULL
+      );
+    END;
+  `;
+
+  const createIndexScript = `
+    IF NOT EXISTS (
+      SELECT 1
+      FROM sys.indexes
+      WHERE name = 'IX_PaaSAvailabilitySnapshot_ServiceCaptured'
+        AND object_id = OBJECT_ID('dbo.PaaSAvailabilitySnapshot')
+    )
+    BEGIN
+      CREATE INDEX IX_PaaSAvailabilitySnapshot_ServiceCaptured
+        ON dbo.PaaSAvailabilitySnapshot (requestedService, capturedAtUtc DESC, service, region);
+    END;
+  `;
+
+  await pool.request().query(createScript);
+  await pool.request().query(createIndexScript);
+}
+
 async function saveLivePlacementSnapshots(rows = []) {
   if (!Array.isArray(rows) || rows.length === 0) {
     return 0;
@@ -1213,6 +1264,190 @@ async function saveLivePlacementSnapshots(rows = []) {
     console.error('Failed to save live placement snapshots:', err.message);
     return 0;
   }
+}
+
+async function savePaaSAvailabilitySnapshots(rows = [], options = {}) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return { runId: null, rowCount: 0 };
+  }
+
+  const pool = await getSqlPool();
+  if (!pool) {
+    return { runId: null, rowCount: 0 };
+  }
+
+  await ensurePaaSAvailabilitySnapshotSchema(pool);
+
+  const effectiveRunId = options.runId || randomUUID();
+  const requestedService = String(options.requestedService || 'All').trim() || 'All';
+  const requestedRegionPreset = options.requestedRegionPreset ? String(options.requestedRegionPreset).trim() : null;
+  const requestedRegionsJson = Array.isArray(options.requestedRegions) ? JSON.stringify(options.requestedRegions) : (options.requestedRegions ? JSON.stringify(options.requestedRegions) : null);
+  const metadataJson = options.metadata ? JSON.stringify(options.metadata) : null;
+
+  const transaction = new sql.Transaction(pool);
+  await transaction.begin();
+
+  try {
+    for (const row of rows) {
+      const request = new sql.Request(transaction);
+      request.input('runId', sql.UniqueIdentifier, effectiveRunId);
+      request.input('capturedAtUtc', sql.DateTime2, row.capturedAtUtc || new Date());
+      request.input('requestedService', sql.NVarChar(64), requestedService);
+      request.input('requestedRegionPreset', sql.NVarChar(64), requestedRegionPreset);
+      request.input('requestedRegionsJson', sql.NVarChar(sql.MAX), requestedRegionsJson);
+      request.input('metadataJson', sql.NVarChar(sql.MAX), metadataJson);
+      request.input('category', sql.NVarChar(64), String(row.category || 'unknown'));
+      request.input('service', sql.NVarChar(64), String(row.service || requestedService));
+      request.input('region', sql.NVarChar(64), String(row.region || 'global').toLowerCase());
+      request.input('resourceType', sql.NVarChar(64), row.resourceType || null);
+      request.input('name', sql.NVarChar(256), String(row.name || row.displayName || 'unknown'));
+      request.input('displayName', sql.NVarChar(256), row.displayName || null);
+      request.input('edition', sql.NVarChar(128), row.edition || null);
+      request.input('tier', sql.NVarChar(256), row.tier || null);
+      request.input('family', sql.NVarChar(128), row.family || null);
+      request.input('status', sql.NVarChar(64), row.status || null);
+      request.input('available', sql.Bit, typeof row.available === 'boolean' ? row.available : null);
+      request.input('zoneRedundant', sql.Bit, typeof row.zoneRedundant === 'boolean' ? row.zoneRedundant : null);
+      request.input('quotaCurrent', sql.Int, Number.isFinite(Number(row.quotaCurrent)) ? Number(row.quotaCurrent) : null);
+      request.input('quotaLimit', sql.Int, Number.isFinite(Number(row.quotaLimit)) ? Number(row.quotaLimit) : null);
+      request.input('metricPrimary', sql.NVarChar(256), row.metricPrimary == null ? null : String(row.metricPrimary));
+      request.input('metricSecondary', sql.NVarChar(256), row.metricSecondary == null ? null : String(row.metricSecondary));
+      request.input('detailsJson', sql.NVarChar(sql.MAX), row.details ? JSON.stringify(row.details) : null);
+
+      await request.query(`
+        INSERT INTO dbo.PaaSAvailabilitySnapshot
+        (runId, capturedAtUtc, requestedService, requestedRegionPreset, requestedRegionsJson, metadataJson, category, service, region, resourceType, name, displayName, edition, tier, family, status, available, zoneRedundant, quotaCurrent, quotaLimit, metricPrimary, metricSecondary, detailsJson)
+        VALUES
+        (@runId, @capturedAtUtc, @requestedService, @requestedRegionPreset, @requestedRegionsJson, @metadataJson, @category, @service, @region, @resourceType, @name, @displayName, @edition, @tier, @family, @status, @available, @zoneRedundant, @quotaCurrent, @quotaLimit, @metricPrimary, @metricSecondary, @detailsJson)
+      `);
+    }
+
+    await transaction.commit();
+    return { runId: effectiveRunId, rowCount: rows.length };
+  } catch (err) {
+    await transaction.rollback();
+    console.error('Failed to save PaaS availability snapshots:', err.message);
+    return { runId: null, rowCount: 0 };
+  }
+}
+
+async function getLatestPaaSAvailabilitySnapshots(options = {}) {
+  const pool = await getSqlPool();
+  if (!pool) {
+    return { rows: [] };
+  }
+
+  await ensurePaaSAvailabilitySnapshotSchema(pool);
+
+  const requestedService = String(options.requestedService || '').trim();
+  const normalizedMaxAge = Math.max(1, Math.min(Number(options.maxAgeHours || 168), 24 * 365));
+
+  const runRequest = pool.request();
+  runRequest.input('maxAgeHours', sql.Int, normalizedMaxAge);
+  let runQuery = `
+    SELECT TOP (1)
+      runId,
+      capturedAtUtc,
+      requestedService,
+      requestedRegionPreset,
+      requestedRegionsJson,
+      metadataJson
+    FROM dbo.PaaSAvailabilitySnapshot
+    WHERE capturedAtUtc >= DATEADD(hour, -@maxAgeHours, SYSUTCDATETIME())
+  `;
+
+  if (requestedService) {
+    runRequest.input('requestedService', sql.NVarChar(64), requestedService);
+    runQuery += ` AND requestedService = @requestedService`;
+  }
+
+  runQuery += ` ORDER BY capturedAtUtc DESC, paasAvailabilitySnapshotId DESC`;
+
+  const runResult = await runRequest.query(runQuery);
+  const runRow = runResult.recordset && runResult.recordset[0];
+  if (!runRow) {
+    return { rows: [] };
+  }
+
+  const rowRequest = pool.request();
+  rowRequest.input('runId', sql.UniqueIdentifier, runRow.runId);
+  const rowResult = await rowRequest.query(`
+    SELECT
+      runId,
+      capturedAtUtc,
+      requestedService,
+      requestedRegionPreset,
+      requestedRegionsJson,
+      metadataJson,
+      category,
+      service,
+      region,
+      resourceType,
+      name,
+      displayName,
+      edition,
+      tier,
+      family,
+      status,
+      available,
+      zoneRedundant,
+      quotaCurrent,
+      quotaLimit,
+      metricPrimary,
+      metricSecondary,
+      detailsJson
+    FROM dbo.PaaSAvailabilitySnapshot
+    WHERE runId = @runId
+    ORDER BY service ASC, region ASC, category ASC, name ASC
+  `);
+
+  return {
+    runId: runRow.runId,
+    capturedAtUtc: runRow.capturedAtUtc,
+    requestedService: runRow.requestedService,
+    requestedRegionPreset: runRow.requestedRegionPreset,
+    requestedRegions: (() => {
+      try {
+        return JSON.parse(runRow.requestedRegionsJson || '[]');
+      } catch {
+        return [];
+      }
+    })(),
+    metadata: (() => {
+      try {
+        return JSON.parse(runRow.metadataJson || 'null');
+      } catch {
+        return null;
+      }
+    })(),
+    rows: (rowResult.recordset || []).map((row) => ({
+      runId: row.runId,
+      capturedAtUtc: row.capturedAtUtc,
+      category: row.category,
+      service: row.service,
+      region: row.region,
+      resourceType: row.resourceType,
+      name: row.name,
+      displayName: row.displayName,
+      edition: row.edition,
+      tier: row.tier,
+      family: row.family,
+      status: row.status,
+      available: typeof row.available === 'boolean' ? row.available : null,
+      zoneRedundant: typeof row.zoneRedundant === 'boolean' ? row.zoneRedundant : null,
+      quotaCurrent: row.quotaCurrent,
+      quotaLimit: row.quotaLimit,
+      metricPrimary: row.metricPrimary,
+      metricSecondary: row.metricSecondary,
+      details: (() => {
+        try {
+          return JSON.parse(row.detailsJson || 'null');
+        } catch {
+          return null;
+        }
+      })()
+    }))
+  };
 }
 
 async function getLatestLivePlacementSnapshots(desiredCount = 1, maxAgeHours = 168) {
@@ -1276,6 +1511,7 @@ async function ensurePhase3SchemaForPool(pool) {
   await ensureSubscriptionsTableSchema(pool);
   await ensureCapacityScoreSnapshotSchema(pool);
   await ensureLivePlacementSnapshotSchema(pool);
+  await ensurePaaSAvailabilitySnapshotSchema(pool);
   await ensureDashboardErrorLogSchema(pool);
   await ensureDashboardOperationLogSchema(pool);
 
@@ -1360,6 +1596,9 @@ module.exports = {
   ensureLivePlacementSnapshotSchema,
   saveLivePlacementSnapshots,
   getLatestLivePlacementSnapshots,
+  ensurePaaSAvailabilitySnapshotSchema,
+  savePaaSAvailabilitySnapshots,
+  getLatestPaaSAvailabilitySnapshots,
   ensureDashboardErrorLogSchema,
   insertDashboardErrorLog,
   listDashboardErrorLogs,

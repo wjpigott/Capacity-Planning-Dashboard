@@ -532,7 +532,7 @@ Approvals are required before:
 - **Auto-discover**: If `INGEST_SUBSCRIPTION_IDS` is not set, the service calls `/subscriptions` to enumerate all accessible subscriptions.
 - **Explicit list**: Set `INGEST_SUBSCRIPTION_IDS=sub-1,sub-2,sub-3` to ingest only those subscriptions.
 - **Frequency**: Use Admin -> Data Ingestion -> Scheduler Settings to store cadence in SQL (for example 30 = every 30 minutes). `INGEST_INTERVAL_MINUTES` remains the fallback default when SQL settings are unavailable.
-- **AI model catalog cadence**: Admin -> Data Ingestion -> Scheduler Settings also stores `schedule.aiModelCatalog.intervalMinutes`. `INGEST_OPENAI_MODEL_CATALOG_INTERVAL_MINUTES` remains the fallback default when SQL settings are unavailable.
+- **AI model catalog cadence**: Admin -> Data Ingestion -> Scheduler Settings also stores `schedule.aiModelCatalog.intervalMinutes`. `INGEST_AI_MODEL_CATALOG_INTERVAL_MINUTES` is the primary fallback default when SQL settings are unavailable; `INGEST_OPENAI_MODEL_CATALOG_INTERVAL_MINUTES` remains a backward-compatible alias.
 - **Scheduler persistence**: `Admin -> Data Ingestion -> Scheduler Settings` reads and writes `dbo.DashboardSetting`. If that table is missing, treat it as an incomplete bootstrap/migration state, not as a signal to let the app create tables during normal runtime.
 - **Batch tuning**: Subscription batch size (100) and inter-batch delay (2s) are hardcoded; adjust in `azureIngestionService.js` if needed for different ARM throttle profiles.
 
@@ -542,7 +542,7 @@ This design avoids the performance and cost penalties of real-time API calls dur
 
 The dashboard now supports a secure internal ingestion path that reads Azure Compute quota usage and writes snapshots to `dbo.CapacitySnapshot`.
 
-Phase 1 also adds Azure OpenAI quota + model catalog ingestion behind safe-off rollout controls so existing environments can deploy the code without activating AI collection.
+Phase 1 also adds Azure OpenAI quota ingestion, Phase 2A widens the model catalog to the provider-discovered Azure AI ARM response, and Phase 2B can widen quota rows beyond OpenAI when the dedicated provider-quota gate is explicitly enabled.
 
 Defaults:
 
@@ -559,9 +559,10 @@ Required app settings:
 - `INGEST_SUBSCRIPTION_IDS` (optional comma-separated list; if omitted, enabled subscriptions are auto-discovered)
 - `INGEST_ON_STARTUP` (`true`/`false`, fallback default when SQL schedule settings are not present)
 - `INGEST_INTERVAL_MINUTES` (`0` disables scheduling, fallback default when SQL schedule settings are not present)
-- `INGEST_OPENAI_ENABLED` (`true`/`false`, default `false`; App Service rollout flag for Azure OpenAI quota + catalog ingestion)
-- `INGEST_OPENAI_MODEL_CATALOG` (`true`/`false`, default `true`; only evaluated when `INGEST_OPENAI_ENABLED=true`)
-- `INGEST_OPENAI_MODEL_CATALOG_INTERVAL_MINUTES` (`1440` by default; fallback cadence for model catalog refresh when SQL schedule settings are not present)
+- `INGEST_AI_ENABLED` (`true`/`false`, default `false`; primary App Service rollout flag for AI catalog + quota ingestion; `INGEST_OPENAI_ENABLED` remains a backward-compatible alias)
+- `INGEST_AI_PROVIDER_QUOTA_ENABLED` (`true`/`false`, default `false`; only widens quota ingestion beyond OpenAI after `INGEST_AI_ENABLED=true` and the matching DB gate is also on)
+- `INGEST_AI_MODEL_CATALOG` (`true`/`false`, default `true`; only evaluated when `INGEST_AI_ENABLED=true`; `INGEST_OPENAI_MODEL_CATALOG` remains a backward-compatible alias)
+- `INGEST_AI_MODEL_CATALOG_INTERVAL_MINUTES` (`1440` by default; primary fallback cadence for model catalog refresh when SQL schedule settings are not present; `INGEST_OPENAI_MODEL_CATALOG_INTERVAL_MINUTES` remains a backward-compatible alias)
 - `AUTH_ENABLED` (`true` enables the dashboard Entra sign-in flow)
 - `ENTRA_TENANT_ID` (tenant ID used for Microsoft Entra sign-in)
 - `ENTRA_CLIENT_ID` (app registration/client ID for the dashboard)
@@ -586,10 +587,21 @@ Required app settings:
 
 DB-backed AI defaults:
 
-- `ingest.openai.enabled` in `dbo.DashboardSetting` defaults to `false`
-- `ingest.openai.modelCatalog.enabled` in `dbo.DashboardSetting` defaults to `true`
+- `ingest.ai.enabled` in `dbo.DashboardSetting` defaults to `false`
+- `ingest.ai.providerQuota.enabled` in `dbo.DashboardSetting` defaults to `false`
+- `ingest.ai.modelCatalog.enabled` in `dbo.DashboardSetting` defaults to `true`
 - `schedule.aiModelCatalog.intervalMinutes` in `dbo.DashboardSetting` defaults to `1440` (`0` disables catalog refresh)
-- Explicit App Service values for `INGEST_OPENAI_ENABLED` / `INGEST_OPENAI_MODEL_CATALOG` override the database defaults for rollout control
+- Legacy `ingest.openai.*` keys remain accepted during the Phase 2A transition for rollback safety
+- `INGEST_AI_ENABLED` is the outer rollout flag, but runtime AI quota/catalog ingestion still requires the matching DB gate (`ingest.ai.enabled`) to be on
+- `INGEST_AI_PROVIDER_QUOTA_ENABLED` is an additional Phase 2B sub-gate; widening quota ingestion beyond OpenAI also requires `ingest.ai.providerQuota.enabled=true` in SQL
+- `INGEST_AI_MODEL_CATALOG` remains an additional App Service sub-gate for catalog refresh, and catalog refresh also requires `ingest.ai.modelCatalog.enabled` in SQL
+
+Phase 2A/2B AI note:
+
+- The model catalog now stores provider-discovered Azure AI rows from the tenant-visible ARM catalog, not just OpenAI rows.
+- Live verification confirmed Reader RBAC is sufficient for the catalog API and validated xAI plus other providers in this tenant.
+- The usages API also returns non-OpenAI `AIServices.*` quota rows, but Phase 2B keeps that expansion behind the new provider-quota sub-gate so rollout stays default-off.
+- Anthropic remains optional/unverified for this tenant because the live catalog did not return Claude rows across the tested regions/API versions.
 
 Runtime note:
 
@@ -620,17 +632,23 @@ Read APIs for analytics:
 - `GET /api/capacity/subscriptions` (masked subscription summary)
 - `GET /api/capacity/trends?days=7` (daily trend rollup)
 - `GET /api/capacity/families` (quota-style family summary)
-- `GET /api/ai/quota` (AI quota rows sourced from `dbo.CapacitySnapshot`)
-- `GET /api/ai/models` (latest AI model availability rows)
+- `GET /api/ai/quota` (latest AI quota rows sourced from `dbo.CapacitySnapshot`; supports optional `provider` filtering once Phase 2B provider quota is enabled)
+- `GET /api/ai/quota/providers` (distinct providers present in the latest AI quota capture)
+- `GET /api/ai/models` (latest provider-aware AI model availability rows, including `provider`)
 - `GET /api/ai/models/regions` (distinct regions in the AI model catalog)
 
 Recommended Phase 1 rollout order:
 
 1. Apply the SQL migration chain so the AI settings + `dbo.AIModelAvailability` objects exist.
-2. Deploy the web app with `INGEST_OPENAI_ENABLED=false`.
+2. Deploy the web app with `INGEST_AI_ENABLED=false` and `INGEST_AI_PROVIDER_QUOTA_ENABLED=false` (or keep the legacy `INGEST_OPENAI_ENABLED=false` alias).
 3. Validate that existing Compute ingestion and dashboard paths are unchanged.
-4. Enable `INGEST_OPENAI_ENABLED=true` in the target environment when you are ready for AI collection.
-5. Adjust `schedule.aiModelCatalog.intervalMinutes` through the admin-backed setting path only after the first end-to-end validation.
+4. Enable `INGEST_AI_ENABLED=true` in the target environment when you are ready to allow the DB-backed AI gate to take effect.
+5. Flip `ingest.ai.enabled=true` only after rollout validation confirms AI ingestion should start in that environment.
+6. Validate catalog refresh plus the existing OpenAI quota slice before widening to other providers.
+7. Enable `INGEST_AI_PROVIDER_QUOTA_ENABLED=true` only when you are ready to ingest the verified non-OpenAI `AIServices.*` quota rows.
+8. Flip `ingest.ai.providerQuota.enabled=true` only after the environment-level enablement is in place.
+9. Adjust `schedule.aiModelCatalog.intervalMinutes` through the admin-backed setting path only after the first end-to-end validation.
+10. Treat Anthropic as optional for this tenant until a live catalog refresh actually returns Claude rows.
 
 Example trigger (all families — omit `familyFilters` or pass empty array):
 

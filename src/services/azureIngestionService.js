@@ -5,10 +5,10 @@ const { getRegionsForPreset } = require('../config/regionPresets');
 const { deriveCapacityScoreRows } = require('./capacityService');
 const { insertCapacitySnapshots, insertCapacityScoreSnapshots } = require('../store/sql');
 const {
-  fetchOpenAIUsages,
-  fetchOpenAIModelAvailability,
-  mapOpenAIUsageToSnapshot,
-  mapOpenAIModelToAvailability,
+  fetchAIUsages,
+  fetchAIModelAvailability,
+  mapAIUsageToSnapshot,
+  mapAIModelToAvailability,
   insertAIModelAvailability,
   getAISettings,
   shouldRefreshModelCatalog
@@ -533,20 +533,22 @@ async function runCapacityIngestion(options = {}) {
 
         rows.push(...regionRows.flat());
         
-        // Ingest Azure OpenAI quota if enabled
-        if (aiSettings.openaiEnabled) {
+        // Ingest verified AI quota rows only when both the App Service flag and DB safety gate resolve on.
+        if (aiSettings.aiEnabled) {
           const aiRegionRows = await mapWithConcurrency(regions, regionConcurrency, async (region) => {
-            const openaiUsages = await fetchOpenAIUsages(armGetAll, token, subscriptionId, region);
-            const localAiRows = openaiUsages.map((usage) => 
-              mapOpenAIUsageToSnapshot(usage, {
+            const aiUsages = await fetchAIUsages(armGetAll, token, subscriptionId, region, {
+              includeAllProviders: aiSettings.providerQuotaEnabled
+            });
+            const localAiRows = aiUsages
+              .map((usage) => mapAIUsageToSnapshot(usage, {
                 capturedAtUtc,
                 subscriptionKey,
                 subscriptionId,
                 subscriptionName,
                 region
-              })
-            );
-            
+              }))
+              .filter(Boolean);
+             
             return localAiRows;
           });
           
@@ -567,10 +569,10 @@ async function runCapacityIngestion(options = {}) {
     
     // Ingest AI model catalog if enabled and due for refresh
     let insertedAIModelRows = 0;
-    if (aiSettings.openaiEnabled && aiSettings.modelCatalogEnabled) {
+    if (aiSettings.aiEnabled && aiSettings.modelCatalogEnabled) {
       const shouldRefresh = await shouldRefreshModelCatalog(aiSettings.modelCatalogIntervalMinutes);
       if (shouldRefresh) {
-        console.log(`Refreshing AI model catalog (interval: ${aiSettings.modelCatalogIntervalMinutes} minutes)`);
+        console.log(`Refreshing provider-discovered AI model catalog (interval: ${aiSettings.modelCatalogIntervalMinutes} minutes)`);
         
         // Fetch model catalog for one representative subscription (first in list)
         if (subscriptions.length > 0) {
@@ -578,9 +580,9 @@ async function runCapacityIngestion(options = {}) {
           const subscriptionId = subscription.subscriptionId;
           
           const modelRegionRows = await mapWithConcurrency(regions, regionConcurrency, async (region) => {
-            const models = await fetchOpenAIModelAvailability(armGetAll, token, subscriptionId, region);
+            const models = await fetchAIModelAvailability(armGetAll, token, subscriptionId, region);
             const localModelRows = models.map((model) =>
-              mapOpenAIModelToAvailability(model, {
+              mapAIModelToAvailability(model, {
                 capturedAtUtc,
                 subscriptionId,
                 region
@@ -609,6 +611,7 @@ async function runCapacityIngestion(options = {}) {
       insertedRows,
       insertedScoreRows,
       insertedAIRows: aiRows.length,
+      aiQuotaScope: aiSettings.providerQuotaEnabled ? 'provider-aware' : 'openai-only',
       insertedAIModelRows
     };
 
@@ -686,8 +689,38 @@ function getIngestionSchedulerConfig() {
   return { ...schedulerConfig };
 }
 
+async function refreshModelCatalog(options = {}) {
+  const credential = getCredential();
+  const token = (await credential.getToken(ARM_SCOPE)).token;
+  const subscriptions = await listSubscriptions(token, options.subscriptionIds);
+  if (subscriptions.length === 0) {
+    return { ok: true, insertedAIModelRows: 0, message: 'No subscriptions available.' };
+  }
+  const regions = getRegions(options.regionPreset, options.regions);
+  const regionConcurrency = Math.max(
+    Number(process.env.INGEST_REGION_CONCURRENCY || DEFAULT_REGION_CONCURRENCY),
+    1
+  );
+  const subscriptionId = subscriptions[0].subscriptionId;
+  const capturedAtUtc = new Date();
+  const allModelRows = [];
+
+  const modelRegionRows = await mapWithConcurrency(regions, regionConcurrency, async (region) => {
+    const models = await fetchAIModelAvailability(armGetAll, token, subscriptionId, region);
+    return models.map((model) =>
+      mapAIModelToAvailability(model, { capturedAtUtc, subscriptionId, region })
+    );
+  });
+
+  allModelRows.push(...modelRegionRows.flat());
+  const insertedAIModelRows = await insertAIModelAvailability(allModelRows);
+
+  return { ok: true, insertedAIModelRows, regions, subscriptionId };
+}
+
 module.exports = {
   runCapacityIngestion,
+  refreshModelCatalog,
   getIngestionStatus,
   startIngestionScheduler,
   updateIngestionScheduler,

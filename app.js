@@ -50,10 +50,52 @@ function getRowResourceType(row) {
   const sourceType = String(row?.sourceType || '').toLowerCase();
   const family = String(row?.family || '').toLowerCase();
   const sku = String(row?.sku || '').toLowerCase();
-  if (sourceType.includes('openai') || family.startsWith('openai')) return 'AI';
+  if (sourceType.includes('azure-ai') || sourceType.includes('openai') || family.startsWith('openai') || family.startsWith('aiservices') || sku.startsWith('aiservices')) return 'AI';
   if (family.includes('disk') || sku.includes('disk') || sku.includes('snapshot')) return 'Disk';
   if (family.endsWith('family') || /^standard_/.test(String(row?.sku || ''))) return 'Compute';
   return 'Other';
+}
+
+function getAIModelProviderLabel(row) {
+  const provider = String(row?.provider || row?.modelFormat || '').trim();
+  return provider || 'Unknown';
+}
+
+function titleCaseProviderSlug(value) {
+  return String(value || '')
+    .split('-')
+    .map((segment) => String(segment || '').trim())
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(' ');
+}
+
+function getAIQuotaProviderLabel(row) {
+  const provider = String(row?.provider || '').trim();
+  if (provider) {
+    return provider;
+  }
+
+  const sourceType = String(row?.sourceType || '').trim();
+  const family = String(row?.family || '').trim();
+  if (/^live-azure-openai-ingest$/i.test(sourceType) || /^openai/i.test(family)) {
+    return 'OpenAI';
+  }
+
+  const match = sourceType.match(/^live-azure-ai-(.+)-ingest$/i);
+  return match ? (titleCaseProviderSlug(match[1]) || 'Unknown') : 'Unknown';
+}
+
+function getAIQuotaProviderDisplay(row) {
+  if (getRowResourceType(row) !== 'AI') {
+    return '—';
+  }
+  const provider = getAIQuotaProviderLabel(row);
+  return provider === 'Unknown' ? 'Not tagged' : provider;
+}
+
+function rowMatchesSelectedAIQuotaProvider(row, selectedProvider = aiQuotaProviderFilter?.value || 'all') {
+  return selectedProvider === 'all' || (getRowResourceType(row) === 'AI' && getAIQuotaProviderLabel(row) === selectedProvider);
 }
 
 function rowMatchesSelectedResourceType(row, selectedType = resourceTypeFilter?.value || 'all') {
@@ -276,10 +318,13 @@ const recommendWarnings = document.querySelector('#recommendWarnings');
 const aiModelsGridBody = document.querySelector('#aiModelsGrid tbody');
 const aiModelsStatus = document.querySelector('#aiModelsStatus');
 const aiModelNameFilter = document.querySelector('#aiModelNameFilter');
+const aiProviderFilter = document.querySelector('#aiProviderFilter');
 const aiDeploymentTypeFilter = document.querySelector('#aiDeploymentTypeFilter');
 const aiDefaultOnlyInput = document.querySelector('#aiDefaultOnlyInput');
 const aiFineTuneFilter = document.querySelector('#aiFineTuneFilter');
 const refreshAiModelsBtn = document.querySelector('#refreshAiModelsBtn');
+const aiQuotaProviderFilterLabel = document.querySelector('#aiQuotaProviderFilterLabel');
+const aiQuotaProviderFilter = document.querySelector('#aiQuotaProviderFilter');
 
 const reportViewLabels = {
   'capacity-grid': 'Capacity Grid',
@@ -1189,6 +1234,34 @@ function syncFamilyOptions() {
   familyFilter.value = availableValues.includes(currentValue) ? currentValue : 'all';
 }
 
+function syncAIQuotaProviderOptions(dataRows = []) {
+  if (!aiQuotaProviderFilter) {
+    return;
+  }
+
+  const selectedType = resourceTypeFilter?.value || 'all';
+  const previousValue = aiQuotaProviderFilter.value || 'all';
+  const providers = [...new Set((Array.isArray(dataRows) ? dataRows : [])
+    .filter((row) => getRowResourceType(row) === 'AI')
+    .map((row) => getAIQuotaProviderLabel(row))
+    .filter((provider) => provider && provider !== 'Unknown'))]
+    .sort((left, right) => left.localeCompare(right));
+
+  aiQuotaProviderFilter.innerHTML = '<option value="all">All verified providers</option>';
+  providers.forEach((provider) => {
+    const option = document.createElement('option');
+    option.value = provider;
+    option.textContent = provider;
+    aiQuotaProviderFilter.appendChild(option);
+  });
+
+  aiQuotaProviderFilter.value = providers.includes(previousValue) ? previousValue : 'all';
+
+  if (aiQuotaProviderFilterLabel) {
+    aiQuotaProviderFilterLabel.style.display = selectedType === 'AI' && providers.length > 0 ? '' : 'none';
+  }
+}
+
 function setAIModelsStatus(message, tone = 'info') {
   if (!aiModelsStatus) {
     return;
@@ -1220,10 +1293,32 @@ function syncAIDeploymentTypeOptions(dataRows) {
   aiDeploymentTypeFilter.value = deploymentTypes.includes(previousValue) ? previousValue : 'all';
 }
 
+function syncAIProviderOptions(dataRows) {
+  if (!aiProviderFilter) {
+    return;
+  }
+
+  const previousValue = aiProviderFilter.value || 'all';
+  const providers = [...new Set((Array.isArray(dataRows) ? dataRows : [])
+    .map((row) => getAIModelProviderLabel(row))
+    .filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right));
+
+  aiProviderFilter.innerHTML = '<option value="all">All providers</option>';
+  providers.forEach((provider) => {
+    const option = document.createElement('option');
+    option.value = provider;
+    option.textContent = provider;
+    aiProviderFilter.appendChild(option);
+  });
+  aiProviderFilter.value = providers.includes(previousValue) ? previousValue : 'all';
+}
+
 function getFilteredAIModelRows() {
   const regionScope = activePresetRegions();
   const selectedRegion = String(regionFilter?.value || 'all').trim().toLowerCase();
   const searchTerm = String(aiModelNameFilter?.value || '').trim().toLowerCase();
+  const provider = String(aiProviderFilter?.value || 'all').trim();
   const deploymentType = String(aiDeploymentTypeFilter?.value || 'all').trim().toLowerCase();
   const fineTune = String(aiFineTuneFilter?.value || 'all').trim().toLowerCase();
   const defaultOnly = Boolean(aiDefaultOnlyInput?.checked);
@@ -1232,15 +1327,17 @@ function getFilteredAIModelRows() {
     const rowRegion = String(row.region || '').trim().toLowerCase();
     const byPreset = !Array.isArray(regionScope) || regionScope.length === 0 || regionScope.includes(rowRegion);
     const byRegion = selectedRegion === 'all' || rowRegion === selectedRegion;
-    const searchableText = `${row.modelName || ''} ${row.modelVersion || ''} ${row.skuName || ''}`.toLowerCase();
+    const providerLabel = getAIModelProviderLabel(row);
+    const searchableText = `${providerLabel} ${row.modelName || ''} ${row.modelVersion || ''} ${row.skuName || ''}`.toLowerCase();
     const bySearch = !searchTerm || searchableText.includes(searchTerm);
+    const byProvider = provider === 'all' || providerLabel === provider;
     const deploymentValues = String(row.deploymentTypes || '').toLowerCase().split(',').map((value) => value.trim()).filter(Boolean);
     const byDeployment = deploymentType === 'all' || deploymentValues.includes(deploymentType);
     const byFineTune = fineTune === 'all'
       || (fineTune === 'yes' && Boolean(row.finetuneCapable))
       || (fineTune === 'no' && !row.finetuneCapable);
     const byDefault = !defaultOnly || Boolean(row.isDefault);
-    return byPreset && byRegion && bySearch && byDeployment && byFineTune && byDefault;
+    return byPreset && byRegion && bySearch && byProvider && byDeployment && byFineTune && byDefault;
   });
 }
 
@@ -1248,6 +1345,7 @@ function renderAIModelSummary(dataRows) {
   const rowsToRender = Array.isArray(dataRows) ? dataRows : [];
   const uniqueModels = new Set(rowsToRender.map((row) => String(row.modelName || '').trim()).filter(Boolean));
   const uniqueRegions = new Set(rowsToRender.map((row) => String(row.region || '').trim()).filter(Boolean));
+  const uniqueProviders = new Set(rowsToRender.map((row) => getAIModelProviderLabel(row)));
   const defaultRows = rowsToRender.filter((row) => Boolean(row.isDefault)).length;
   const fineTuneRows = rowsToRender.filter((row) => Boolean(row.finetuneCapable)).length;
 
@@ -1255,6 +1353,7 @@ function renderAIModelSummary(dataRows) {
     <div class="card"><h3>Catalog Rows</h3><p>${rowsToRender.length.toLocaleString()}</p></div>
     <div class="card"><h3>Models in Scope</h3><p>${uniqueModels.size.toLocaleString()}</p></div>
     <div class="card"><h3>Regions in Scope</h3><p>${uniqueRegions.size.toLocaleString()}</p></div>
+    <div class="card"><h3>Providers in Scope</h3><p>${uniqueProviders.size.toLocaleString()}</p></div>
     <div class="card"><h3>Default / Fine-Tune</h3><p>${defaultRows.toLocaleString()} / ${fineTuneRows.toLocaleString()}</p></div>
   `;
 }
@@ -1268,7 +1367,7 @@ function renderAIModelAvailability() {
   aiModelsGridBody.innerHTML = '';
 
   if (filtered.length === 0) {
-    aiModelsGridBody.innerHTML = '<tr><td colspan="10" style="text-align: center; padding: 20px; color: #5d7085;">No AI model availability rows match the current scope.</td></tr>';
+    aiModelsGridBody.innerHTML = '<tr><td colspan="11" style="text-align: center; padding: 20px; color: #5d7085;">No AI model availability rows match the current provider and filter scope.</td></tr>';
     renderAIModelSummary([]);
     return;
   }
@@ -1276,6 +1375,7 @@ function renderAIModelAvailability() {
   filtered.forEach((row) => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
+      <td>${escapeHtml(getAIModelProviderLabel(row))}</td>
       <td>${escapeHtml(row.modelName || 'n/a')}</td>
       <td>${escapeHtml(row.modelVersion || 'n/a')}</td>
       <td>${escapeHtml(row.region || 'n/a')}</td>
@@ -1300,20 +1400,24 @@ function utilization(row) {
 
 function filteredRows() {
   const selectedType = resourceTypeFilter?.value || 'all';
+  const selectedProvider = aiQuotaProviderFilter?.value || 'all';
   return presetScopedRows(rows).filter((r) => {
     const byRegion = regionFilter.value === 'all' || r.region === regionFilter.value;
     const byFamily = familyFilter.value === 'all' || r.family === familyFilter.value;
     const byAvailability = availabilityFilter.value === 'all' || r.availability === availabilityFilter.value;
     const byType = rowMatchesSelectedResourceType(r, selectedType);
-    return byRegion && byFamily && byAvailability && byType;
+    const byProvider = rowMatchesSelectedAIQuotaProvider(r, selectedProvider);
+    return byRegion && byFamily && byAvailability && byType && byProvider;
   });
 }
 
 function reportScopedRows() {
+  const selectedProvider = aiQuotaProviderFilter?.value || 'all';
   return presetScopedRows(rows).filter((r) => {
     const byRegion = regionFilter.value === 'all' || r.region === regionFilter.value;
     const byAvailability = availabilityFilter.value === 'all' || r.availability === availabilityFilter.value;
-    return byRegion && byAvailability;
+    const byProvider = rowMatchesSelectedAIQuotaProvider(r, selectedProvider);
+    return byRegion && byAvailability && byProvider;
   });
 }
 
@@ -1508,7 +1612,7 @@ function renderGrid() {
   const matrixData = reportScopedRows();
   gridBody.innerHTML = '';
   if (data.length === 0) {
-    gridBody.innerHTML = '<tr><td colspan="12" style="text-align: center; padding: 20px; color: #5d7085;">No data available. Ensure ingestion is running and subscriptions are in scope.</td></tr>';
+    gridBody.innerHTML = '<tr><td colspan="13" style="text-align: center; padding: 20px; color: #5d7085;">No data available. Ensure ingestion is running and subscriptions are in scope.</td></tr>';
     renderCapacityPaging();
     renderSummaryForActiveView([], matrixData);
     renderCharts([]);
@@ -1524,6 +1628,7 @@ function renderGrid() {
       <td>${r.region}</td>
       <td>${r.sku}</td>
       <td>${r.family}</td>
+      <td>${escapeHtml(getAIQuotaProviderDisplay(r))}</td>
       <td><span class="badge ${r.availability}">${r.availability}</span></td>
       <td>${r.zonesCsv || 'n/a'}</td>
       <td>${r.quotaCurrent}</td>
@@ -3086,7 +3191,7 @@ function renderRegionHealth(data) {
   regionHealthGridBody.innerHTML = '';
 
   if (scopedRows.length === 0) {
-    regionHealthGridBody.innerHTML = '<tr><td colspan="10" style="text-align: center; padding: 20px; color: #5d7085;">No data available for the current filter scope.</td></tr>';
+    regionHealthGridBody.innerHTML = '<tr><td colspan="11" style="text-align: center; padding: 20px; color: #5d7085;">No data available for the current filter scope.</td></tr>';
     return;
   }
 
@@ -3106,7 +3211,8 @@ function renderRegionHealth(data) {
         totalQuotaHeadroom: 0,
         deployableFamilies: new Set(),
         deployableSubscriptions: new Set(),
-        constrainedFamilyCounts: new Map()
+        constrainedFamilyCounts: new Map(),
+        providers: new Set()
       });
     }
 
@@ -3114,9 +3220,13 @@ function renderRegionHealth(data) {
     const availability = String(row.availability || '').toUpperCase();
     const family = formatFamilyLabel(row.family) || String(row.family || row.sku || '').trim() || 'Unknown';
     const subscriptionIdentity = String(row.subscriptionId || row.subscriptionKey || '').trim();
+    const provider = getAIQuotaProviderLabel(row);
 
     entry.totalRows += 1;
     entry.totalQuotaHeadroom += Number(row.quotaLimit || 0) - Number(row.quotaCurrent || 0);
+    if (provider && provider !== 'Unknown') {
+      entry.providers.add(provider);
+    }
 
     if (availability === 'OK' || availability === 'LIMITED') {
       entry.deployableRows += 1;
@@ -3141,6 +3251,7 @@ function renderRegionHealth(data) {
       totalQuotaHeadroom: entry.totalQuotaHeadroom,
       deployableFamilyCount: entry.deployableFamilies.size,
       deployableSubscriptionCount: entry.deployableSubscriptions.size,
+      providers: [...entry.providers].sort((left, right) => left.localeCompare(right)),
       topConstrainedFamilies: [...entry.constrainedFamilyCounts.entries()]
         .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
         .slice(0, 3)
@@ -3172,6 +3283,7 @@ function renderRegionHealth(data) {
       <td>${Math.round(item.totalQuotaHeadroom).toLocaleString()}</td>
       <td>${item.deployableFamilyCount.toLocaleString()}</td>
       <td>${item.deployableSubscriptionCount.toLocaleString()}</td>
+      <td>${escapeHtml(item.providers.join(', ') || 'n/a')}</td>
       <td>${item.topConstrainedFamilies.join(', ') || 'n/a'}</td>
     `;
     regionHealthGridBody.appendChild(tr);
@@ -3185,7 +3297,16 @@ function getQueryFilters() {
   const availability = availabilityFilter.value || 'all';
   const subscriptionIds = selectedSubscriptionCsv();
   const resourceType = resourceTypeFilter?.value || 'all';
-  return { regionPreset, region, family, availability, subscriptionIds, resourceType };
+  const provider = resourceType === 'AI' ? (aiQuotaProviderFilter?.value || 'all') : 'all';
+  return {
+    regionPreset,
+    region,
+    family,
+    availability,
+    subscriptionIds,
+    resourceType,
+    ...(provider && provider !== 'all' ? { provider } : {})
+  };
 }
 
 async function loadCapacityScoreView() {
@@ -3275,18 +3396,20 @@ async function loadAIModelAvailabilityView() {
     if (Array.isArray(regionsPayload.regions) && regionsPayload.regions.length > 0) {
       capacityFacetRegions = Array.from(new Set([...capacityFacetRegions, ...regionsPayload.regions])).sort();
     }
+    syncAIProviderOptions(aiModelRows);
     syncAIDeploymentTypeOptions(aiModelRows);
     renderAIModelAvailability();
     setAIModelsStatus(`Loaded ${aiModelRows.length.toLocaleString()} AI model availability row(s).`, 'success');
   } catch (error) {
     aiModelRows = [];
+    syncAIProviderOptions([]);
     syncAIDeploymentTypeOptions([]);
     renderAIModelAvailability();
     setAIModelsStatus(error.message || 'Failed to load AI model availability.', 'error');
   } finally {
     if (refreshAiModelsBtn) {
       refreshAiModelsBtn.disabled = false;
-      refreshAiModelsBtn.textContent = 'Refresh Catalog View';
+      refreshAiModelsBtn.textContent = 'Refresh AI Catalog';
     }
   }
 
@@ -3321,6 +3444,7 @@ async function loadDerivedAnalyticsRows() {
         sku: normalizeSkuName(row?.sku)
       }))
     : [];
+  syncAIQuotaProviderOptions(analyticsRows);
   return analyticsRows;
 }
 
@@ -3445,7 +3569,7 @@ async function loadSubscriptions(showStatus = false) {
 }
 
 async function loadCapacityRows() {
-  gridBody.innerHTML = '<tr><td colspan="12" style="text-align:center;padding:24px;color:#5d7085;">Loading…</td></tr>';
+  gridBody.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:24px;color:#5d7085;">Loading…</td></tr>';
   const filters = getQueryFilters();
   const query = new URLSearchParams({
     ...filters,
@@ -3498,6 +3622,7 @@ async function loadCapacityRows() {
 
   syncRegionOptions();
   syncFamilyOptions();
+  syncAIQuotaProviderOptions(analyticsRows.length > 0 ? analyticsRows : rows);
   syncRecommendationInputsFromTopFilters();
   renderGrid();
 
@@ -3746,6 +3871,10 @@ regionFilter.addEventListener('change', () => {
 resourceTypeFilter?.addEventListener('change', () => {
   familyFilter.value = 'all';
   if (familySearch) familySearch.value = '';
+  if (aiQuotaProviderFilter) {
+    aiQuotaProviderFilter.value = 'all';
+  }
+  syncAIQuotaProviderOptions(analyticsRows.length > 0 ? analyticsRows : rows);
   resetCapacityPaging();
   loadCapacityRows();
 });
@@ -3764,7 +3893,18 @@ availabilityFilter.addEventListener('change', () => {
   loadCapacityRows();
 });
 
+aiQuotaProviderFilter?.addEventListener('change', () => {
+  resetCapacityPaging();
+  loadCapacityRows();
+});
+
 aiModelNameFilter?.addEventListener('input', () => {
+  if (getActiveReportViewKey() === 'ai-model-availability') {
+    renderAIModelAvailability();
+  }
+});
+
+aiProviderFilter?.addEventListener('change', () => {
   if (getActiveReportViewKey() === 'ai-model-availability') {
     renderAIModelAvailability();
   }

@@ -133,9 +133,14 @@
               <select id="resourceTypeFilter">
                 <option value="all" selected>All</option>
                 <option value="Compute">Compute</option>
-                <option value="AI">AI / OpenAI</option>
+                <option value="AI">AI Models</option>
                 <option value="Disk">Disk</option>
                 <option value="Other">Other</option>
+              </select>
+            </label>
+            <label id="aiQuotaProviderFilterLabel" style="display: none;">AI Provider
+              <select id="aiQuotaProviderFilter">
+                <option value="all">All verified providers</option>
               </select>
             </label>
             <label>SKU Family
@@ -184,6 +189,7 @@
                   <th>Region</th>
                   <th>SKU</th>
                   <th>Family</th>
+                  <th>AI Provider</th>
                   <th>Availability</th>
                   <th>Zones</th>
                   <th>Quota Current</th>
@@ -234,6 +240,7 @@
                   <th>Total Quota Headroom</th>
                   <th>Deployable Families</th>
                   <th>Subscriptions with Deployable</th>
+                  <th>Providers (AI)</th>
                   <th>Top Constrained Families</th>
                 </tr>
               </thead>
@@ -492,12 +499,17 @@
             <h3>AI Model Availability</h3>
             <div class="report-explainer">
               <strong>Report Key</strong>
-              <span>This catalog tracks Azure OpenAI model availability by region using the latest <strong>dbo.AIModelAvailabilityLatest</strong> snapshot.</span>
-              <span>Use the shared region preset and region filters above, then refine by model name, deployment type, and default-version status inside this report.</span>
+              <span>This catalog tracks provider-aware Azure AI model availability by region using the latest <strong>dbo.AIModelAvailabilityLatest</strong> snapshot.</span>
+              <span>Use the shared region preset and region filters above, then refine by provider, model name, deployment type, and default-version status inside this report.</span>
             </div>
             <div class="filters" style="margin-bottom: 10px; align-items: end;">
               <label>Model Search
-                <input id="aiModelNameFilter" type="search" placeholder="gpt-4o" />
+                <input id="aiModelNameFilter" type="search" placeholder="gpt-4o, llama, text-embedding" />
+              </label>
+              <label>Provider
+                <select id="aiProviderFilter">
+                  <option value="all">All providers</option>
+                </select>
               </label>
               <label>Deployment Type
                 <select id="aiDeploymentTypeFilter">
@@ -515,12 +527,13 @@
                   <option value="no">Inference only</option>
                 </select>
               </label>
-              <button id="refreshAiModelsBtn" type="button">Refresh Catalog View</button>
+              <button id="refreshAiModelsBtn" type="button">Refresh AI Catalog</button>
             </div>
-            <p id="aiModelsStatus" class="inline-note" style="margin: 0 0 8px;">Load the AI catalog report to see current Azure OpenAI regional availability.</p>
+            <p id="aiModelsStatus" class="inline-note" style="margin: 0 0 8px;">Load the AI catalog report to see current Azure AI provider coverage.</p>
             <table id="aiModelsGrid">
               <thead>
                 <tr>
+                  <th>Provider</th>
                   <th>Model</th>
                   <th>Version</th>
                   <th>Region</th>

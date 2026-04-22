@@ -1362,6 +1362,7 @@ async function ensurePhase3SchemaForPool(pool) {
         capturedAtUtc DATETIME2 NOT NULL,
         subscriptionId NVARCHAR(64) NOT NULL,
         region NVARCHAR(64) NOT NULL,
+        provider NVARCHAR(128) NOT NULL CONSTRAINT DF_AIModelAvailability_Provider DEFAULT ('Unknown'),
         modelName NVARCHAR(128) NOT NULL,
         modelVersion NVARCHAR(64) NULL,
         deploymentTypes NVARCHAR(512) NULL,
@@ -1372,6 +1373,11 @@ async function ensurePhase3SchemaForPool(pool) {
         isDefault BIT NOT NULL CONSTRAINT DF_AIModelAvailability_IsDefault DEFAULT ((0)),
         capabilities NVARCHAR(MAX) NULL
       );
+    END;
+
+    IF COL_LENGTH('dbo.AIModelAvailability', 'provider') IS NULL
+    BEGIN
+      ALTER TABLE dbo.AIModelAvailability ADD provider NVARCHAR(128) NULL;
     END;
 
     IF NOT EXISTS (
@@ -1408,10 +1414,36 @@ async function ensurePhase3SchemaForPool(pool) {
       VALUES ('ingest.openai.enabled', 'false', SYSUTCDATETIME());
     END;
 
+    IF NOT EXISTS (SELECT 1 FROM dbo.DashboardSetting WHERE settingKey = 'ingest.ai.enabled')
+    BEGIN
+      INSERT INTO dbo.DashboardSetting (settingKey, settingValue, updatedAtUtc)
+      VALUES (
+        'ingest.ai.enabled',
+        COALESCE((SELECT settingValue FROM dbo.DashboardSetting WHERE settingKey = 'ingest.openai.enabled'), 'false'),
+        SYSUTCDATETIME()
+      );
+    END;
+
+    IF NOT EXISTS (SELECT 1 FROM dbo.DashboardSetting WHERE settingKey = 'ingest.ai.providerQuota.enabled')
+    BEGIN
+      INSERT INTO dbo.DashboardSetting (settingKey, settingValue, updatedAtUtc)
+      VALUES ('ingest.ai.providerQuota.enabled', 'false', SYSUTCDATETIME());
+    END;
+
     IF NOT EXISTS (SELECT 1 FROM dbo.DashboardSetting WHERE settingKey = 'ingest.openai.modelCatalog.enabled')
     BEGIN
       INSERT INTO dbo.DashboardSetting (settingKey, settingValue, updatedAtUtc)
       VALUES ('ingest.openai.modelCatalog.enabled', 'true', SYSUTCDATETIME());
+    END;
+
+    IF NOT EXISTS (SELECT 1 FROM dbo.DashboardSetting WHERE settingKey = 'ingest.ai.modelCatalog.enabled')
+    BEGIN
+      INSERT INTO dbo.DashboardSetting (settingKey, settingValue, updatedAtUtc)
+      VALUES (
+        'ingest.ai.modelCatalog.enabled',
+        COALESCE((SELECT settingValue FROM dbo.DashboardSetting WHERE settingKey = 'ingest.openai.modelCatalog.enabled'), 'true'),
+        SYSUTCDATETIME()
+      );
     END;
   `;
 
@@ -1422,6 +1454,7 @@ async function ensurePhase3SchemaForPool(pool) {
         capturedAtUtc,
         subscriptionId,
         region,
+        provider,
         modelName,
         modelVersion,
         deploymentTypes,
@@ -1432,7 +1465,7 @@ async function ensurePhase3SchemaForPool(pool) {
         isDefault,
         capabilities,
         ROW_NUMBER() OVER (
-          PARTITION BY region, modelName, modelVersion
+          PARTITION BY region, provider, modelName, modelVersion
           ORDER BY capturedAtUtc DESC
         ) AS rn
       FROM dbo.AIModelAvailability
@@ -1441,6 +1474,7 @@ async function ensurePhase3SchemaForPool(pool) {
       capturedAtUtc,
       subscriptionId,
       region,
+      provider,
       modelName,
       modelVersion,
       deploymentTypes,
@@ -1454,10 +1488,54 @@ async function ensurePhase3SchemaForPool(pool) {
     WHERE rn = 1;
   `;
 
+  const aiProviderMigrationScript = `
+    UPDATE dbo.AIModelAvailability
+    SET provider = CASE
+      WHEN NULLIF(LTRIM(RTRIM(modelFormat)), '') IS NULL THEN 'OpenAI'
+      WHEN LOWER(LTRIM(RTRIM(modelFormat))) IN ('openai', 'azureopenai') THEN 'OpenAI'
+      ELSE LTRIM(RTRIM(modelFormat))
+    END
+    WHERE provider IS NULL OR LTRIM(RTRIM(provider)) = '';
+
+    IF EXISTS (
+      SELECT 1
+      FROM sys.columns
+      WHERE object_id = OBJECT_ID('dbo.AIModelAvailability')
+        AND name = 'provider'
+        AND is_nullable = 1
+    )
+    BEGIN
+      -- Drop objects that depend on the provider column before altering it
+      IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_AIModelAvailability_Provider_Region_Model' AND object_id = OBJECT_ID('dbo.AIModelAvailability'))
+        DROP INDEX IX_AIModelAvailability_Provider_Region_Model ON dbo.AIModelAvailability;
+
+      IF EXISTS (SELECT 1 FROM sys.default_constraints WHERE name = 'DF_AIModelAvailability_Provider' AND parent_object_id = OBJECT_ID('dbo.AIModelAvailability'))
+        ALTER TABLE dbo.AIModelAvailability DROP CONSTRAINT DF_AIModelAvailability_Provider;
+
+      ALTER TABLE dbo.AIModelAvailability ALTER COLUMN provider NVARCHAR(128) NOT NULL;
+
+      ALTER TABLE dbo.AIModelAvailability
+        ADD CONSTRAINT DF_AIModelAvailability_Provider DEFAULT ('Unknown') FOR provider;
+
+      CREATE NONCLUSTERED INDEX IX_AIModelAvailability_Provider_Region_Model
+        ON dbo.AIModelAvailability(provider, region, modelName, modelVersion, capturedAtUtc DESC);
+    END
+    ELSE
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM sys.default_constraints WHERE name = 'DF_AIModelAvailability_Provider' AND parent_object_id = OBJECT_ID('dbo.AIModelAvailability'))
+        ALTER TABLE dbo.AIModelAvailability ADD CONSTRAINT DF_AIModelAvailability_Provider DEFAULT ('Unknown') FOR provider;
+
+      IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_AIModelAvailability_Provider_Region_Model' AND object_id = OBJECT_ID('dbo.AIModelAvailability'))
+        CREATE NONCLUSTERED INDEX IX_AIModelAvailability_Provider_Region_Model
+          ON dbo.AIModelAvailability(provider, region, modelName, modelVersion, capturedAtUtc DESC);
+    END;
+  `;
+
   await pool.request().query(alterScript);
   await pool.request().query(viewScript);
   await pool.request().query(updateScript);
   await pool.request().query(aiSchemaScript);
+  await pool.request().query(aiProviderMigrationScript);
   await pool.request().query(aiViewScript);
   return { ok: true };
 }

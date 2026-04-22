@@ -23,7 +23,7 @@ const REGION_PRESET_OPTIONS = [
 const RESOURCE_TYPE_OPTIONS = [
   { value: 'all', label: 'All types' },
   { value: 'Compute', label: 'Compute' },
-  { value: 'AI', label: 'AI / OpenAI' },
+  { value: 'AI', label: 'AI Models' },
   { value: 'Disk', label: 'Disk' },
   { value: 'Other', label: 'Other' }
 ];
@@ -344,10 +344,46 @@ function getRowResourceType(row) {
   const sourceType = String((row && row.sourceType) || '').toLowerCase();
   const family = String((row && row.family) || '').toLowerCase();
   const sku = String((row && row.sku) || '').toLowerCase();
-  if (sourceType.includes('openai') || family.startsWith('openai')) return 'AI';
+  if (sourceType.includes('azure-ai') || sourceType.includes('openai') || family.startsWith('openai') || family.startsWith('aiservices') || sku.startsWith('aiservices')) return 'AI';
   if (family.includes('disk') || sku.includes('disk') || sku.includes('snapshot')) return 'Disk';
   if (family.endsWith('family') || /^standard_/.test(String((row && row.sku) || ''))) return 'Compute';
   return 'Other';
+}
+
+function getAIModelProviderLabel(row) {
+  const provider = String((row && (row.provider || row.modelFormat)) || '').trim();
+  return provider || 'Unknown';
+}
+
+function titleCaseProviderSlug(value) {
+  return String(value || '')
+    .split('-')
+    .map((segment) => String(segment || '').trim())
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(' ');
+}
+
+function getAIQuotaProviderLabel(row) {
+  const provider = String((row && row.provider) || '').trim();
+  if (provider) return provider;
+  const sourceType = String((row && row.sourceType) || '').trim();
+  const family = String((row && row.family) || '').trim();
+  if (/^live-azure-openai-ingest$/i.test(sourceType) || /^openai/i.test(family)) {
+    return 'OpenAI';
+  }
+  const match = sourceType.match(/^live-azure-ai-(.+)-ingest$/i);
+  return match ? (titleCaseProviderSlug(match[1]) || 'Unknown') : 'Unknown';
+}
+
+function getAIQuotaProviderDisplay(row) {
+  if (getRowResourceType(row) !== 'AI') return '—';
+  const provider = getAIQuotaProviderLabel(row);
+  return provider === 'Unknown' ? 'Not tagged' : provider;
+}
+
+function rowMatchesAIQuotaProvider(row, provider) {
+  return !provider || provider === 'all' || (getRowResourceType(row) === 'AI' && getAIQuotaProviderLabel(row) === provider);
 }
 
 function rowMatchesResourceType(row, resourceType) {
@@ -589,15 +625,20 @@ function deriveRegionHealth(rows) {
         totalQuotaHeadroom: 0,
         deployableFamilies: new Set(),
         deployableSubscriptions: new Set(),
-        constrainedFamilyCounts: new Map()
+        constrainedFamilyCounts: new Map(),
+        providers: new Set()
       });
     }
     const entry = byRegion.get(region);
     const availability = String(row.availability || '').toUpperCase();
     const family = formatFamilyLabel(row.family) || String(row.family || row.sku || '').trim() || 'Unknown';
     const subscriptionId = String(row.subscriptionId || row.subscriptionKey || '').trim();
+    const provider = getAIQuotaProviderLabel(row);
     entry.totalRows += 1;
     entry.totalQuotaHeadroom += Number(row.quotaLimit || 0) - Number(row.quotaCurrent || 0);
+    if (provider && provider !== 'Unknown') {
+      entry.providers.add(provider);
+    }
     if (availability === 'OK' || availability === 'LIMITED') {
       entry.deployableRows += 1;
       entry.deployableFamilies.add(family);
@@ -616,6 +657,7 @@ function deriveRegionHealth(rows) {
     totalQuotaHeadroom: entry.totalQuotaHeadroom,
     deployableFamilyCount: entry.deployableFamilies.size,
     deployableSubscriptionCount: entry.deployableSubscriptions.size,
+    providers: [...entry.providers].sort((left, right) => left.localeCompare(right)),
     topConstrainedFamilies: [...entry.constrainedFamilyCounts.entries()]
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
       .slice(0, 3)
@@ -1211,6 +1253,7 @@ function AdminIngestionView(props) {
         <div className="rx-inline-actions">
           <span className="rx-selected-count">Using region preset: {selectedRegionPreset || 'all'}</span>
           <button className="rx-button" type="button" onClick={actions.triggerIngest} disabled={busy.trigger || jobRunning}>{busy.trigger || jobRunning ? 'Ingest Running...' : 'Run Capacity Ingestion'}</button>
+          <button className="rx-button rx-button--secondary" type="button" onClick={actions.refreshModelCatalog} disabled={busy.refreshModelCatalog}>{busy.refreshModelCatalog ? 'Refreshing Models...' : 'Refresh Model Library'}</button>
           <button className="rx-button rx-button--secondary" type="button" onClick={actions.refreshStatus} disabled={busy.refreshStatus}>{busy.refreshStatus ? 'Refreshing...' : 'Refresh Status'}</button>
           <button className="rx-button rx-button--secondary" type="button" onClick={actions.refreshSchedule} disabled={busy.refreshSchedule}>{busy.refreshSchedule ? 'Loading Settings...' : 'Reload Scheduler Settings'}</button>
         </div>
@@ -1255,6 +1298,7 @@ function AdminIngestionView(props) {
 function AIModelAvailabilityView({ rows, loading, status, onRefresh }) {
   const uniqueModels = useMemo(() => new Set((rows || []).map((row) => String(row.modelName || '').trim()).filter(Boolean)).size, [rows]);
   const uniqueRegions = useMemo(() => new Set((rows || []).map((row) => String(row.region || '').trim()).filter(Boolean)).size, [rows]);
+  const uniqueProviders = useMemo(() => new Set((rows || []).map((row) => getAIModelProviderLabel(row))).size, [rows]);
   const defaultRows = useMemo(() => (rows || []).filter((row) => Boolean(row.isDefault)).length, [rows]);
   const fineTuneRows = useMemo(() => (rows || []).filter((row) => Boolean(row.finetuneCapable)).length, [rows]);
 
@@ -1262,12 +1306,13 @@ function AIModelAvailabilityView({ rows, loading, status, onRefresh }) {
     <div className="rx-view-stack">
       <Banner tone={status.tone} message={status.message} detail={status.detail} />
       <section className="rx-panel">
-        <div className="rx-panel__header"><div><h2>AI Model Availability</h2><p>Catalog-style view of Azure OpenAI regional model coverage, versions, and deployment types.</p></div></div>
+        <div className="rx-panel__header"><div><h2>AI Model Availability</h2><p>Catalog-style view of provider-aware Azure AI regional model coverage, versions, and deployment types.</p></div></div>
         <div className="rx-inline-actions">
           <span className="rx-selected-count">Rows in scope: {formatNumber((rows || []).length)}</span>
           <span className="rx-selected-count">Models: {formatNumber(uniqueModels)}</span>
           <span className="rx-selected-count">Regions: {formatNumber(uniqueRegions)}</span>
-          <button className="rx-button rx-button--secondary" type="button" disabled={loading} onClick={onRefresh}>{loading ? 'Refreshing...' : 'Refresh Catalog'}</button>
+          <span className="rx-selected-count">Providers: {formatNumber(uniqueProviders)}</span>
+          <button className="rx-button rx-button--secondary" type="button" disabled={loading} onClick={onRefresh}>{loading ? 'Refreshing...' : 'Refresh AI Catalog'}</button>
         </div>
       </section>
       <section className="rx-panel rx-panel--compact rx-panel--muted">
@@ -1275,6 +1320,7 @@ function AIModelAvailabilityView({ rows, loading, status, onRefresh }) {
           <article className="rx-metric-card"><span>Catalog Rows</span><strong>{formatNumber((rows || []).length)}</strong></article>
           <article className="rx-metric-card"><span>Models</span><strong>{formatNumber(uniqueModels)}</strong></article>
           <article className="rx-metric-card"><span>Regions</span><strong>{formatNumber(uniqueRegions)}</strong></article>
+          <article className="rx-metric-card"><span>Providers</span><strong>{formatNumber(uniqueProviders)}</strong></article>
           <article className="rx-metric-card"><span>Default Versions</span><strong>{formatNumber(defaultRows)}</strong></article>
           <article className="rx-metric-card"><span>Fine-Tuning Ready</span><strong>{formatNumber(fineTuneRows)}</strong></article>
         </div>
@@ -1283,6 +1329,7 @@ function AIModelAvailabilityView({ rows, loading, status, onRefresh }) {
         title="Model Availability Grid"
         subtitle="Each row represents the latest model/version availability snapshot for a region."
         columns={[
+          { key: 'provider', label: 'Provider', render: (row) => getAIModelProviderLabel(row) },
           { key: 'modelName', label: 'Model' },
           { key: 'modelVersion', label: 'Version' },
           { key: 'region', label: 'Region' },
@@ -1295,7 +1342,7 @@ function AIModelAvailabilityView({ rows, loading, status, onRefresh }) {
           { key: 'capturedAtUtc', label: 'Updated', render: (row) => formatTimestamp(row.capturedAtUtc) }
         ]}
         rows={rows}
-        emptyMessage={loading ? 'Loading AI model availability...' : 'No AI model availability rows returned for the current filters.'}
+        emptyMessage={loading ? 'Loading AI model availability...' : 'No AI model availability rows returned for the current provider and filter scope.'}
       />
     </div>
   );
@@ -1732,30 +1779,36 @@ function App() {
   const [selectedSubscriptionIds, setSelectedSubscriptionIds] = useState([]);
   const [livePlacementSubscriptionId, setLivePlacementSubscriptionId] = useState('');
   const [livePlacementFamily, setLivePlacementFamily] = useState('');
-  const [filters, setFilters] = useState({ regionPreset: 'USMajor', region: 'all', family: 'all', availability: 'all', resourceType: 'all' });
+  const [filters, setFilters] = useState({ regionPreset: 'USMajor', region: 'all', family: 'all', availability: 'all', resourceType: 'all', provider: 'all' });
   const [capacityData, setCapacityData] = useState({ rows: [], summary: null, facets: { regions: [], families: [] }, pagination: { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false } });
   const [analyticsRows, setAnalyticsRows] = useState([]);
   const [trendRows, setTrendRows] = useState([]);
   const [familyRows, setFamilyRows] = useState([]);
   const [capacityScores, setCapacityScores] = useState({ rows: [], pagination: { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false }, subscriptionSummary: [], desiredCount: '1', status: { tone: 'info', message: 'Load or refresh live placement to populate saved capacity score snapshots.', detail: '' }, busy: false });
-  const [aiModelState, setAiModelState] = useState({ rows: [], regions: [], loading: false, status: { tone: 'info', message: 'AI model availability report ready.', detail: 'Open the sidebar report to review Azure OpenAI model and region coverage.' } });
+  const [aiModelState, setAiModelState] = useState({ rows: [], regions: [], loading: false, status: { tone: 'info', message: 'AI model availability report ready.', detail: 'Open the sidebar report to review Azure AI model and provider coverage.' } });
   const [exportBusyFormat, setExportBusyFormat] = useState('');
   const [recommendState, setRecommendState] = useState({ targetSku: '', autoTargetSku: '', regions: '', autoRegions: '', topN: 10, minScore: 50, showPricing: true, showSpot: false, result: null, status: { tone: 'info', message: 'Run the recommender to populate alternatives.' }, busy: false });
-  const [aiModelFilters, setAiModelFilters] = useState({ modelName: '', deploymentType: 'all', fineTuning: 'all', defaultOnly: false });
-  const [adminState, setAdminState] = useState({ job: null, status: null, schedule: { ingest: { intervalMinutes: 0, runOnStartup: false }, livePlacement: { intervalMinutes: 0, runOnStartup: false }, aiModelCatalog: { intervalMinutes: 1440 } }, runtime: { ingest: { intervalMinutes: 0, runOnStartup: false }, livePlacement: { intervalMinutes: 0, runOnStartup: false }, aiModelCatalog: { intervalMinutes: 1440 } }, persistence: { available: true, source: 'sql', message: 'SQL scheduler settings are available.' }, statusMessage: { tone: 'info', message: 'Data ingestion tools ready.' }, busy: { refreshStatus: false, trigger: false, refreshSchedule: false, saveSchedule: false } });
+  const [aiModelFilters, setAiModelFilters] = useState({ modelName: '', provider: 'all', deploymentType: 'all', fineTuning: 'all', defaultOnly: false });
+  const [adminState, setAdminState] = useState({ job: null, status: null, schedule: { ingest: { intervalMinutes: 0, runOnStartup: false }, livePlacement: { intervalMinutes: 0, runOnStartup: false }, aiModelCatalog: { intervalMinutes: 1440 } }, runtime: { ingest: { intervalMinutes: 0, runOnStartup: false }, livePlacement: { intervalMinutes: 0, runOnStartup: false }, aiModelCatalog: { intervalMinutes: 1440 } }, persistence: { available: true, source: 'sql', message: 'SQL scheduler settings are available.' }, statusMessage: { tone: 'info', message: 'Data ingestion tools ready.' }, busy: { refreshStatus: false, trigger: false, refreshModelCatalog: false, refreshSchedule: false, saveSchedule: false } });
   const [quotaState, setQuotaState] = useState({ managementGroups: [], selectedManagementGroup: '', quotaGroups: [], selectedQuotaGroup: 'all', candidates: [], quotaRuns: [], selectedAnalysisRunId: '', selectedDonorSubscriptionId: '', selectedMoveCandidate: null, requestedTransferAmount: 0, planRows: [], impactRows: [], applyResults: [], planSummary: {}, candidateFilters: { subscriptionId: 'all', region: 'all', family: '', intent: 'all' }, status: { tone: 'info', message: 'Quota tools ready.' }, busy: { discover: false, generate: false, capture: false, refresh: false, refreshRuns: false, plan: false, simulate: false, apply: false } });
   const [showSqlPreview, setShowSqlPreview] = useState(false);
   const [sqlPreviewState, setSqlPreviewState] = useState({ loading: false, error: '', rows: [] });
   const [uiSettingsBusy, setUiSettingsBusy] = useState(false);
 
-  const queryFilters = useMemo(() => ({
-    regionPreset: filters.regionPreset,
-    region: filters.region,
-    family: filters.family,
-    availability: filters.availability,
-    resourceType: filters.resourceType,
-    subscriptionIds: selectedSubscriptionIds.join(',')
-  }), [filters, selectedSubscriptionIds]);
+  const queryFilters = useMemo(() => {
+    const next = {
+      regionPreset: filters.regionPreset,
+      region: filters.region,
+      family: filters.family,
+      availability: filters.availability,
+      resourceType: filters.resourceType,
+      subscriptionIds: selectedSubscriptionIds.join(',')
+    };
+    if (filters.resourceType === 'AI' && filters.provider && filters.provider !== 'all') {
+      next.provider = filters.provider;
+    }
+    return next;
+  }, [filters, selectedSubscriptionIds]);
   const livePlacementSelectedSubscription = useMemo(() => (
     subscriptionOptions.find((option) => option.subscriptionId === livePlacementSubscriptionId) || null
   ), [livePlacementSubscriptionId, subscriptionOptions]);
@@ -1769,7 +1822,9 @@ function App() {
 
   const visibleViews = useMemo(() => REPORT_VIEWS.filter((view) => !view.adminOnly || auth?.canAccessAdmin), [auth]);
 
-  const filteredAnalyticsRows = useMemo(() => (analyticsRows || []).filter((row) => rowMatchesResourceType(row, filters.resourceType)), [analyticsRows, filters.resourceType]);
+  const filteredAnalyticsRows = useMemo(() => (analyticsRows || [])
+    .filter((row) => rowMatchesResourceType(row, filters.resourceType))
+    .filter((row) => rowMatchesAIQuotaProvider(row, filters.provider)), [analyticsRows, filters.resourceType, filters.provider]);
   const recommendedTargetSku = useMemo(() => defaultRecommendTargetSkuFromRows(filteredAnalyticsRows), [filteredAnalyticsRows]);
   const recommendedRegions = useMemo(() => defaultRecommendRegionsFromFilters(filters, capacityData.facets.regions, filteredAnalyticsRows), [filters, capacityData.facets.regions, filteredAnalyticsRows]);
   const scopedRegionOptions = useMemo(() => {
@@ -1793,6 +1848,13 @@ function App() {
       .split(',')
       .map((value) => value.trim())
       .filter(Boolean)))].sort((left, right) => left.localeCompare(right)), [aiModelState.rows]);
+  const aiProviderOptions = useMemo(() => [...new Set((aiModelState.rows || [])
+    .map((row) => getAIModelProviderLabel(row))
+    .filter(Boolean))].sort((left, right) => left.localeCompare(right)), [aiModelState.rows]);
+  const aiQuotaProviderOptions = useMemo(() => [...new Set((analyticsRows || [])
+    .filter((row) => getRowResourceType(row) === 'AI')
+    .map((row) => getAIQuotaProviderLabel(row))
+    .filter((provider) => provider && provider !== 'Unknown'))].sort((left, right) => left.localeCompare(right)), [analyticsRows]);
   const aiModelRows = useMemo(() => {
     const scopedPresetRegions = regionPresets[filters.regionPreset] || [];
     const scopedPresetRegionSet = new Set(scopedPresetRegions.map((region) => String(region || '').trim().toLowerCase()));
@@ -1801,17 +1863,19 @@ function App() {
       const rowRegion = String(row.region || '').trim().toLowerCase();
       const byPreset = scopedPresetRegions.length === 0 || scopedPresetRegionSet.has(rowRegion);
       const byRegion = filters.region === 'all' || rowRegion === String(filters.region || '').trim().toLowerCase();
-      const searchableText = `${row.modelName || ''} ${row.modelVersion || ''} ${row.skuName || ''}`.toLowerCase();
+      const provider = getAIModelProviderLabel(row);
+      const searchableText = `${provider} ${row.modelName || ''} ${row.modelVersion || ''} ${row.skuName || ''}`.toLowerCase();
       const bySearch = !searchTerm || searchableText.includes(searchTerm);
+      const byProvider = aiModelFilters.provider === 'all' || provider === aiModelFilters.provider;
       const deploymentTypes = String(row.deploymentTypes || '').split(',').map((value) => value.trim()).filter(Boolean);
       const byDeployment = aiModelFilters.deploymentType === 'all' || deploymentTypes.includes(aiModelFilters.deploymentType);
       const byFineTuning = aiModelFilters.fineTuning === 'all'
         || (aiModelFilters.fineTuning === 'yes' && Boolean(row.finetuneCapable))
         || (aiModelFilters.fineTuning === 'no' && !row.finetuneCapable);
       const byDefault = !aiModelFilters.defaultOnly || Boolean(row.isDefault);
-      return byPreset && byRegion && bySearch && byDeployment && byFineTuning && byDefault;
+      return byPreset && byRegion && bySearch && byProvider && byDeployment && byFineTuning && byDefault;
     });
-  }, [aiModelFilters.defaultOnly, aiModelFilters.deploymentType, aiModelFilters.fineTuning, aiModelFilters.modelName, aiModelState.rows, filters.region, filters.regionPreset]);
+  }, [aiModelFilters.defaultOnly, aiModelFilters.deploymentType, aiModelFilters.fineTuning, aiModelFilters.modelName, aiModelFilters.provider, aiModelState.rows, filters.region, filters.regionPreset]);
   const isAdminView = Boolean(auth?.canAccessAdmin && activeView === 'admin');
 
   useEffect(() => {
@@ -1971,7 +2035,7 @@ function App() {
         status: {
           tone: 'success',
           message: `Loaded ${formatNumber(Array.isArray(modelsPayload.rows) ? modelsPayload.rows.length : 0)} AI model availability row(s).`,
-          detail: 'Use the sidebar filters to narrow region, model, and deployment-type scope.'
+          detail: 'Use the sidebar filters to narrow provider, region, model, and deployment-type scope.'
         }
       });
     } catch (error) {
@@ -2016,6 +2080,16 @@ function App() {
     }
     refreshAIModelAvailability();
   }, [activeView]);
+
+  useEffect(() => {
+    if (filters.resourceType !== 'AI' && filters.provider !== 'all') {
+      setFilters((current) => ({ ...current, provider: 'all' }));
+      return;
+    }
+    if (filters.resourceType === 'AI' && filters.provider !== 'all' && !aiQuotaProviderOptions.includes(filters.provider)) {
+      setFilters((current) => ({ ...current, provider: 'all' }));
+    }
+  }, [filters.resourceType, filters.provider, aiQuotaProviderOptions]);
 
   useEffect(() => {
     async function loadAnalytics() {
@@ -2221,6 +2295,9 @@ function App() {
     setFilters((current) => {
       if (name === 'regionPreset') {
         return { ...current, regionPreset: value, region: 'all' };
+      }
+      if (name === 'resourceType') {
+        return { ...current, resourceType: value, provider: value === 'AI' ? current.provider : 'all' };
       }
       return { ...current, [name]: value };
     });
@@ -2468,6 +2545,16 @@ function App() {
         setAdminState((current) => ({ ...current, busy: { ...current.busy, trigger: false }, statusMessage: { tone: 'error', message: error.message || 'Failed to start capacity ingestion.' } }));
       }
     },
+    refreshModelCatalog: async () => {
+      if (!auth?.canAccessAdmin) return;
+      setAdminState((current) => ({ ...current, busy: { ...current.busy, refreshModelCatalog: true }, statusMessage: { tone: 'info', message: 'Refreshing AI model library...' } }));
+      try {
+        const payload = await fetchJson('/api/admin/ingest/model-catalog', { method: 'POST', body: JSON.stringify({ regionPreset: filters.regionPreset === 'all' || filters.regionPreset === 'custom' ? undefined : filters.regionPreset }) });
+        setAdminState((current) => ({ ...current, busy: { ...current.busy, refreshModelCatalog: false }, statusMessage: { tone: 'success', message: `AI model library refreshed — ${payload.insertedAIModelRows || 0} model rows ingested.` } }));
+      } catch (error) {
+        setAdminState((current) => ({ ...current, busy: { ...current.busy, refreshModelCatalog: false }, statusMessage: { tone: 'error', message: error.message || 'Failed to refresh AI model library.' } }));
+      }
+    },
     refreshSchedule: async () => {
       if (!auth?.canAccessAdmin) return;
       setAdminState((current) => ({ ...current, busy: { ...current.busy, refreshSchedule: true } }));
@@ -2680,10 +2767,10 @@ function App() {
 
   const viewContent = (() => {
     if (activeView === 'capacity-grid') {
-      return <DataTable key="capacity-grid" title="Capacity Grid" subtitle="Server-paged capacity observations using the shared API contract." columns={[{ key: 'subscriptionName', label: 'Subscription', headerClassName: 'rx-capacity-grid__subscription', cellClassName: 'rx-capacity-grid__subscription' }, { key: 'region', label: 'Region' }, { key: 'sku', label: 'SKU', render: (row) => normalizeSkuName(row.sku) || 'n/a' }, { key: 'family', label: 'Family', render: (row) => formatFamilyLabel(row.family) || 'n/a' }, { key: 'availability', label: 'Availability', render: (row) => <StatusPill value={row.availability} /> }, { key: 'quotaCurrent', label: 'Current', render: (row) => formatNumber(row.quotaCurrent) }, { key: 'quotaLimit', label: 'Limit', render: (row) => formatNumber(row.quotaLimit) }, { key: 'available', label: 'Available', render: (row) => formatNumber(Number(row.quotaLimit || 0) - Number(row.quotaCurrent || 0)) }]} rows={capacityData.rows} emptyMessage="No capacity rows returned for the current filters." />;
+      return <DataTable key="capacity-grid" title="Capacity Grid" subtitle="Server-paged capacity observations using the shared API contract." columns={[{ key: 'subscriptionName', label: 'Subscription', headerClassName: 'rx-capacity-grid__subscription', cellClassName: 'rx-capacity-grid__subscription' }, { key: 'region', label: 'Region' }, { key: 'sku', label: 'SKU', render: (row) => normalizeSkuName(row.sku) || 'n/a' }, { key: 'family', label: 'Family', render: (row) => formatFamilyLabel(row.family) || 'n/a' }, ...(filters.resourceType === 'AI' ? [{ key: 'provider', label: 'AI Provider', render: (row) => getAIQuotaProviderDisplay(row), sortValue: (row) => getAIQuotaProviderLabel(row) }] : []), { key: 'availability', label: 'Availability', render: (row) => <StatusPill value={row.availability} /> }, { key: 'quotaCurrent', label: 'Current', render: (row) => formatNumber(row.quotaCurrent) }, { key: 'quotaLimit', label: 'Limit', render: (row) => formatNumber(row.quotaLimit) }, { key: 'available', label: 'Available', render: (row) => formatNumber(Number(row.quotaLimit || 0) - Number(row.quotaCurrent || 0)) }]} rows={capacityData.rows} emptyMessage="No capacity rows returned for the current filters." />;
     }
     if (activeView === 'region-health') {
-      return <DataTable key="region-health" title="Region Health" subtitle="Computed from the same capacity observations used by the classic dashboard." columns={[{ key: 'region', label: 'Region' }, { key: 'totalRows', label: 'Total Rows', render: (row) => formatNumber(row.totalRows) }, { key: 'deployableRows', label: 'Deployable', render: (row) => formatNumber(row.deployableRows) }, { key: 'constrainedRows', label: 'Constrained', render: (row) => formatNumber(row.constrainedRows) }, { key: 'totalQuotaHeadroom', label: 'Quota Headroom', render: (row) => formatNumber(Math.round(row.totalQuotaHeadroom)) }, { key: 'deployableFamilyCount', label: 'Deployable Families', render: (row) => formatNumber(row.deployableFamilyCount) }, { key: 'deployableSubscriptionCount', label: 'Subscriptions', render: (row) => formatNumber(row.deployableSubscriptionCount) }, { key: 'topConstrainedFamilies', label: 'Top Constrained Families', render: (row) => row.topConstrainedFamilies.join(', ') || 'n/a' }]} rows={regionHealth} emptyMessage="No region health data for this filter scope." />;
+      return <DataTable key="region-health" title="Region Health" subtitle="Computed from the same capacity observations used by the classic dashboard." columns={[{ key: 'region', label: 'Region' }, { key: 'totalRows', label: 'Total Rows', render: (row) => formatNumber(row.totalRows) }, { key: 'deployableRows', label: 'Deployable', render: (row) => formatNumber(row.deployableRows) }, { key: 'constrainedRows', label: 'Constrained', render: (row) => formatNumber(row.constrainedRows) }, { key: 'totalQuotaHeadroom', label: 'Quota Headroom', render: (row) => formatNumber(Math.round(row.totalQuotaHeadroom)) }, { key: 'deployableFamilyCount', label: 'Deployable Families', render: (row) => formatNumber(row.deployableFamilyCount) }, { key: 'deployableSubscriptionCount', label: 'Subscriptions', render: (row) => formatNumber(row.deployableSubscriptionCount) }, ...(filters.resourceType === 'AI' ? [{ key: 'providers', label: 'Providers', render: (row) => row.providers.join(', ') || 'n/a', sortValue: (row) => row.providers.join(',') }] : []), { key: 'topConstrainedFamilies', label: 'Top Constrained Families', render: (row) => row.topConstrainedFamilies.join(', ') || 'n/a' }]} rows={regionHealth} emptyMessage="No region health data for this filter scope." />;
     }
     if (activeView === 'recommender') {
       const recommendations = Array.isArray(recommendState.result && recommendState.result.recommendations) ? recommendState.result.recommendations : [];
@@ -2747,7 +2834,7 @@ function App() {
               <button className="rx-button rx-button--secondary" type="button" disabled={Boolean(exportBusyFormat)} onClick={() => downloadCapacityExport('csv')}>{exportBusyFormat === 'csv' ? 'Exporting CSV...' : 'Export CSV'}</button>
               <button className="rx-button rx-button--secondary" type="button" disabled={Boolean(exportBusyFormat)} onClick={() => downloadCapacityExport('xlsx')}>{exportBusyFormat === 'xlsx' ? 'Exporting Excel...' : 'Export Excel'}</button>
             </> : null}
-            {activeView === 'ai-model-availability' ? <button className="rx-button rx-button--secondary" type="button" disabled={aiModelState.loading} onClick={refreshAIModelAvailability}>{aiModelState.loading ? 'Refreshing...' : 'Refresh AI Models'}</button> : null}
+            {activeView === 'ai-model-availability' ? <button className="rx-button rx-button--secondary" type="button" disabled={aiModelState.loading} onClick={refreshAIModelAvailability}>{aiModelState.loading ? 'Refreshing...' : 'Refresh AI Catalog'}</button> : null}
             {isAdminView ? <label className="rx-check rx-check--sql-toggle"><input type="checkbox" checked={showSqlPreview} disabled={uiSettingsBusy} onChange={(event) => handleShowSqlPreviewChange(event.target.checked)} />Show SQL</label> : null}
             <div className="rx-user-chip">
               <strong>{auth?.name || 'Loading user...'}</strong>
@@ -2774,14 +2861,16 @@ function App() {
           <label className="rx-field"><span>Region preset</span><select value={filters.regionPreset} onChange={(event) => updateFilter('regionPreset', event.target.value)}>{REGION_PRESET_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
           <label className="rx-field"><span>Region</span><select value={filters.region} onChange={(event) => updateFilter('region', event.target.value)}><option value="all">All Regions</option>{scopedRegionOptions.map((region) => <option key={region} value={region}>{region}</option>)}</select></label>
         </DrawerFilterSection>
-        {activeView === 'ai-model-availability' ? <DrawerFilterSection title="AI model filters">
-          <label className="rx-field"><span>Model search</span><input className="rx-input" value={aiModelFilters.modelName} onChange={(event) => setAiModelFilters((current) => ({ ...current, modelName: event.target.value }))} placeholder="gpt-4o, text-embedding" /></label>
+        {activeView === 'ai-model-availability' ? <DrawerFilterSection title="AI catalog filters">
+          <label className="rx-field"><span>Model search</span><input className="rx-input" value={aiModelFilters.modelName} onChange={(event) => setAiModelFilters((current) => ({ ...current, modelName: event.target.value }))} placeholder="gpt-4o, llama, text-embedding" /></label>
+          <label className="rx-field"><span>Provider</span><select value={aiModelFilters.provider} onChange={(event) => setAiModelFilters((current) => ({ ...current, provider: event.target.value }))}><option value="all">All providers</option>{aiProviderOptions.map((provider) => <option key={provider} value={provider}>{provider}</option>)}</select></label>
           <label className="rx-field"><span>Deployment type</span><select value={aiModelFilters.deploymentType} onChange={(event) => setAiModelFilters((current) => ({ ...current, deploymentType: event.target.value }))}><option value="all">All deployment types</option>{aiDeploymentTypeOptions.map((type) => <option key={type} value={type}>{type}</option>)}</select></label>
           <label className="rx-field"><span>Fine-tuning</span><select value={aiModelFilters.fineTuning} onChange={(event) => setAiModelFilters((current) => ({ ...current, fineTuning: event.target.value }))}><option value="all">All models</option><option value="yes">Fine-tuning capable</option><option value="no">No fine-tuning</option></select></label>
           <label className="rx-check"><input type="checkbox" checked={aiModelFilters.defaultOnly} onChange={(event) => setAiModelFilters((current) => ({ ...current, defaultOnly: event.target.checked }))} />Only default models</label>
         </DrawerFilterSection> : <>
           <DrawerFilterSection title="Capacity filters">
             <label className="rx-field"><span>Resource type</span><select value={filters.resourceType} onChange={(event) => updateFilter('resourceType', event.target.value)}>{RESOURCE_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+            {filters.resourceType === 'AI' && aiQuotaProviderOptions.length > 0 ? <label className="rx-field"><span>AI provider</span><select value={filters.provider} onChange={(event) => updateFilter('provider', event.target.value)}><option value="all">All verified providers</option>{aiQuotaProviderOptions.map((provider) => <option key={provider} value={provider}>{provider}</option>)}</select></label> : null}
             <label className="rx-field"><span>Family</span><select value={filters.family} onChange={(event) => updateFilter('family', event.target.value)}><option value="all">All Families</option>{capacityData.facets.families.map((family) => <option key={family} value={family}>{formatFamilyLabel(family) || family}</option>)}</select></label>
             <label className="rx-field"><span>Availability</span><select value={filters.availability} onChange={(event) => updateFilter('availability', event.target.value)}><option value="all">All states</option><option value="OK">OK</option><option value="LIMITED">LIMITED</option><option value="CONSTRAINED">CONSTRAINED</option></select></label>
           </DrawerFilterSection>

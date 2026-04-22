@@ -50,6 +50,7 @@ const { buildQuotaMovePlan, getQuotaCandidateRunHistory, simulateQuotaMovePlan }
 const { applyQuotaMovePlan } = require('./services/quotaApplyService');
 const {
   runCapacityIngestion,
+  refreshModelCatalog,
   getIngestionStatus,
   startIngestionScheduler,
   updateIngestionScheduler,
@@ -72,6 +73,7 @@ const {
   upsertDashboardSettings
 } = require('./store/sql');
 const { applyIndexes } = require('./maintenance/applyPerformanceIndexes');
+const { getAIQuotaProviderFromSnapshot, isAIQuotaSourceType } = require('./services/aiIngestionService');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -123,6 +125,14 @@ async function sqlObjectExists(pool, objectName, objectTypes = ['U']) {
     `);
 
   return Boolean(result.recordset?.[0]?.existsFlag);
+}
+
+function mapAIQuotaResponseRow(row) {
+  return {
+    ...row,
+    provider: getAIQuotaProviderFromSnapshot(row),
+    quotaAvailable: Number(row?.quotaLimit || 0) - Number(row?.quotaCurrent || 0)
+  };
 }
 
 function cleanupQuotaApplyJobs() {
@@ -384,7 +394,8 @@ function getCapacityFiltersFromQuery(query = {}) {
     region: query.region,
     family: query.family,
     availability: query.availability,
-    resourceType: query.resourceType
+    resourceType: query.resourceType,
+    provider: query.provider
   };
 }
 
@@ -405,6 +416,7 @@ function buildCapacityExportRows(rows = []) {
       region: row.region || '',
       sku: row.sku || '',
       family: row.family || '',
+      provider: row.provider || '',
       availability: row.availability || '',
       quotaCurrent,
       quotaLimit,
@@ -436,6 +448,7 @@ function buildCapacityExportSummary(rows = [], filters = {}) {
     { metric: 'Region Preset', value: filters.regionPreset || 'all' },
     { metric: 'Region Filter', value: filters.region || 'all' },
     { metric: 'Family Filter', value: filters.family || 'all' },
+    { metric: 'Provider Filter', value: filters.provider || 'all' },
     { metric: 'Availability Filter', value: filters.availability || 'all' },
     { metric: 'Resource Type Filter', value: filters.resourceType || 'all' },
     { metric: 'Selected Subscription Count', value: selectedSubscriptions.length }
@@ -459,6 +472,7 @@ function buildCapacityCsv(exportRows = []) {
     'region',
     'sku',
     'family',
+    'provider',
     'availability',
     'quotaCurrent',
     'quotaLimit',
@@ -533,6 +547,7 @@ async function buildCapacityWorkbook({ exportRows, filters }) {
     { header: 'Region', key: 'region', width: 18 },
     { header: 'SKU', key: 'sku', width: 24 },
     { header: 'Family', key: 'family', width: 18 },
+    { header: 'Provider', key: 'provider', width: 18 },
     { header: 'Availability', key: 'availability', width: 16 },
     { header: 'Quota Current', key: 'quotaCurrent', width: 14 },
     { header: 'Quota Limit', key: 'quotaLimit', width: 14 },
@@ -544,7 +559,7 @@ async function buildCapacityWorkbook({ exportRows, filters }) {
   ];
   exportRows.forEach((row) => detailSheet.addRow(row));
   styleWorksheetHeader(detailSheet, detailSheet.columns.length);
-  detailSheet.autoFilter = 'A1:O1';
+  detailSheet.autoFilter = 'A1:P1';
 
   ['quotaCurrent', 'quotaLimit', 'quotaAvailable', 'vCpu', 'memoryGB'].forEach((key) => {
     detailSheet.getColumn(key).numFmt = '#,##0';
@@ -616,7 +631,10 @@ function getDefaultSchedulerSettings() {
       runOnStartup: normalizeBoolean(process.env.LIVE_PLACEMENT_REFRESH_ON_STARTUP, false)
     },
     aiModelCatalog: {
-      intervalMinutes: normalizeIntervalMinutes(process.env.INGEST_OPENAI_MODEL_CATALOG_INTERVAL_MINUTES, 1440)
+      intervalMinutes: normalizeIntervalMinutes(
+        process.env.INGEST_AI_MODEL_CATALOG_INTERVAL_MINUTES || process.env.INGEST_OPENAI_MODEL_CATALOG_INTERVAL_MINUTES,
+        1440
+      )
     }
   };
 }
@@ -1484,6 +1502,7 @@ app.get('/api/ai/models', async (req, res) => {
     }
     
     const region = req.query.region;
+    const provider = req.query.provider;
     const modelName = req.query.modelName;
     const deploymentType = req.query.deploymentType;
     
@@ -1493,6 +1512,11 @@ app.get('/api/ai/models', async (req, res) => {
     if (region) {
       query += ' AND region = @region';
       request.input('region', sql.NVarChar, region);
+    }
+
+    if (provider) {
+      query += ' AND provider = @provider';
+      request.input('provider', sql.NVarChar, provider);
     }
     
     if (modelName) {
@@ -1505,12 +1529,47 @@ app.get('/api/ai/models', async (req, res) => {
       request.input('deploymentType', sql.NVarChar, `%${deploymentType}%`);
     }
     
-    query += ' ORDER BY region, modelName, modelVersion';
+    query += ' ORDER BY provider, region, modelName, modelVersion';
     
     const result = await request.query(query);
     res.json({ rows: result.recordset });
   } catch (err) {
     res.status(500).json({ error: 'Failed to retrieve AI model availability', detail: err.message });
+  }
+});
+
+app.get('/api/ai/models/providers', async (req, res) => {
+  try {
+    const pool = await getSqlPool();
+    if (!pool) {
+      res.status(503).json({ error: 'Database not configured' });
+      return;
+    }
+
+    if (!(await sqlObjectExists(pool, 'dbo.AIModelAvailabilityLatest', ['V']))) {
+      res.json({ providers: [] });
+      return;
+    }
+
+    const region = req.query.region;
+    const request = pool.request();
+    let query = `
+      SELECT DISTINCT provider
+      FROM dbo.AIModelAvailabilityLatest
+      WHERE provider IS NOT NULL AND LTRIM(RTRIM(provider)) <> ''
+    `;
+
+    if (region) {
+      query += ' AND region = @region';
+      request.input('region', sql.NVarChar, region);
+    }
+
+    query += ' ORDER BY provider';
+
+    const result = await request.query(query);
+    res.json({ providers: result.recordset.map((row) => row.provider) });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve AI providers', detail: err.message });
   }
 });
 
@@ -1526,16 +1585,64 @@ app.get('/api/ai/models/regions', async (req, res) => {
       res.json({ regions: [] });
       return;
     }
-    
-    const result = await pool.request().query(`
+
+    const provider = req.query.provider;
+    const request = pool.request();
+    let query = `
       SELECT DISTINCT region 
-      FROM dbo.AIModelAvailabilityLatest 
-      ORDER BY region
-    `);
-    
+      FROM dbo.AIModelAvailabilityLatest
+      WHERE 1 = 1
+    `;
+
+    if (provider) {
+      query += ' AND provider = @provider';
+      request.input('provider', sql.NVarChar, provider);
+    }
+
+    query += ' ORDER BY region';
+
+    const result = await request.query(query);
+
     res.json({ regions: result.recordset.map(r => r.region) });
   } catch (err) {
     res.status(500).json({ error: 'Failed to retrieve AI regions', detail: err.message });
+  }
+});
+
+app.get('/api/ai/quota/providers', async (req, res) => {
+  try {
+    const pool = await getSqlPool();
+    if (!pool) {
+      res.status(503).json({ error: 'Database not configured' });
+      return;
+    }
+
+    const request = pool.request();
+    const result = await request.query(`
+      WITH LatestAICapture AS (
+        SELECT MAX(capturedAtUtc) AS capturedAtUtc
+        FROM dbo.CapacitySnapshot
+        WHERE sourceType = 'live-azure-openai-ingest'
+           OR sourceType LIKE 'live-azure-ai-%-ingest'
+      )
+      SELECT snapshot.sourceType, snapshot.skuFamily, snapshot.skuName
+      FROM dbo.CapacitySnapshot AS snapshot
+      INNER JOIN LatestAICapture
+        ON snapshot.capturedAtUtc = LatestAICapture.capturedAtUtc
+      WHERE snapshot.sourceType = 'live-azure-openai-ingest'
+         OR snapshot.sourceType LIKE 'live-azure-ai-%-ingest'
+    `);
+
+    const providers = [...new Set(
+      (result.recordset || [])
+        .filter((row) => isAIQuotaSourceType(row?.sourceType))
+        .map((row) => getAIQuotaProviderFromSnapshot(row))
+        .filter((provider) => provider && provider !== 'Unknown')
+    )].sort((left, right) => left.localeCompare(right));
+
+    res.json({ providers });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve AI quota providers', detail: err.message });
   }
 });
 
@@ -1548,6 +1655,7 @@ app.get('/api/ai/quota', async (req, res) => {
     }
     
     const region = req.query.region;
+    const provider = req.query.provider;
     const modelName = req.query.modelName;
     
     let query = `
@@ -1555,9 +1663,11 @@ app.get('/api/ai/quota', async (req, res) => {
         SELECT MAX(capturedAtUtc) AS capturedAtUtc
         FROM dbo.CapacitySnapshot
         WHERE sourceType = 'live-azure-openai-ingest'
+           OR sourceType LIKE 'live-azure-ai-%-ingest'
       )
       SELECT 
         snapshot.region,
+        snapshot.sourceType,
         snapshot.skuFamily,
         snapshot.skuName,
         snapshot.quotaCurrent,
@@ -1569,6 +1679,7 @@ app.get('/api/ai/quota', async (req, res) => {
       INNER JOIN LatestAICapture
         ON snapshot.capturedAtUtc = LatestAICapture.capturedAtUtc
       WHERE snapshot.sourceType = 'live-azure-openai-ingest'
+         OR snapshot.sourceType LIKE 'live-azure-ai-%-ingest'
     `;
     
     const request = pool.request();
@@ -1583,10 +1694,27 @@ app.get('/api/ai/quota', async (req, res) => {
       request.input('modelName', sql.NVarChar, `%${modelName}%`);
     }
     
-    query += ' ORDER BY snapshot.region, snapshot.skuFamily';
+    query += ' ORDER BY snapshot.region, snapshot.skuFamily, snapshot.skuName';
     
     const result = await request.query(query);
-    res.json({ rows: result.recordset });
+    const rows = (result.recordset || [])
+      .filter((row) => isAIQuotaSourceType(row?.sourceType))
+      .map((row) => mapAIQuotaResponseRow(row))
+      .filter((row) => !provider || row.provider === provider)
+      .sort((left, right) => {
+        if (left.provider !== right.provider) {
+          return left.provider.localeCompare(right.provider);
+        }
+        if (left.region !== right.region) {
+          return left.region.localeCompare(right.region);
+        }
+        if (left.skuFamily !== right.skuFamily) {
+          return left.skuFamily.localeCompare(right.skuFamily);
+        }
+        return left.skuName.localeCompare(right.skuName);
+      });
+
+    res.json({ rows });
   } catch (err) {
     res.status(500).json({ error: 'Failed to retrieve AI quota', detail: err.message });
   }
@@ -1611,6 +1739,15 @@ app.post('/api/admin/ingest/capacity', requireAdmin, async (req, res) => {
 app.get('/api/admin/ingest/status', requireAdmin, (_, res) => {
   const activeJob = getActiveIngestionJob();
   res.json({ ok: true, status: getIngestionStatus(), activeJob: activeJob ? serializeIngestionJob(activeJob) : null });
+});
+
+app.post('/api/admin/ingest/model-catalog', requireAdmin, async (req, res) => {
+  try {
+    const result = await refreshModelCatalog(buildCapacityIngestionOptions(req.body));
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 app.get('/api/admin/ingest/jobs/:jobId', requireAdmin, (req, res) => {
@@ -1675,7 +1812,7 @@ app.put('/api/admin/ingest/schedule', requireAdmin, async (req, res) => {
           aiModelCatalog: {
             intervalMinutes: normalizeIntervalMinutes(
               req.body?.aiModelCatalog?.intervalMinutes,
-              process.env.INGEST_OPENAI_MODEL_CATALOG_INTERVAL_MINUTES || 1440
+              process.env.INGEST_AI_MODEL_CATALOG_INTERVAL_MINUTES || process.env.INGEST_OPENAI_MODEL_CATALOG_INTERVAL_MINUTES || 1440
             )
           }
         },

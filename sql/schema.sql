@@ -81,6 +81,7 @@ CREATE TABLE dbo.AIModelAvailability (
     capturedAtUtc DATETIME2 NOT NULL,
     subscriptionId NVARCHAR(64) NOT NULL,
     region NVARCHAR(64) NOT NULL,
+    provider NVARCHAR(128) NOT NULL DEFAULT 'Unknown',
     modelName NVARCHAR(128) NOT NULL,
     modelVersion NVARCHAR(64) NULL,
     deploymentTypes NVARCHAR(512) NULL,
@@ -95,6 +96,10 @@ GO
 
 CREATE NONCLUSTERED INDEX IX_AIModelAvailability_Region_Model
     ON dbo.AIModelAvailability(region, modelName, capturedAtUtc DESC);
+GO
+
+CREATE NONCLUSTERED INDEX IX_AIModelAvailability_Provider_Region_Model
+    ON dbo.AIModelAvailability(provider, region, modelName, modelVersion, capturedAtUtc DESC);
 GO
 
 CREATE NONCLUSTERED INDEX IX_AIModelAvailability_CapturedAt
@@ -151,6 +156,7 @@ WITH Ranked AS (
         capturedAtUtc,
         subscriptionId,
         region,
+        provider,
         modelName,
         modelVersion,
         deploymentTypes,
@@ -161,7 +167,7 @@ WITH Ranked AS (
         isDefault,
         capabilities,
         ROW_NUMBER() OVER (
-            PARTITION BY region, modelName, modelVersion
+            PARTITION BY region, provider, modelName, modelVersion
             ORDER BY capturedAtUtc DESC
         ) AS rn
     FROM dbo.AIModelAvailability
@@ -170,6 +176,7 @@ SELECT
     capturedAtUtc,
     subscriptionId,
     region,
+    provider,
     modelName,
     modelVersion,
     deploymentTypes,

@@ -2,6 +2,7 @@ const { getSqlPool, getSubscriptionsFromTable, getLatestLivePlacementSnapshots }
 const { mockRows } = require('../store/mockCapacity');
 const { getRegionsForPreset } = require('../config/regionPresets');
 const { CapacityDetailDTO, SubscriptionSummaryDTO, FamilySummaryDTO, TrendDTO, PaginationDTO } = require('../models/dtos');
+const { getAIQuotaProviderFromSnapshot } = require('./aiIngestionService');
 
 const CANONICAL_COMPUTE_FAMILY_PATTERNS = [
   ['NCC', /^(NCC)/],
@@ -64,10 +65,33 @@ function normalizeSkuName(value) {
 }
 
 function normalizeCapacityRow(row) {
-  return {
+  const normalized = {
     ...row,
     sku: normalizeSkuName(row?.sku)
   };
+  const provider = resolveAIQuotaProvider(normalized);
+  return {
+    ...normalized,
+    provider: provider || null
+  };
+}
+
+function resolveAIQuotaProvider(row) {
+  const explicitProvider = String(row?.provider || '').trim();
+  if (explicitProvider) {
+    return explicitProvider;
+  }
+
+  if (getRowResourceType(row) !== 'AI') {
+    return null;
+  }
+
+  const provider = getAIQuotaProviderFromSnapshot({
+    sourceType: row?.sourceType,
+    skuFamily: row?.family,
+    skuName: row?.sku
+  });
+  return provider && provider !== 'Unknown' ? provider : null;
 }
 
 function applyRegionPreset(rows, regionPreset) {
@@ -87,7 +111,7 @@ function getRowResourceType(row) {
   const sourceType = String(row?.sourceType || '').toLowerCase();
   const family = String(row?.family || '').toLowerCase();
   const sku = String(row?.sku || '').toLowerCase();
-  if (sourceType.includes('openai') || family.startsWith('openai')) {
+  if (sourceType.includes('azure-ai') || sourceType.includes('openai') || family.startsWith('openai') || family.startsWith('aiservices') || sku.startsWith('aiservices')) {
     return 'AI';
   }
   if (family.includes('disk') || sku.includes('disk') || sku.includes('snapshot')) {
@@ -132,13 +156,16 @@ function canonicalComputeFamilyLabel(rawFamily, skuName) {
   return '';
 }
 
-function applyFilters(rows, { region, family, availability, resourceType }) {
+function applyFilters(rows, { region, family, availability, resourceType, provider }) {
+  const providerFilter = String(provider || '').trim();
   return rows.filter((r) => {
     const byRegion = !region || region === 'all' || r.region === region;
     const byFamily = !family || family === 'all' || r.family === family;
     const byAvailability = !availability || availability === 'all' || r.availability === availability;
     const byType = !resourceType || resourceType === 'all' || getRowResourceType(r) === resourceType;
-    return byRegion && byFamily && byAvailability && byType;
+    const byProvider = !providerFilter || providerFilter === 'all'
+      || (getRowResourceType(r) === 'AI' && String(resolveAIQuotaProvider(r) || '').trim() === providerFilter);
+    return byRegion && byFamily && byAvailability && byType && byProvider;
   });
 }
 
@@ -496,11 +523,12 @@ async function getCapacityTrends(filters) {
     request.input('daysBack', days);
 
     let query = `
-      SELECT
-        CONVERT(varchar(10), CAST(capturedAtUtc AS date), 23) AS [day],
-        skuFamily,
-        skuName,
-        availabilityState,
+        SELECT
+          CONVERT(varchar(10), CAST(capturedAtUtc AS date), 23) AS [day],
+          sourceType,
+          skuFamily,
+          skuName,
+          availabilityState,
         quotaLimit,
         quotaCurrent,
         region,
@@ -518,11 +546,12 @@ async function getCapacityTrends(filters) {
     const grouped = new Map();
 
     result.recordset.forEach((record) => {
-      const normalizedRow = normalizeCapacityRow({
-        day: record.day,
-        family: record.skuFamily,
-        sku: record.skuName,
-        availability: record.availabilityState,
+        const normalizedRow = normalizeCapacityRow({
+          day: record.day,
+          sourceType: record.sourceType,
+          family: record.skuFamily,
+          sku: record.skuName,
+          availability: record.availabilityState,
         quotaLimit: Number(record.quotaLimit || 0),
         quotaCurrent: Number(record.quotaCurrent || 0),
         region: record.region,

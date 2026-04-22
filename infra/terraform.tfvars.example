@@ -1,7 +1,0 @@
-prefix                 = "l5"
-primary_location       = "centralus"
-secondary_location     = "westus2"
-sql_database_name      = "appdb"
-sql_sku_name           = "S0"
-aad_admin_object_id    = "00000000-0000-0000-0000-000000000000"
-aad_admin_display_name = "Your Display Name"

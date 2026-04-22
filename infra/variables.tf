@@ -27,13 +27,11 @@ variable "workload_suffix" {
 variable "sql_entra_admin_login" {
   type        = string
   description = "Microsoft Entra administrator UPN for Azure SQL"
-  default     = "yserinov@gmail.com"
 }
 
 variable "sql_entra_admin_object_id" {
   type        = string
   description = "Microsoft Entra administrator object ID for Azure SQL"
-  default     = "1c50c6be-314f-46cb-a4b2-bbbcb3655f05"
 }
 
 variable "vnet_address_prefix" {

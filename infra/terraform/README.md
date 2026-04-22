@@ -25,14 +25,14 @@ Terraform equivalent of the Bicep templates in this folder. Provisions the full 
 ## File layout
 
 ```
-infra/
+infra/terraform/
 ├── backend.tf                  # Local backend configuration
 ├── providers.tf                # azurerm (~> 3.0) + random (~> 3.0) provider config
 ├── variables.tf                # All input variables (all have defaults)
 ├── main.tf                     # All resources and module calls
 ├── outputs.tf                  # 13 output values (all with descriptions)
 ├── terraform.tfvars.example    # Example variable overrides
-├── README-TF.md                # This file
+├── README.md                   # This file
 └── modules/
     ├── worker-subscription-rbac/       # Compute Recommendations, Cost Mgmt Reader, Billing Reader
     ├── web-subscription-reader/        # Subscription-level Reader for web app
@@ -50,7 +50,7 @@ infra/
 All variables have sensible defaults, so a minimal deploy requires no tfvars file:
 
 ```powershell
-cd infra
+cd infra/terraform
 terraform init
 terraform apply
 ```

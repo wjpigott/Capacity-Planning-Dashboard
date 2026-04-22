@@ -358,7 +358,7 @@ Use script-based deployment with Central US default:
 
 By default, `./scripts/deploy-infra.ps1` now does both steps:
 
-- provisions the Azure resources from `infra/main.bicep`
+- provisions the Azure resources from `infra/bicep/main.bicep`
 - publishes the dashboard web package, including `react/`, to the target App Service
 
 Use `-DeployWebApp $false` only when you explicitly want an infra-only run.
@@ -367,7 +367,7 @@ Stable demo environment:
 
 - Treat `dev` as change-heavy and `test` as the stable demo environment.
 - Use the same naming pattern with the environment token changed to `test`, for example `<web-app-name-with-test-token>` and `<function-app-name-with-test-token>`.
-- Use `./infra/test.bicepparam` plus a dedicated resource group such as `<test-resource-group-name>` when deploying the demo environment.
+- Use `./infra/bicep/test.bicepparam` plus a dedicated resource group such as `<test-resource-group-name>` when deploying the demo environment.
 
 Example:
 
@@ -376,7 +376,7 @@ Example:
 	-ResourceGroupName "<test-resource-group-name>" \
 	-Environment test \
 	-WorkloadSuffix "cap001" \
-	-ParameterFile "./infra/test.bicepparam" \
+	-ParameterFile "./infra/bicep/test.bicepparam" \
 	-QuotaManagementGroupId "Demo-MG" \
 	-WebReaderSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
 	-WorkerRbacSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
@@ -409,7 +409,7 @@ Example with Entra sign-in enabled:
 	-ResourceGroupName "<test-resource-group-name>" \
 	-Environment test \
 	-WorkloadSuffix "cap001" \
-	-ParameterFile "./infra/test.bicepparam" \
+	-ParameterFile "./infra/bicep/test.bicepparam" \
 	-WebReaderSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
 	-WorkerRbacSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
 	-AuthEnabled $true \

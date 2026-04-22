@@ -1,0 +1,44 @@
+# ── Cross-subscription RBAC – Web App ────────
+# web_reader_subscription_ids       = ["00000000-0000-0000-0000-000000000000"]
+# web_quota_writer_subscription_ids = ["00000000-0000-0000-0000-000000000000"]
+
+# ── Cross-subscription RBAC – Worker ─────────
+# worker_subscription_rbac_subscription_ids  = ["00000000-0000-0000-0000-000000000000"]
+# assign_worker_compute_recommendations_role = true
+# assign_worker_cost_management_reader_role  = true
+# assign_worker_billing_reader_role          = true
+
+# ── General / Resource Group ──────────────────
+resource_group_name       = "CapacityDashboard-Dev"
+location                  = "centralus"
+environment               = "dev"
+workload_suffix           = "cap002"
+
+# ── Networking ────────────────────────────────
+vnet_address_prefix                   = "10.90.0.0/16"
+app_service_integration_subnet_prefix = "10.90.1.0/24"
+private_endpoint_subnet_prefix        = "10.90.2.0/24"
+
+# ── SQL Server & Database ─────────────────────
+sql_entra_admin_login     = "user@contoso.com"
+sql_entra_admin_object_id = "00000000-0000-0000-0000-000000000000"
+sql_public_network_access = "Disabled"
+
+# ── Key Vault ─────────────────────────────────
+key_vault_public_network_access = "Disabled"
+
+# ── Web App (Dashboard) ──────────────────────
+ingest_api_key            = "change-me-ingest-key"
+session_secret            = "change-me-session-secret"
+# quota_management_group_id = "Demo-MG"
+
+# ── Web App – Entra Auth ─────────────────────
+# auth_enabled        = true
+# entra_tenant_id     = "00000000-0000-0000-0000-000000000000"
+# entra_client_id     = "00000000-0000-0000-0000-000000000000"
+# entra_client_secret = "replace-with-secret"
+# auth_redirect_uri   = "https://app-capdash-dev-cap002.azurewebsites.net/auth/callback"
+# admin_group_id      = "00000000-0000-0000-0000-000000000000"
+
+# ── Function App (Worker) ────────────────────
+# worker_shared_secret = "replace-with-shared-secret"

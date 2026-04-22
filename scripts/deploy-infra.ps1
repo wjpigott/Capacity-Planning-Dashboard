@@ -1,4 +1,5 @@
 param(
+    [Parameter(Mandatory = $false)][ValidateSet('Bicep','Terraform')][string]$Provider = 'Bicep',
     [Parameter(Mandatory = $true)][string]$ResourceGroupName,
     [Parameter(Mandatory = $false)][string]$Location = 'centralus',
     [Parameter(Mandatory = $false)][ValidateSet('dev','test','prod')][string]$Environment = 'dev',
@@ -61,12 +62,68 @@ if ([string]::IsNullOrWhiteSpace($SessionSecret)) {
     $SessionSecret = New-GeneratedSecret
 }
 
-az group create --name $ResourceGroupName --location $Location | Out-Null
+if ($Provider -ne 'Terraform') {
+    az group create --name $ResourceGroupName --location $Location | Out-Null
+}
 
+# ── Terraform deployment path ────────────────────────────────────────────────
+function Deploy-Terraform {
+    $tfDir = Join-Path $repoRoot 'infra' 'terraform'
+    if (-not (Test-Path (Join-Path $tfDir 'main.tf'))) {
+        throw "Terraform files not found at $tfDir"
+    }
+
+    $terraform = Get-Command terraform -ErrorAction SilentlyContinue
+    if (-not $terraform) {
+        throw 'Terraform CLI is required for -Provider Terraform. Install from https://developer.hashicorp.com/terraform/downloads'
+    }
+
+    Push-Location $tfDir
+    try {
+        Write-Host "Running Terraform init..."
+        terraform init -input=false
+        if ($LASTEXITCODE -ne 0) { throw 'terraform init failed' }
+
+        $tfVars = @(
+            "-var=location=$Location",
+            "-var=environment=$Environment",
+            "-var=workload_suffix=$WorkloadSuffix",
+            "-var=resource_group_name=$ResourceGroupName",
+            "-var=sql_entra_admin_login=$SqlEntraAdminLogin",
+            "-var=sql_entra_admin_object_id=$SqlEntraAdminObjectId",
+            "-var=ingest_api_key=$IngestApiKey",
+            "-var=session_secret=$SessionSecret",
+            "-var=auth_enabled=$($AuthEnabled.ToString().ToLowerInvariant())"
+        )
+
+        if (-not [string]::IsNullOrWhiteSpace($WorkerSharedSecret))    { $tfVars += "-var=worker_shared_secret=$WorkerSharedSecret" }
+        if (-not [string]::IsNullOrWhiteSpace($QuotaManagementGroupId)){ $tfVars += "-var=quota_management_group_id=$QuotaManagementGroupId" }
+        if (-not [string]::IsNullOrWhiteSpace($EntraTenantId))         { $tfVars += "-var=entra_tenant_id=$EntraTenantId" }
+        if (-not [string]::IsNullOrWhiteSpace($EntraClientId))         { $tfVars += "-var=entra_client_id=$EntraClientId" }
+        if (-not [string]::IsNullOrWhiteSpace($EntraClientSecret))     { $tfVars += "-var=entra_client_secret=$EntraClientSecret" }
+        if (-not [string]::IsNullOrWhiteSpace($AuthRedirectUri))       { $tfVars += "-var=auth_redirect_uri=$AuthRedirectUri" }
+        if (-not [string]::IsNullOrWhiteSpace($AdminGroupId))          { $tfVars += "-var=admin_group_id=$AdminGroupId" }
+
+        if ($ParameterFile -and (Test-Path $ParameterFile)) {
+            $tfVars += "-var-file=$((Resolve-Path $ParameterFile).Path)"
+        }
+
+        Write-Host "Running Terraform apply..."
+        terraform apply -auto-approve -input=false @tfVars
+        if ($LASTEXITCODE -ne 0) { throw 'terraform apply failed' }
+
+        Write-Host "Terraform deployment succeeded." -ForegroundColor Green
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+# ── Bicep deployment path ────────────────────────────────────────────────────
 $deploymentArgs = @(
     'deployment', 'group', 'create',
     '--resource-group', $ResourceGroupName,
-    '--template-file', './infra/main.bicep'
+    '--template-file', './infra/bicep/main.bicep'
 )
 
 $temporaryParameterFile = $null
@@ -190,7 +247,12 @@ if (($WorkerRbacSubscriptionIds.Count -gt 0 -or $WebReaderSubscriptionIds.Count 
 }
 
 try {
-    az @deploymentArgs
+    if ($Provider -eq 'Terraform') {
+        Deploy-Terraform
+    }
+    else {
+        az @deploymentArgs
+    }
 
     if ($DeployWebApp) {
         if (-not (Test-Path $deployWebAppScript)) {

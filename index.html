@@ -77,6 +77,10 @@
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><polyline points="1,12 5,7 9,9 15,3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span class="nav-label">Trend History</span>
       </button>
+      <button class="nav-sub-item" data-report-view="ai-model-availability">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3 3h10v3H3z"/><path d="M2 8h12v5H2z" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="5" cy="10.5" r="0.8"/><circle cx="8" cy="10.5" r="0.8"/><circle cx="11" cy="10.5" r="0.8"/></svg>
+        <span class="nav-label">AI Model Availability</span>
+      </button>
 
       <div class="nav-group-label" style="margin-top: 16px;" data-admin-only="true">Admin</div>
       <button class="nav-item" data-nav="admin" data-admin-only="true">
@@ -129,8 +133,14 @@
               <select id="resourceTypeFilter">
                 <option value="all" selected>All</option>
                 <option value="Compute">Compute</option>
+                <option value="AI">AI Models</option>
                 <option value="Disk">Disk</option>
                 <option value="Other">Other</option>
+              </select>
+            </label>
+            <label id="aiQuotaProviderFilterLabel" style="display: none;">AI Provider
+              <select id="aiQuotaProviderFilter">
+                <option value="all">All verified providers</option>
               </select>
             </label>
             <label>SKU Family
@@ -179,6 +189,7 @@
                   <th>Region</th>
                   <th>SKU</th>
                   <th>Family</th>
+                  <th>AI Provider</th>
                   <th>Availability</th>
                   <th>Zones</th>
                   <th>Quota Current</th>
@@ -229,6 +240,7 @@
                   <th>Total Quota Headroom</th>
                   <th>Deployable Families</th>
                   <th>Subscriptions with Deployable</th>
+                  <th>Providers (AI)</th>
                   <th>Top Constrained Families</th>
                 </tr>
               </thead>
@@ -481,6 +493,63 @@
             </table>
           </div>
         </div>
+
+        <div class="view-panel" id="view-ai-model-availability">
+          <div class="surface overflow-auto">
+            <h3>AI Model Availability</h3>
+            <div class="report-explainer">
+              <strong>Report Key</strong>
+              <span>This catalog tracks provider-aware Azure AI model availability by region using the latest <strong>dbo.AIModelAvailabilityLatest</strong> snapshot.</span>
+              <span>Use the shared region preset and region filters above, then refine by provider, model name, deployment type, and default-version status inside this report.</span>
+            </div>
+            <div class="filters" style="margin-bottom: 10px; align-items: end;">
+              <label>Model Search
+                <input id="aiModelNameFilter" type="search" placeholder="gpt-4o, llama, text-embedding" />
+              </label>
+              <label>Provider
+                <select id="aiProviderFilter">
+                  <option value="all">All providers</option>
+                </select>
+              </label>
+              <label>Deployment Type
+                <select id="aiDeploymentTypeFilter">
+                  <option value="all">All deployment types</option>
+                </select>
+              </label>
+              <label class="checkbox-inline">
+                <input id="aiDefaultOnlyInput" type="checkbox" />
+                <span>Default versions only</span>
+              </label>
+              <label>Fine-tuning
+                <select id="aiFineTuneFilter">
+                  <option value="all">All models</option>
+                  <option value="yes">Fine-tuning capable</option>
+                  <option value="no">Inference only</option>
+                </select>
+              </label>
+              <button id="refreshAiModelsBtn" type="button">Refresh AI Catalog</button>
+            </div>
+            <p id="aiModelsStatus" class="inline-note" style="margin: 0 0 8px;">Load the AI catalog report to see current Azure AI provider coverage.</p>
+            <table id="aiModelsGrid">
+              <thead>
+                <tr>
+                  <th>Provider</th>
+                  <th>Model</th>
+                  <th>Version</th>
+                  <th>Region</th>
+                  <th>Deployment Types</th>
+                  <th>Fine-Tuning</th>
+                  <th>Default</th>
+                  <th>Format</th>
+                  <th>SKU</th>
+                  <th>Deprecation</th>
+                  <th>Updated</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
       </section>
 
       <section class="page" id="admin-page">
@@ -488,9 +557,9 @@
         <p class="page-description">Trigger live ingestion from Azure ARM APIs and manage the subscription catalog stored in SQL. These operations write to the database.</p>
         <div class="report-explainer" style="margin-bottom: 12px;">
           <strong>Refresh schedule</strong>
-          <span id="scheduleExplainerPrimary"><strong>Capacity ingest</strong> and <strong>Live placement refresh</strong> schedules are stored in SQL and can be updated here without an app restart.</span>
+          <span id="scheduleExplainerPrimary"><strong>Capacity ingest</strong>, <strong>Live placement refresh</strong>, and the <strong>AI model catalog cadence</strong> are stored in SQL and can be updated here without an app restart.</span>
           <span><strong>Interval (minutes)</strong> examples: <strong>30</strong> = every 30 minutes, <strong>60</strong> = hourly, <strong>1440</strong> = daily, and <strong>0</strong> = disabled.</span>
-          <span id="scheduleExplainerSecondary">Use startup toggles when you want a job to run one time after service start, in addition to its repeating interval.</span>
+          <span id="scheduleExplainerSecondary">Use startup toggles when you want a job to run one time after service start, in addition to its repeating interval. The AI model catalog interval is shown in hours because it refreshes more slowly than quota snapshots.</span>
         </div>
         <div id="adminStatus" class="admin-status info">No admin action submitted yet.</div>
 
@@ -510,6 +579,9 @@
             <label style="min-width: 180px;">
               <span style="display:block; margin-bottom: 6px;">Live Placement Startup Run</span>
               <input id="livePlacementRunOnStartupInput" type="checkbox" /> Run once on startup
+            </label>
+            <label>AI Model Catalog Interval (hours)
+              <input id="aiModelCatalogIntervalHoursInput" type="number" min="0" max="168" step="1" value="24" />
             </label>
           </div>
           <div class="actions" style="margin-top: 10px;">

@@ -4,6 +4,15 @@ const https = require('https');
 const { getRegionsForPreset } = require('../config/regionPresets');
 const { deriveCapacityScoreRows } = require('./capacityService');
 const { insertCapacitySnapshots, insertCapacityScoreSnapshots } = require('../store/sql');
+const {
+  fetchAIUsages,
+  fetchAIModelAvailability,
+  mapAIUsageToSnapshot,
+  mapAIModelToAvailability,
+  insertAIModelAvailability,
+  getAISettings,
+  shouldRefreshModelCatalog
+} = require('./aiIngestionService');
 
 const ARM_SCOPE = 'https://management.azure.com/.default';
 const ARM_BASE = 'https://management.azure.com';
@@ -453,6 +462,11 @@ async function runCapacityIngestion(options = {}) {
     const rows = [];
     const pricingEnabled = String(process.env.INGEST_ENABLE_PRICING || 'true').toLowerCase() !== 'false';
     const pricingCache = new Map();
+    
+    // AI-specific ingestion tracking
+    const aiSettings = await getAISettings();
+    const aiRows = [];
+    const aiModelRows = [];
 
     // Process subscriptions in batches to avoid ARM API rate limits
     const batchSize = 100;
@@ -518,16 +532,72 @@ async function runCapacityIngestion(options = {}) {
         });
 
         rows.push(...regionRows.flat());
+        
+        // Ingest verified AI quota rows only when both the App Service flag and DB safety gate resolve on.
+        if (aiSettings.aiEnabled) {
+          const aiRegionRows = await mapWithConcurrency(regions, regionConcurrency, async (region) => {
+            const aiUsages = await fetchAIUsages(armGetAll, token, subscriptionId, region, {
+              includeAllProviders: aiSettings.providerQuotaEnabled
+            });
+            const localAiRows = aiUsages
+              .map((usage) => mapAIUsageToSnapshot(usage, {
+                capturedAtUtc,
+                subscriptionKey,
+                subscriptionId,
+                subscriptionName,
+                region
+              }))
+              .filter(Boolean);
+             
+            return localAiRows;
+          });
+          
+          aiRows.push(...aiRegionRows.flat());
+        }
       }
     }
 
-    const insertedRows = await insertCapacitySnapshots(rows);
-    const scoreRows = deriveCapacityScoreRows(rows).map((row) => ({
+    // Insert compute capacity snapshots
+    const allRows = [...rows, ...aiRows];
+    const insertedRows = await insertCapacitySnapshots(allRows);
+    const scoreRows = deriveCapacityScoreRows(allRows).map((row) => ({
       ...row,
       capturedAtUtc,
       latestCapturedAtUtc: row.latestCapturedAtUtc || capturedAtUtc
     }));
     const insertedScoreRows = await insertCapacityScoreSnapshots(scoreRows);
+    
+    // Ingest AI model catalog if enabled and due for refresh
+    let insertedAIModelRows = 0;
+    if (aiSettings.aiEnabled && aiSettings.modelCatalogEnabled) {
+      const shouldRefresh = await shouldRefreshModelCatalog(aiSettings.modelCatalogIntervalMinutes);
+      if (shouldRefresh) {
+        console.log(`Refreshing provider-discovered AI model catalog (interval: ${aiSettings.modelCatalogIntervalMinutes} minutes)`);
+        
+        // Fetch model catalog for one representative subscription (first in list)
+        if (subscriptions.length > 0) {
+          const subscription = subscriptions[0];
+          const subscriptionId = subscription.subscriptionId;
+          
+          const modelRegionRows = await mapWithConcurrency(regions, regionConcurrency, async (region) => {
+            const models = await fetchAIModelAvailability(armGetAll, token, subscriptionId, region);
+            const localModelRows = models.map((model) =>
+              mapAIModelToAvailability(model, {
+                capturedAtUtc,
+                subscriptionId,
+                region
+              })
+            );
+            
+            return localModelRows;
+          });
+          
+          aiModelRows.push(...modelRegionRows.flat());
+          insertedAIModelRows = await insertAIModelAvailability(aiModelRows);
+        }
+      }
+    }
+    
     const durationMs = Date.now() - started;
 
     ingestStatus.lastSuccessUtc = new Date().toISOString();
@@ -535,11 +605,14 @@ async function runCapacityIngestion(options = {}) {
     ingestStatus.lastInsertedRows = insertedRows;
     ingestStatus.lastSummary = {
       subscriptionCount: subscriptions.length,
-      subscriptionKeys: [...new Set(rows.map((r) => r.subscriptionKey))],
+      subscriptionKeys: [...new Set(allRows.map((r) => r.subscriptionKey))],
       regions,
       familyFilters,
       insertedRows,
-      insertedScoreRows
+      insertedScoreRows,
+      insertedAIRows: aiRows.length,
+      aiQuotaScope: aiSettings.providerQuotaEnabled ? 'provider-aware' : 'openai-only',
+      insertedAIModelRows
     };
 
     return ingestStatus.lastSummary;
@@ -616,8 +689,38 @@ function getIngestionSchedulerConfig() {
   return { ...schedulerConfig };
 }
 
+async function refreshModelCatalog(options = {}) {
+  const credential = getCredential();
+  const token = (await credential.getToken(ARM_SCOPE)).token;
+  const subscriptions = await listSubscriptions(token, options.subscriptionIds);
+  if (subscriptions.length === 0) {
+    return { ok: true, insertedAIModelRows: 0, message: 'No subscriptions available.' };
+  }
+  const regions = getRegions(options.regionPreset, options.regions);
+  const regionConcurrency = Math.max(
+    Number(process.env.INGEST_REGION_CONCURRENCY || DEFAULT_REGION_CONCURRENCY),
+    1
+  );
+  const subscriptionId = subscriptions[0].subscriptionId;
+  const capturedAtUtc = new Date();
+  const allModelRows = [];
+
+  const modelRegionRows = await mapWithConcurrency(regions, regionConcurrency, async (region) => {
+    const models = await fetchAIModelAvailability(armGetAll, token, subscriptionId, region);
+    return models.map((model) =>
+      mapAIModelToAvailability(model, { capturedAtUtc, subscriptionId, region })
+    );
+  });
+
+  allModelRows.push(...modelRegionRows.flat());
+  const insertedAIModelRows = await insertAIModelAvailability(allModelRows);
+
+  return { ok: true, insertedAIModelRows, regions, subscriptionId };
+}
+
 module.exports = {
   runCapacityIngestion,
+  refreshModelCatalog,
   getIngestionStatus,
   startIngestionScheduler,
   updateIngestionScheduler,

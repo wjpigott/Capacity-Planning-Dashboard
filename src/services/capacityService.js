@@ -2,6 +2,7 @@ const { getSqlPool, getSubscriptionsFromTable, getLatestLivePlacementSnapshots }
 const { mockRows } = require('../store/mockCapacity');
 const { getRegionsForPreset } = require('../config/regionPresets');
 const { CapacityDetailDTO, SubscriptionSummaryDTO, FamilySummaryDTO, TrendDTO, PaginationDTO } = require('../models/dtos');
+const { getAIQuotaProviderFromSnapshot } = require('./aiIngestionService');
 const { normalizeFamilyName } = require('../lib/familyNormalization');
 
 const CANONICAL_COMPUTE_FAMILY_PATTERNS = [
@@ -65,11 +66,34 @@ function normalizeSkuName(value) {
 }
 
 function normalizeCapacityRow(row) {
-  return {
+  const normalized = {
     ...row,
     sku: normalizeSkuName(row?.sku),
     family: normalizeFamilyName(row?.family)
   };
+  const provider = resolveAIQuotaProvider(normalized);
+  return {
+    ...normalized,
+    provider: provider || null
+  };
+}
+
+function resolveAIQuotaProvider(row) {
+  const explicitProvider = String(row?.provider || '').trim();
+  if (explicitProvider) {
+    return explicitProvider;
+  }
+
+  if (getRowResourceType(row) !== 'AI') {
+    return null;
+  }
+
+  const provider = getAIQuotaProviderFromSnapshot({
+    sourceType: row?.sourceType,
+    skuFamily: row?.family,
+    skuName: row?.sku
+  });
+  return provider && provider !== 'Unknown' ? provider : null;
 }
 
 function applyRegionPreset(rows, regionPreset) {
@@ -86,8 +110,12 @@ function applyRegionPreset(rows, regionPreset) {
 }
 
 function getRowResourceType(row) {
+  const sourceType = String(row?.sourceType || '').toLowerCase();
   const family = String(row?.family || '').toLowerCase();
   const sku = String(row?.sku || '').toLowerCase();
+  if (sourceType.includes('azure-ai') || sourceType.includes('openai') || family.startsWith('openai') || family.startsWith('aiservices') || sku.startsWith('aiservices')) {
+    return 'AI';
+  }
   if (family.includes('disk') || sku.includes('disk') || sku.includes('snapshot')) {
     return 'Disk';
   }
@@ -130,13 +158,16 @@ function canonicalComputeFamilyLabel(rawFamily, skuName) {
   return '';
 }
 
-function applyFilters(rows, { region, family, availability, resourceType }) {
+function applyFilters(rows, { region, family, availability, resourceType, provider }) {
+  const providerFilter = String(provider || '').trim();
   return rows.filter((r) => {
     const byRegion = !region || region === 'all' || r.region === region;
     const byFamily = !family || family === 'all' || r.family === family;
     const byAvailability = !availability || availability === 'all' || r.availability === availability;
     const byType = !resourceType || resourceType === 'all' || getRowResourceType(r) === resourceType;
-    return byRegion && byFamily && byAvailability && byType;
+    const byProvider = !providerFilter || providerFilter === 'all'
+      || (getRowResourceType(r) === 'AI' && String(resolveAIQuotaProvider(r) || '').trim() === providerFilter);
+    return byRegion && byFamily && byAvailability && byType && byProvider;
   });
 }
 
@@ -231,7 +262,7 @@ async function getCapacityRows(filters) {
 
   const request = pool.request();
   let query = `
-      SELECT capturedAtUtc, subscriptionKey, subscriptionId, subscriptionName, region, skuName AS sku, skuFamily AS family, availabilityState AS availability,
+      SELECT capturedAtUtc, sourceType, subscriptionKey, subscriptionId, subscriptionName, region, skuName AS sku, skuFamily AS family, availabilityState AS availability,
         quotaCurrent, quotaLimit, monthlyCostEstimate AS monthlyCost, vCpu, memoryGB, zonesCsv
     FROM dbo.CapacityLatest
     WHERE 1 = 1
@@ -242,6 +273,7 @@ async function getCapacityRows(filters) {
   const result = await request.query(query);
   const rows = result.recordset.map((r) => normalizeCapacityRow({
     capturedAtUtc: r.capturedAtUtc,
+    sourceType: r.sourceType || null,
     subscriptionKey: r.subscriptionKey || 'legacy-data',
     subscriptionId: r.subscriptionId || 'legacy-data',
     subscriptionName: r.subscriptionName || 'Legacy data',
@@ -299,6 +331,7 @@ async function getCapacityRowsPaginated(filters) {
   let query = `
     SELECT 
       capturedAtUtc,
+      sourceType,
       subscriptionKey,
       COALESCE(CONVERT(nvarchar(64), subscriptionId), 'legacy-data') AS subscriptionId,
       COALESCE(subscriptionName, 'Legacy data') AS subscriptionName,
@@ -327,6 +360,7 @@ async function getCapacityRowsPaginated(filters) {
   const allRows = applyFilters(
     result.recordset.map((r) => normalizeCapacityRow({
       capturedAtUtc: r.capturedAtUtc,
+      sourceType: r.sourceType || null,
       subscriptionKey: r.subscriptionKey || 'legacy-data',
       subscriptionId: r.subscriptionId || 'legacy-data',
       subscriptionName: r.subscriptionName || 'Legacy data',
@@ -412,6 +446,33 @@ async function getSubscriptions({ search, limit } = {}) {
 }
 
 async function getSubscriptionSummary(filters) {
+  if (filters.resourceType && filters.resourceType !== 'all') {
+    const rows = await getCapacityRows(filters);
+    const bySubscription = new Map();
+
+    for (const row of rows) {
+      const key = row.subscriptionKey || 'legacy-data';
+      if (!bySubscription.has(key)) {
+        bySubscription.set(key, {
+          subscriptionKey: key,
+          rowCount: 0,
+          constrainedRows: 0,
+          totalQuotaAvailable: 0
+        });
+      }
+
+      const entry = bySubscription.get(key);
+      entry.rowCount += 1;
+      if (row.availability === 'CONSTRAINED') {
+        entry.constrainedRows += 1;
+      }
+      entry.totalQuotaAvailable += Number(row.quotaLimit || 0) - Number(row.quotaCurrent || 0);
+    }
+
+    return [...bySubscription.values()]
+      .sort((left, right) => right.rowCount - left.rowCount || left.subscriptionKey.localeCompare(right.subscriptionKey));
+  }
+
   const pool = await getSqlPool();
 
   const sourceRows = applyFilters(applyRegionPreset(mockRows, filters.regionPreset), filters);
@@ -474,11 +535,12 @@ async function getCapacityTrends(filters) {
     request.input('daysBack', days);
 
     let query = `
-      SELECT
-        CONVERT(varchar(10), CAST(capturedAtUtc AS date), 23) AS [day],
-        skuFamily,
-        skuName,
-        availabilityState,
+        SELECT
+          CONVERT(varchar(10), CAST(capturedAtUtc AS date), 23) AS [day],
+          sourceType,
+          skuFamily,
+          skuName,
+          availabilityState,
         quotaLimit,
         quotaCurrent,
         region,
@@ -496,11 +558,12 @@ async function getCapacityTrends(filters) {
     const grouped = new Map();
 
     result.recordset.forEach((record) => {
-      const normalizedRow = normalizeCapacityRow({
-        day: record.day,
-        family: record.skuFamily,
-        sku: record.skuName,
-        availability: record.availabilityState,
+        const normalizedRow = normalizeCapacityRow({
+          day: record.day,
+          sourceType: record.sourceType,
+          family: record.skuFamily,
+          sku: record.skuName,
+          availability: record.availabilityState,
         quotaLimit: Number(record.quotaLimit || 0),
         quotaCurrent: Number(record.quotaCurrent || 0),
         region: record.region,

@@ -20,6 +20,7 @@ This template provisions a native Azure baseline for the dashboard solution.
 - No subscription IDs, tenant IDs, resource group names, or secrets are stored in this repo.
 - Web App uses managed identity and receives Key Vault Secrets User role on the deployed vault.
 - Web App can optionally receive subscription-level `Reader` assignments during infra deployment to support cross-subscription discovery.
+- The same Web App `Reader` access is sufficient for the Phase 2A provider-discovered AI model catalog; no extra RBAC or Bicep resources are required for xAI/Meta/Mistral-style catalog reads.
 - Web App can optionally receive subscription-level `GroupQuota Request Operator` assignments during infra deployment by passing `webQuotaWriterSubscriptionIds` for quota apply writes.
 - Function App uses managed identity and receives Key Vault Secrets User role on the deployed vault.
 - Function App host storage should use identity-based `AzureWebJobsStorage` settings with storage data-plane RBAC instead of shared-key auth.
@@ -43,6 +44,9 @@ This template provisions a native Azure baseline for the dashboard solution.
 
 ## Environment strategy
 
+- Keep the AI rollout default-off at the app setting layer (`INGEST_AI_ENABLED=false` with legacy `INGEST_OPENAI_ENABLED` alias support) so infra deployments stay zero-impact until the web app is explicitly enabled.
+- Pre-stage `INGEST_AI_PROVIDER_QUOTA_ENABLED=false` so Phase 2B provider-aware quota support stays off until post-deploy validation explicitly widens beyond OpenAI.
+- `INGEST_AI_MODEL_CATALOG=true` is safe to pre-stage because the master AI gate remains off by default.
 - Keep `dev` as the mutable build-and-verify environment.
 - Stand up `test` as the stable demo environment in the same subscription using the same naming pattern with the environment token changed to `test`.
 - Treat the React app as the primary UI for future production rollout. The classic root UI can remain for compatibility in dev/test, but it should not drive the production deployment shape.

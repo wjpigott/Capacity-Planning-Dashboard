@@ -55,6 +55,7 @@ const { buildQuotaMovePlan, getQuotaCandidateRunHistory, simulateQuotaMovePlan }
 const { applyQuotaMovePlan } = require('./services/quotaApplyService');
 const {
   runCapacityIngestion,
+  refreshModelCatalog,
   getIngestionStatus,
   startIngestionScheduler,
   updateIngestionScheduler,
@@ -77,6 +78,7 @@ const {
   upsertDashboardSettings
 } = require('./store/sql');
 const { applyIndexes } = require('./maintenance/applyPerformanceIndexes');
+const { getAIQuotaProviderFromSnapshot, isAIQuotaSourceType } = require('./services/aiIngestionService');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -90,6 +92,7 @@ const DASHBOARD_SETTING_KEYS = {
   ingestRunOnStartup: 'schedule.ingest.runOnStartup',
   livePlacementIntervalMinutes: 'schedule.livePlacement.intervalMinutes',
   livePlacementRunOnStartup: 'schedule.livePlacement.runOnStartup',
+  aiModelCatalogIntervalMinutes: 'schedule.aiModelCatalog.intervalMinutes',
   showSqlPreview: 'ui.showSqlPreview'
 };
 
@@ -113,6 +116,28 @@ function normalizeBoolean(value, fallback = false) {
 
   const raw = String(value).trim().toLowerCase();
   return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on';
+}
+
+async function sqlObjectExists(pool, objectName, objectTypes = ['U']) {
+  const checks = objectTypes
+    .map((objectType) => `OBJECT_ID(@objectName, '${String(objectType).replace(/'/g, "''")}') IS NOT NULL`)
+    .join(' OR ');
+
+  const result = await pool.request()
+    .input('objectName', sql.NVarChar(256), objectName)
+    .query(`
+      SELECT CASE WHEN ${checks} THEN 1 ELSE 0 END AS existsFlag
+    `);
+
+  return Boolean(result.recordset?.[0]?.existsFlag);
+}
+
+function mapAIQuotaResponseRow(row) {
+  return {
+    ...row,
+    provider: getAIQuotaProviderFromSnapshot(row),
+    quotaAvailable: Number(row?.quotaLimit || 0) - Number(row?.quotaCurrent || 0)
+  };
 }
 
 function truncateText(value, maxLength, fallback = null) {
@@ -515,6 +540,7 @@ function getCapacityFiltersFromQuery(query = {}) {
     family: getFirstQueryValue(query.family),
     availability: getFirstQueryValue(query.availability),
     resourceType: getFirstQueryValue(query.resourceType),
+    provider: getFirstQueryValue(query.provider),
     pageNumber: getFirstQueryValue(query.pageNumber),
     pageSize: getFirstQueryValue(query.pageSize)
   };
@@ -537,6 +563,7 @@ function buildCapacityExportRows(rows = []) {
       region: row.region || '',
       sku: row.sku || '',
       family: row.family || '',
+      provider: row.provider || '',
       availability: row.availability || '',
       quotaCurrent,
       quotaLimit,
@@ -568,6 +595,7 @@ function buildCapacityExportSummary(rows = [], filters = {}) {
     { metric: 'Region Preset', value: filters.regionPreset || 'all' },
     { metric: 'Region Filter', value: filters.region || 'all' },
     { metric: 'Family Filter', value: filters.family || 'all' },
+    { metric: 'Provider Filter', value: filters.provider || 'all' },
     { metric: 'Availability Filter', value: filters.availability || 'all' },
     { metric: 'Resource Type Filter', value: filters.resourceType || 'all' },
     { metric: 'Selected Subscription Count', value: selectedSubscriptions.length }
@@ -591,6 +619,7 @@ function buildCapacityCsv(exportRows = []) {
     'region',
     'sku',
     'family',
+    'provider',
     'availability',
     'quotaCurrent',
     'quotaLimit',
@@ -665,6 +694,7 @@ async function buildCapacityWorkbook({ exportRows, filters }) {
     { header: 'Region', key: 'region', width: 18 },
     { header: 'SKU', key: 'sku', width: 24 },
     { header: 'Family', key: 'family', width: 18 },
+    { header: 'Provider', key: 'provider', width: 18 },
     { header: 'Availability', key: 'availability', width: 16 },
     { header: 'Quota Current', key: 'quotaCurrent', width: 14 },
     { header: 'Quota Limit', key: 'quotaLimit', width: 14 },
@@ -676,7 +706,7 @@ async function buildCapacityWorkbook({ exportRows, filters }) {
   ];
   exportRows.forEach((row) => detailSheet.addRow(row));
   styleWorksheetHeader(detailSheet, detailSheet.columns.length);
-  detailSheet.autoFilter = 'A1:O1';
+  detailSheet.autoFilter = 'A1:P1';
 
   ['quotaCurrent', 'quotaLimit', 'quotaAvailable', 'vCpu', 'memoryGB'].forEach((key) => {
     detailSheet.getColumn(key).numFmt = '#,##0';
@@ -746,6 +776,12 @@ function getDefaultSchedulerSettings() {
     livePlacement: {
       intervalMinutes: normalizeIntervalMinutes(process.env.LIVE_PLACEMENT_REFRESH_INTERVAL_MINUTES, 0),
       runOnStartup: normalizeBoolean(process.env.LIVE_PLACEMENT_REFRESH_ON_STARTUP, false)
+    },
+    aiModelCatalog: {
+      intervalMinutes: normalizeIntervalMinutes(
+        process.env.INGEST_AI_MODEL_CATALOG_INTERVAL_MINUTES || process.env.INGEST_OPENAI_MODEL_CATALOG_INTERVAL_MINUTES,
+        1440
+      )
     }
   };
 }
@@ -762,6 +798,12 @@ function parseSchedulerSettingsFromDb(dbMap = {}) {
     livePlacement: {
       intervalMinutes: normalizeIntervalMinutes(readValue(DASHBOARD_SETTING_KEYS.livePlacementIntervalMinutes), defaults.livePlacement.intervalMinutes),
       runOnStartup: normalizeBoolean(readValue(DASHBOARD_SETTING_KEYS.livePlacementRunOnStartup), defaults.livePlacement.runOnStartup)
+    },
+    aiModelCatalog: {
+      intervalMinutes: normalizeIntervalMinutes(
+        readValue(DASHBOARD_SETTING_KEYS.aiModelCatalogIntervalMinutes),
+        defaults.aiModelCatalog.intervalMinutes
+      )
     }
   };
 }
@@ -784,6 +826,9 @@ function applyRuntimeSchedulerSettings(settings = {}) {
     livePlacement: {
       intervalMinutes: normalizeIntervalMinutes(settings?.livePlacement?.intervalMinutes, 0),
       runOnStartup: normalizeBoolean(settings?.livePlacement?.runOnStartup, false)
+    },
+    aiModelCatalog: {
+      intervalMinutes: normalizeIntervalMinutes(settings?.aiModelCatalog?.intervalMinutes, 1440)
     }
   };
 
@@ -801,6 +846,9 @@ async function saveSchedulerSettings(settings = {}) {
     livePlacement: {
       intervalMinutes: normalizeIntervalMinutes(settings?.livePlacement?.intervalMinutes, 0),
       runOnStartup: normalizeBoolean(settings?.livePlacement?.runOnStartup, false)
+    },
+    aiModelCatalog: {
+      intervalMinutes: normalizeIntervalMinutes(settings?.aiModelCatalog?.intervalMinutes, 1440)
     }
   };
 
@@ -808,10 +856,11 @@ async function saveSchedulerSettings(settings = {}) {
     [DASHBOARD_SETTING_KEYS.ingestIntervalMinutes]: String(normalized.ingest.intervalMinutes),
     [DASHBOARD_SETTING_KEYS.ingestRunOnStartup]: normalized.ingest.runOnStartup ? 'true' : 'false',
     [DASHBOARD_SETTING_KEYS.livePlacementIntervalMinutes]: String(normalized.livePlacement.intervalMinutes),
-    [DASHBOARD_SETTING_KEYS.livePlacementRunOnStartup]: normalized.livePlacement.runOnStartup ? 'true' : 'false'
+    [DASHBOARD_SETTING_KEYS.livePlacementRunOnStartup]: normalized.livePlacement.runOnStartup ? 'true' : 'false',
+    [DASHBOARD_SETTING_KEYS.aiModelCatalogIntervalMinutes]: String(normalized.aiModelCatalog.intervalMinutes)
   });
 
-  if (savedCount < 4) {
+  if (savedCount < 5) {
     throw new Error('SQL scheduler settings could not be saved. Verify SQL connectivity and permissions.');
   }
 
@@ -1743,6 +1792,239 @@ app.get('/api/admin/recommendations/diagnostics', requireAdmin, (req, res) => {
   }
 });
 
+// AI Model Availability endpoints
+app.get('/api/ai/models', async (req, res) => {
+  try {
+    const pool = await getSqlPool();
+    if (!pool) {
+      res.status(503).json({ error: 'Database not configured' });
+      return;
+    }
+
+    if (!(await sqlObjectExists(pool, 'dbo.AIModelAvailabilityLatest', ['V']))) {
+      res.json({ rows: [] });
+      return;
+    }
+    
+    const region = req.query.region;
+    const provider = req.query.provider;
+    const modelName = req.query.modelName;
+    const deploymentType = req.query.deploymentType;
+    
+    let query = 'SELECT * FROM dbo.AIModelAvailabilityLatest WHERE 1=1';
+    const request = pool.request();
+    
+    if (region) {
+      query += ' AND region = @region';
+      request.input('region', sql.NVarChar, region);
+    }
+
+    if (provider) {
+      query += ' AND provider = @provider';
+      request.input('provider', sql.NVarChar, provider);
+    }
+    
+    if (modelName) {
+      query += ' AND modelName LIKE @modelName';
+      request.input('modelName', sql.NVarChar, `%${modelName}%`);
+    }
+    
+    if (deploymentType) {
+      query += ' AND deploymentTypes LIKE @deploymentType';
+      request.input('deploymentType', sql.NVarChar, `%${deploymentType}%`);
+    }
+    
+    query += ' ORDER BY provider, region, modelName, modelVersion';
+    
+    const result = await request.query(query);
+    res.json({ rows: result.recordset });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve AI model availability', detail: err.message });
+  }
+});
+
+app.get('/api/ai/models/providers', async (req, res) => {
+  try {
+    const pool = await getSqlPool();
+    if (!pool) {
+      res.status(503).json({ error: 'Database not configured' });
+      return;
+    }
+
+    if (!(await sqlObjectExists(pool, 'dbo.AIModelAvailabilityLatest', ['V']))) {
+      res.json({ providers: [] });
+      return;
+    }
+
+    const region = req.query.region;
+    const request = pool.request();
+    let query = `
+      SELECT DISTINCT provider
+      FROM dbo.AIModelAvailabilityLatest
+      WHERE provider IS NOT NULL AND LTRIM(RTRIM(provider)) <> ''
+    `;
+
+    if (region) {
+      query += ' AND region = @region';
+      request.input('region', sql.NVarChar, region);
+    }
+
+    query += ' ORDER BY provider';
+
+    const result = await request.query(query);
+    res.json({ providers: result.recordset.map((row) => row.provider) });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve AI providers', detail: err.message });
+  }
+});
+
+app.get('/api/ai/models/regions', async (req, res) => {
+  try {
+    const pool = await getSqlPool();
+    if (!pool) {
+      res.status(503).json({ error: 'Database not configured' });
+      return;
+    }
+
+    if (!(await sqlObjectExists(pool, 'dbo.AIModelAvailabilityLatest', ['V']))) {
+      res.json({ regions: [] });
+      return;
+    }
+
+    const provider = req.query.provider;
+    const request = pool.request();
+    let query = `
+      SELECT DISTINCT region 
+      FROM dbo.AIModelAvailabilityLatest
+      WHERE 1 = 1
+    `;
+
+    if (provider) {
+      query += ' AND provider = @provider';
+      request.input('provider', sql.NVarChar, provider);
+    }
+
+    query += ' ORDER BY region';
+
+    const result = await request.query(query);
+
+    res.json({ regions: result.recordset.map(r => r.region) });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve AI regions', detail: err.message });
+  }
+});
+
+app.get('/api/ai/quota/providers', async (req, res) => {
+  try {
+    const pool = await getSqlPool();
+    if (!pool) {
+      res.status(503).json({ error: 'Database not configured' });
+      return;
+    }
+
+    const request = pool.request();
+    const result = await request.query(`
+      WITH LatestAICapture AS (
+        SELECT MAX(capturedAtUtc) AS capturedAtUtc
+        FROM dbo.CapacitySnapshot
+        WHERE sourceType = 'live-azure-openai-ingest'
+           OR sourceType LIKE 'live-azure-ai-%-ingest'
+      )
+      SELECT snapshot.sourceType, snapshot.skuFamily, snapshot.skuName
+      FROM dbo.CapacitySnapshot AS snapshot
+      INNER JOIN LatestAICapture
+        ON snapshot.capturedAtUtc = LatestAICapture.capturedAtUtc
+      WHERE snapshot.sourceType = 'live-azure-openai-ingest'
+         OR snapshot.sourceType LIKE 'live-azure-ai-%-ingest'
+    `);
+
+    const providers = [...new Set(
+      (result.recordset || [])
+        .filter((row) => isAIQuotaSourceType(row?.sourceType))
+        .map((row) => getAIQuotaProviderFromSnapshot(row))
+        .filter((provider) => provider && provider !== 'Unknown')
+    )].sort((left, right) => left.localeCompare(right));
+
+    res.json({ providers });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve AI quota providers', detail: err.message });
+  }
+});
+
+app.get('/api/ai/quota', async (req, res) => {
+  try {
+    const pool = await getSqlPool();
+    if (!pool) {
+      res.status(503).json({ error: 'Database not configured' });
+      return;
+    }
+    
+    const region = req.query.region;
+    const provider = req.query.provider;
+    const modelName = req.query.modelName;
+    
+    let query = `
+      WITH LatestAICapture AS (
+        SELECT MAX(capturedAtUtc) AS capturedAtUtc
+        FROM dbo.CapacitySnapshot
+        WHERE sourceType = 'live-azure-openai-ingest'
+           OR sourceType LIKE 'live-azure-ai-%-ingest'
+      )
+      SELECT 
+        snapshot.region,
+        snapshot.sourceType,
+        snapshot.skuFamily,
+        snapshot.skuName,
+        snapshot.quotaCurrent,
+        snapshot.quotaLimit,
+        snapshot.availabilityState,
+        snapshot.capturedAtUtc,
+        snapshot.subscriptionName
+      FROM dbo.CapacitySnapshot AS snapshot
+      INNER JOIN LatestAICapture
+        ON snapshot.capturedAtUtc = LatestAICapture.capturedAtUtc
+      WHERE snapshot.sourceType = 'live-azure-openai-ingest'
+         OR snapshot.sourceType LIKE 'live-azure-ai-%-ingest'
+    `;
+    
+    const request = pool.request();
+    
+    if (region) {
+      query += ' AND snapshot.region = @region';
+      request.input('region', sql.NVarChar, region);
+    }
+    
+    if (modelName) {
+      query += ' AND (snapshot.skuFamily LIKE @modelName OR snapshot.skuName LIKE @modelName)';
+      request.input('modelName', sql.NVarChar, `%${modelName}%`);
+    }
+    
+    query += ' ORDER BY snapshot.region, snapshot.skuFamily, snapshot.skuName';
+    
+    const result = await request.query(query);
+    const rows = (result.recordset || [])
+      .filter((row) => isAIQuotaSourceType(row?.sourceType))
+      .map((row) => mapAIQuotaResponseRow(row))
+      .filter((row) => !provider || row.provider === provider)
+      .sort((left, right) => {
+        if (left.provider !== right.provider) {
+          return left.provider.localeCompare(right.provider);
+        }
+        if (left.region !== right.region) {
+          return left.region.localeCompare(right.region);
+        }
+        if (left.skuFamily !== right.skuFamily) {
+          return left.skuFamily.localeCompare(right.skuFamily);
+        }
+        return left.skuName.localeCompare(right.skuName);
+      });
+
+    res.json({ rows });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve AI quota', detail: err.message });
+  }
+});
+
 app.post('/api/admin/ingest/capacity', requireAdmin, async (req, res) => {
   const activeJob = getActiveIngestionJob();
   if (activeJob) {
@@ -1764,6 +2046,15 @@ app.get('/api/admin/ingest/status', requireAdmin, (_, res) => {
   res.json({ ok: true, status: getIngestionStatus(), activeJob: activeJob ? serializeIngestionJob(activeJob) : null });
 });
 
+app.post('/api/admin/ingest/model-catalog', requireAdmin, async (req, res) => {
+  try {
+    const result = await refreshModelCatalog(buildCapacityIngestionOptions(req.body));
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 app.get('/api/admin/ingest/jobs/:jobId', requireAdmin, (req, res) => {
   cleanupIngestionJobs();
   const job = ingestionJobs.get(req.params.jobId);
@@ -1781,7 +2072,10 @@ app.get('/api/admin/ingest/schedule', requireAdmin, async (_, res) => {
     const persistence = await getDashboardSettingsPersistence();
     const runtime = {
       ingest: getIngestionSchedulerConfig(),
-      livePlacement: getLivePlacementSchedulerConfig()
+      livePlacement: getLivePlacementSchedulerConfig(),
+      aiModelCatalog: {
+        intervalMinutes: persisted.aiModelCatalog.intervalMinutes
+      }
     };
 
     res.json({ ok: true, settings: persisted, runtime, persistence });
@@ -1819,7 +2113,13 @@ app.put('/api/admin/ingest/schedule', requireAdmin, async (req, res) => {
         error: `${persistence.message} Runtime schedule remains available, but SQL-backed persistence cannot be updated from the UI.`,
         runtime: {
           ingest: getIngestionSchedulerConfig(),
-          livePlacement: getLivePlacementSchedulerConfig()
+          livePlacement: getLivePlacementSchedulerConfig(),
+          aiModelCatalog: {
+            intervalMinutes: normalizeIntervalMinutes(
+              req.body?.aiModelCatalog?.intervalMinutes,
+              process.env.INGEST_AI_MODEL_CATALOG_INTERVAL_MINUTES || process.env.INGEST_OPENAI_MODEL_CATALOG_INTERVAL_MINUTES || 1440
+            )
+          }
         },
         persistence
       });
@@ -1833,6 +2133,9 @@ app.put('/api/admin/ingest/schedule', requireAdmin, async (req, res) => {
       livePlacement: {
         intervalMinutes: req.body?.livePlacement?.intervalMinutes,
         runOnStartup: req.body?.livePlacement?.runOnStartup
+      },
+      aiModelCatalog: {
+        intervalMinutes: req.body?.aiModelCatalog?.intervalMinutes
       }
     };
 

@@ -80,6 +80,7 @@ function Ensure-AzureContext {
                 if ($preferredSubscription) {
                     $null = Set-AzContext -SubscriptionId $preferredSubscription.Id -TenantId $preferredSubscription.TenantId -ErrorAction Stop
                     $Caches.CurrentSubscriptionId = $preferredSubscription.Id
+                    $Caches.CurrentSubscriptionName = $preferredSubscription.Name
                     $Caches.LastPlacementWarning = $null
                     return $true
                 }
@@ -98,6 +99,7 @@ function Ensure-AzureContext {
             }
 
             $Caches.CurrentSubscriptionId = $Context.Subscription.Id
+            $Caches.CurrentSubscriptionName = $Context.Subscription.Name
             $Caches.LastPlacementWarning = $null
             return $true
         }
@@ -117,6 +119,7 @@ function Ensure-AzureContext {
             }
 
             $Caches.CurrentSubscriptionId = $subscription.Id
+            $Caches.CurrentSubscriptionName = $subscription.Name
             $Caches.LastPlacementWarning = $null
             return $true
         }

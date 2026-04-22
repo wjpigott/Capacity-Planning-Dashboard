@@ -45,6 +45,11 @@ const {
   updateLivePlacementScheduler,
   getLivePlacementSchedulerConfig
 } = require('./services/livePlacementService');
+const {
+  runPaaSAvailabilityScan,
+  getPaaSAvailabilitySnapshot,
+  getPaaSPowerShellProbe
+} = require('./services/paasAvailabilityService');
 const { getQuotaCandidates, captureQuotaCandidateSnapshots } = require('./services/quotaCandidateService');
 const { buildQuotaMovePlan, getQuotaCandidateRunHistory, simulateQuotaMovePlan } = require('./services/quotaPlanService');
 const { applyQuotaMovePlan } = require('./services/quotaApplyService');
@@ -252,6 +257,27 @@ function sendErrorResponse(res, {
   };
 
   return res.status(status).json(payload);
+}
+
+function getFirstQueryValue(value) {
+  if (Array.isArray(value)) {
+    return value.length > 0 ? value[0] : undefined;
+  }
+
+  return value;
+}
+
+function getCapacityFiltersFromQuery(query = {}) {
+  return {
+    regionPreset: getFirstQueryValue(query.regionPreset),
+    subscriptionIds: query.subscriptionIds,
+    region: getFirstQueryValue(query.region),
+    family: getFirstQueryValue(query.family),
+    availability: getFirstQueryValue(query.availability),
+    resourceType: getFirstQueryValue(query.resourceType),
+    pageNumber: getFirstQueryValue(query.pageNumber),
+    pageSize: getFirstQueryValue(query.pageSize)
+  };
 }
 
 function cleanupQuotaApplyJobs() {
@@ -508,13 +534,15 @@ const CAPACITY_EXPORT_STATUS_META = {
 
 function getCapacityFiltersFromQuery(query = {}) {
   return {
-    regionPreset: query.regionPreset,
+    regionPreset: getFirstQueryValue(query.regionPreset),
     subscriptionIds: query.subscriptionIds,
-    region: query.region,
-    family: query.family,
-    availability: query.availability,
-    resourceType: query.resourceType,
-    provider: query.provider
+    region: getFirstQueryValue(query.region),
+    family: getFirstQueryValue(query.family),
+    availability: getFirstQueryValue(query.availability),
+    resourceType: getFirstQueryValue(query.resourceType),
+    provider: getFirstQueryValue(query.provider),
+    pageNumber: getFirstQueryValue(query.pageNumber),
+    pageSize: getFirstQueryValue(query.pageSize)
   };
 }
 
@@ -1399,19 +1427,15 @@ app.get('/api/capacity/export', async (req, res) => {
  */
 app.get('/api/capacity/paged', async (req, res) => {
   try {
-    const result = await getCapacityRowsPaginated({
-      regionPreset: req.query.regionPreset,
-      subscriptionIds: req.query.subscriptionIds,
-      region: req.query.region,
-      family: req.query.family,
-      availability: req.query.availability,
-      resourceType: req.query.resourceType,
-      pageNumber: req.query.pageNumber,
-      pageSize: req.query.pageSize
-    });
+    const result = await getCapacityRowsPaginated(getCapacityFiltersFromQuery(req.query));
     res.json(result);
   } catch (err) {
-    sendErrorResponse(res, { clientMessage: 'Failed to retrieve paginated capacity data.', err, scope: 'api/capacity/paged' });
+    sendErrorResponse(res, {
+      clientMessage: 'Failed to retrieve paginated capacity data.',
+      err,
+      scope: 'api/capacity/paged',
+      exposeMessage: process.env.NODE_ENV !== 'production'
+    });
   }
 });
 
@@ -1702,6 +1726,60 @@ app.post('/api/capacity/recommendations', async (req, res) => {
   } catch (err) {
     const status = err.message.includes('not found') || err.message.includes('not configured') ? 503 : 500;
     sendErrorResponse(res, { status, clientMessage: 'Failed to retrieve capacity recommendations.', err, scope: 'api/capacity/recommendations' });
+  }
+});
+
+app.get('/api/paas-availability', async (req, res) => {
+  try {
+    const result = await getPaaSAvailabilitySnapshot({
+      service: req.query.service,
+      maxAgeHours: req.query.maxAgeHours
+    });
+    res.json(result);
+  } catch (err) {
+    sendErrorResponse(res, { clientMessage: 'Failed to retrieve cached PaaS availability.', err, scope: 'api/paas-availability:get', extra: { rows: [] } });
+  }
+});
+
+app.get('/api/paas-availability/probe', async (_req, res) => {
+  try {
+    const result = await getPaaSPowerShellProbe();
+    res.json(result);
+  } catch (err) {
+    sendErrorResponse(res, {
+      clientMessage: 'Failed to probe PaaS PowerShell runtime.',
+      err,
+      scope: 'api/paas-availability:probe',
+      extra: { runtimes: [] }
+    });
+  }
+});
+
+app.post('/api/paas-availability/refresh', async (req, res) => {
+  try {
+    const result = await runPaaSAvailabilityScan({
+      service: req.body?.service,
+      regions: req.body?.regions,
+      regionPreset: req.body?.regionPreset,
+      edition: req.body?.edition,
+      computeModel: req.body?.computeModel,
+      sqlResourceType: req.body?.sqlResourceType,
+      includeDisabled: req.body?.includeDisabled,
+      fetchPricing: req.body?.fetchPricing
+    });
+    res.json(result);
+  } catch (err) {
+    const status = err.message.includes('not found') || err.message.includes('not configured') ? 503 : 500;
+    sendErrorResponse(res, {
+      status,
+      clientMessage: 'Failed to refresh PaaS availability.',
+      err,
+      scope: 'api/paas-availability:refresh',
+      extra: {
+        rows: [],
+        detail: err && err.message ? String(err.message).slice(0, 4000) : null
+      }
+    });
   }
 });
 

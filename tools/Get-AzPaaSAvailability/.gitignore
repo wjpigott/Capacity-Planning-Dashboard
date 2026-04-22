@@ -1,0 +1,61 @@
+# Build artifacts
+*.monolith-backup
+
+# Export files (scan output — never commit)
+*.csv
+*.xlsx
+
+# Logs
+*.log
+
+# OS files
+Thumbs.db
+.DS_Store
+Desktop.ini
+
+# IDE
+.vscode/*
+!.vscode/settings.json
+*.code-workspace
+.vs/
+.idea/
+
+# PowerShell
+*.psm1.bak
+*.psd1.bak
+*.ps1xml
+*.clixml
+
+# Temp
+*.tmp
+*.temp
+*.out
+*~
+*.swp
+scratch/
+
+# Test artifacts
+TestResults/
+*.trx
+*.coverage
+
+# Azure credentials (never commit!)
+*.publishsettings
+*.azureauth
+azureauth.json
+azureProfile.json
+.env
+.env.*
+*.secrets.*
+secrets.*
+
+# Session artifacts (ephemeral AI session files)
+docs/*handoff*
+docs/*session-notes*
+copilot-standing-rules.md
+
+# Output directories
+/output/
+/exports/
+/reports/
+/artifacts/

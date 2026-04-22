@@ -1,4 +1,4 @@
-const { useEffect, useMemo, useState } = React;
+const { useEffect, useMemo, useRef, useState } = React;
 
 const REGION_PRESET_OPTIONS = [
   { value: 'USEastWest', label: 'US East/West' },
@@ -28,10 +28,24 @@ const RESOURCE_TYPE_OPTIONS = [
   { value: 'Other', label: 'Other' }
 ];
 
+const PAAS_SERVICE_OPTIONS = [
+  { value: 'All', label: 'All services' },
+  { value: 'SqlDatabase', label: 'SQL Database' },
+  { value: 'CosmosDB', label: 'Cosmos DB' },
+  { value: 'PostgreSQL', label: 'PostgreSQL' },
+  { value: 'MySQL', label: 'MySQL' },
+  { value: 'AppService', label: 'App Service' },
+  { value: 'ContainerApps', label: 'Container Apps' },
+  { value: 'AKS', label: 'AKS' },
+  { value: 'Functions', label: 'Functions' },
+  { value: 'Storage', label: 'Storage' }
+];
+
 const REPORT_VIEWS = [
   { key: 'capacity-grid', label: 'Capacity Grid', adminOnly: false },
   { key: 'region-health', label: 'Region Health', adminOnly: false },
   { key: 'recommender', label: 'Capacity Recommender', adminOnly: false },
+  { key: 'paas-availability', label: 'PaaS Availability', adminOnly: false },
   { key: 'sku-chart', label: 'Top SKUs', adminOnly: false },
   { key: 'capacity-score', label: 'Capacity Score', adminOnly: false },
   { key: 'family-summary', label: 'Family Summary', adminOnly: false },
@@ -643,6 +657,217 @@ function regionMatrixRows(rows, selectedRegion, presetRegions) {
   };
 }
 
+function filterPaaSRowsByScope(rows, regionPreset, selectedRegion) {
+  const normalizedRows = Array.isArray(rows) ? rows : [];
+  const normalizedSelectedRegion = String(selectedRegion || '').trim().toLowerCase();
+  if (normalizedSelectedRegion && normalizedSelectedRegion !== 'all') {
+    return normalizedRows.filter((row) => String((row && row.region) || '').trim().toLowerCase() === normalizedSelectedRegion);
+  }
+
+  const presetRegions = Array.isArray(regionPresets[regionPreset])
+    ? regionPresets[regionPreset].map((region) => String(region || '').trim().toLowerCase()).filter(Boolean)
+    : [];
+  if (presetRegions.length === 0) {
+    return normalizedRows;
+  }
+
+  const allowedRegions = new Set(presetRegions);
+  return normalizedRows.filter((row) => allowedRegions.has(String((row && row.region) || '').trim().toLowerCase()));
+}
+
+function summarizePaaSRows(rows) {
+  const normalizedRows = Array.isArray(rows) ? rows : [];
+  const serviceSummaryMap = new Map();
+
+  normalizedRows.forEach((row) => {
+    const service = row && row.service ? row.service : 'Unknown';
+    if (!serviceSummaryMap.has(service)) {
+      serviceSummaryMap.set(service, { service, rowCount: 0, availableCount: 0 });
+    }
+
+    const summary = serviceSummaryMap.get(service);
+    summary.rowCount += 1;
+    if (row && row.available) {
+      summary.availableCount += 1;
+    }
+  });
+
+  return {
+    rowCount: normalizedRows.length,
+    serviceSummary: Array.from(serviceSummaryMap.values()).sort((left, right) => left.service.localeCompare(right.service)),
+    facets: {
+      services: [...new Set(normalizedRows.map((row) => String((row && row.service) || '').trim()).filter(Boolean))].sort(),
+      regions: [...new Set(normalizedRows.map((row) => String((row && row.region) || '').trim().toLowerCase()).filter(Boolean))].sort(),
+      categories: [...new Set(normalizedRows.map((row) => String((row && row.category) || '').trim()).filter(Boolean))].sort()
+    }
+  };
+}
+
+const PAAS_SERVICE_MATRIX_LABELS = {
+  SqlDatabase: 'SQL',
+  CosmosDB: 'Cosmos',
+  PostgreSQL: 'PgSQL',
+  MySQL: 'MySQL',
+  AppService: 'AppSvc',
+  ContainerApps: 'ContApp',
+  AKS: 'AKS',
+  Functions: 'Funcs',
+  Storage: 'Storage',
+  ServiceBus: 'SvcBus',
+  EventHubs: 'EvtHub',
+  NotificationHubs: 'NotifHub',
+  StaticWebApps: 'StaticWeb',
+  LogAnalytics: 'LogAn',
+  KeyVault: 'KeyVault',
+  Redis: 'Redis',
+  ACR: 'ACR',
+  AISearch: 'AISearch',
+  APIM: 'APIM',
+  AppConfig: 'AppConfig',
+  FrontDoor: 'FrontDoor',
+  Grafana: 'Grafana',
+  IoTHub: 'IoTHub',
+  SignalR: 'SignalR'
+};
+
+function formatPaaSMatrixServiceLabel(service) {
+  const value = String(service || '').trim();
+  return PAAS_SERVICE_MATRIX_LABELS[value] || value || 'Unknown';
+}
+
+function normalizePaaSMatrixStatus(row) {
+  const rawStatus = String((row && row.status) || '').trim().toUpperCase();
+  if (row && row.available === true) {
+    return 'OK';
+  }
+  if (rawStatus === 'LIMITED') {
+    return 'LIMITED';
+  }
+  if (rawStatus === 'CONSTRAINED' || rawStatus === 'RESTRICTED') {
+    return 'CONSTRAINED';
+  }
+  if (rawStatus === 'AVAILABLE' || rawStatus === 'DEFAULT') {
+    return 'OK';
+  }
+  return 'BLOCKED';
+}
+
+function buildPaaSRegionMatrix(rows) {
+  const normalizedRows = Array.isArray(rows) ? rows : [];
+  const regionMap = new Map();
+  const serviceSet = new Set();
+
+  normalizedRows.forEach((row) => {
+    const region = String((row && row.region) || '').trim().toLowerCase();
+    const service = String((row && row.service) || '').trim();
+    if (!region || !service) {
+      return;
+    }
+
+    serviceSet.add(service);
+    if (!regionMap.has(region)) {
+      regionMap.set(region, {});
+    }
+
+    const currentRegion = regionMap.get(region);
+    if (!currentRegion[service]) {
+      currentRegion[service] = {
+        totalRows: 0,
+        availableCount: 0,
+        statuses: new Set()
+      };
+    }
+
+    const cell = currentRegion[service];
+    cell.totalRows += 1;
+    if (row && row.available) {
+      cell.availableCount += 1;
+    }
+    cell.statuses.add(normalizePaaSMatrixStatus(row));
+  });
+
+  const services = [...serviceSet].sort((left, right) => formatPaaSMatrixServiceLabel(left).localeCompare(formatPaaSMatrixServiceLabel(right)));
+
+  function resolveCellStatus(cell) {
+    if (!cell) {
+      return 'EMPTY';
+    }
+
+    const statuses = [...cell.statuses];
+    const hasOk = statuses.includes('OK');
+    const hasLimited = statuses.includes('LIMITED');
+    const hasConstrained = statuses.includes('CONSTRAINED');
+    const hasBlocked = statuses.includes('BLOCKED');
+
+    if (hasOk && (hasLimited || hasConstrained || hasBlocked)) return 'PARTIAL';
+    if (hasOk) return 'OK';
+    if (hasLimited) return 'LIMITED';
+    if (hasConstrained) return 'CONSTRAINED';
+    return 'BLOCKED';
+  }
+
+  function resolveRowStatus(serviceMap) {
+    const statuses = services.map((service) => resolveCellStatus(serviceMap[service])).filter((status) => status !== 'EMPTY');
+    if (statuses.includes('OK')) return 'OK';
+    if (statuses.includes('PARTIAL') || statuses.includes('LIMITED') || statuses.includes('CONSTRAINED')) return 'CAUTION';
+    return 'BLOCKED';
+  }
+
+  return {
+    services,
+    rows: [...regionMap.entries()].sort((left, right) => left[0].localeCompare(right[0])).map(([region, serviceMap]) => ({
+      region,
+      serviceMap,
+      rowStatus: resolveRowStatus(serviceMap),
+      readyServiceCount: services.filter((service) => {
+        const status = resolveCellStatus(serviceMap[service]);
+        return status === 'OK' || status === 'PARTIAL';
+      }).length
+    })),
+    resolveCellStatus
+  };
+}
+
+function transposePaaSRegionMatrix(matrix) {
+  const source = matrix || { services: [], rows: [], resolveCellStatus: () => 'EMPTY' };
+  const regions = Array.isArray(source.rows)
+    ? source.rows.map((row) => row.region).filter(Boolean)
+    : [];
+  const services = Array.isArray(source.services) ? source.services : [];
+  const resolveCellStatus = typeof source.resolveCellStatus === 'function'
+    ? source.resolveCellStatus
+    : (() => 'EMPTY');
+
+  return {
+    regions,
+    rows: services.map((service) => {
+      const regionMap = {};
+      let readyRegionCount = 0;
+      let rowStatus = 'BLOCKED';
+
+      (source.rows || []).forEach((row) => {
+        const cell = row && row.serviceMap ? row.serviceMap[service] : null;
+        regionMap[row.region] = cell;
+        const status = resolveCellStatus(cell);
+        if (status === 'OK' || status === 'PARTIAL') {
+          readyRegionCount += 1;
+          rowStatus = 'OK';
+        } else if (rowStatus !== 'OK' && (status === 'LIMITED' || status === 'CONSTRAINED')) {
+          rowStatus = 'CAUTION';
+        }
+      });
+
+      return {
+        service,
+        regionMap,
+        rowStatus,
+        readyRegionCount
+      };
+    }),
+    resolveCellStatus
+  };
+}
+
 function deriveRegionHealth(rows) {
   const byRegion = new Map();
   (rows || []).forEach((row) => {
@@ -842,6 +1067,28 @@ function normalizeSearchText(value) {
     .replace(/[^a-z0-9]+/g, '');
 }
 
+function formatNullableNumber(value) {
+  return value == null || value === '' ? 'n/a' : formatNumber(value);
+}
+
+function formatPaaSMetric(row) {
+  const primary = row.metricPrimary == null || row.metricPrimary === '' ? '' : String(row.metricPrimary);
+  const secondary = row.metricSecondary == null || row.metricSecondary === '' ? '' : String(row.metricSecondary);
+  if (primary && secondary) return `${primary} / ${secondary}`;
+  return primary || secondary || 'n/a';
+}
+
+function getPaaSSubscriptionScope(metadata) {
+  const diagnostics = metadata && typeof metadata === 'object' ? metadata.executionDiagnostics : null;
+  const subscriptionId = String((diagnostics && diagnostics.currentSubscriptionId) || (metadata && metadata.currentSubscriptionId) || '').trim();
+  const subscriptionName = String((diagnostics && diagnostics.currentSubscriptionName) || (metadata && metadata.currentSubscriptionName) || '').trim();
+
+  if (subscriptionName && subscriptionId) return `${subscriptionName} (${subscriptionId})`;
+  if (subscriptionId) return subscriptionId;
+  if (subscriptionName) return subscriptionName;
+  return 'not recorded';
+}
+
 function compareSortValues(a, b) {
   if (a === b) return 0;
   if (a === null || a === undefined || a === '') return 1;
@@ -876,10 +1123,26 @@ function resolveSortValue(row, column) {
   return value == null ? null : value;
 }
 
-function DataTable({ title, subtitle, columns, rows, emptyMessage, tableClassName, sectionClassName }) {
+function getStatusSortValue(value, count = 0) {
+  const normalized = String(value || '').trim().toUpperCase();
+  const rank = {
+    OK: 5,
+    PARTIAL: 4,
+    LIMITED: 3,
+    CAUTION: 3,
+    CONSTRAINED: 2,
+    BLOCKED: 1,
+    EMPTY: 0
+  }[normalized] ?? 0;
+  return (rank * 1000) + Math.max(0, Number(count) || 0);
+}
+
+function DataTable({ title, subtitle, columns, rows, emptyMessage, tableClassName, sectionClassName, pageSize = 0 }) {
   const [sort, setSort] = useState({ key: null, direction: 'asc' });
+  const [currentPage, setCurrentPage] = useState(1);
 
   const sortableColumns = columns || [];
+  const normalizedPageSize = Number(pageSize) > 0 ? Number(pageSize) : 0;
 
   const handleSort = (column) => {
     if (column.sortable === false) return;
@@ -902,6 +1165,33 @@ function DataTable({ title, subtitle, columns, rows, emptyMessage, tableClassNam
     });
     return copy;
   }, [rows, sort.key, sort.direction, sortableColumns]);
+
+  const pageCount = useMemo(() => {
+    if (!normalizedPageSize) return 1;
+    return Math.max(1, Math.ceil((Array.isArray(sortedRows) ? sortedRows.length : 0) / normalizedPageSize));
+  }, [sortedRows, normalizedPageSize]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [rows, normalizedPageSize]);
+
+  useEffect(() => {
+    if (currentPage > pageCount) {
+      setCurrentPage(pageCount);
+    }
+  }, [currentPage, pageCount]);
+
+  const pagedRows = useMemo(() => {
+    if (!normalizedPageSize) {
+      return Array.isArray(sortedRows) ? sortedRows : [];
+    }
+
+    const startIndex = (currentPage - 1) * normalizedPageSize;
+    return (Array.isArray(sortedRows) ? sortedRows : []).slice(startIndex, startIndex + normalizedPageSize);
+  }, [sortedRows, currentPage, normalizedPageSize]);
+
+  const pageStart = normalizedPageSize && sortedRows.length > 0 ? ((currentPage - 1) * normalizedPageSize) + 1 : (sortedRows.length > 0 ? 1 : 0);
+  const pageEnd = normalizedPageSize ? Math.min(currentPage * normalizedPageSize, sortedRows.length) : sortedRows.length;
 
   return (
     <section className={classNames('rx-panel', 'rx-panel--table', sectionClassName)}>
@@ -931,9 +1221,9 @@ function DataTable({ title, subtitle, columns, rows, emptyMessage, tableClassNam
             })}</tr>
           </thead>
           <tbody>
-            {sortedRows.length === 0 ? (
+            {pagedRows.length === 0 ? (
               <tr><td className="rx-empty" colSpan={columns.length}>{emptyMessage}</td></tr>
-            ) : sortedRows.map((row, index) => (
+            ) : pagedRows.map((row, index) => (
               <tr key={[
                 row.id,
                 row.analysisRunId,
@@ -944,6 +1234,7 @@ function DataTable({ title, subtitle, columns, rows, emptyMessage, tableClassNam
                 row.quotaName,
                 row.sku,
                 row.subscriptionName,
+                currentPage,
                 index
               ].filter((value) => value !== undefined && value !== null && value !== '').join('|')}>
                 {columns.map((column) => <td key={column.key} className={column.cellClassName}>{column.render ? column.render(row) : (row[column.key] == null ? 'n/a' : row[column.key])}</td>)}
@@ -951,6 +1242,141 @@ function DataTable({ title, subtitle, columns, rows, emptyMessage, tableClassNam
             ))}
           </tbody>
         </table>
+      </div>
+      {normalizedPageSize && sortedRows.length > 0 ? <div className="rx-table-footer"><span className="rx-selected-count">Showing {formatNumber(pageStart)}-{formatNumber(pageEnd)} of {formatNumber(sortedRows.length)}</span><div className="rx-pagination"><button className="rx-button rx-button--secondary" type="button" disabled={currentPage <= 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}>Previous</button><span className="rx-selected-count">Page {formatNumber(currentPage)} of {formatNumber(pageCount)}</span><button className="rx-button rx-button--secondary" type="button" disabled={currentPage >= pageCount} onClick={() => setCurrentPage((page) => Math.min(pageCount, page + 1))}>Next</button></div></div> : null}
+    </section>
+  );
+}
+
+function SortableMatrixTable({
+  title,
+  subtitle,
+  primaryColumn,
+  statusColumn,
+  readyColumn,
+  dynamicColumns,
+  rows,
+  emptyMessage,
+  rowKey,
+  getRowClassName,
+  renderDynamicCell,
+  getDynamicSortValue,
+  tableClassName
+}) {
+  const [sort, setSort] = useState({ key: primaryColumn.key, direction: 'asc' });
+
+  const columns = [
+    primaryColumn,
+    statusColumn,
+    readyColumn,
+    ...(Array.isArray(dynamicColumns) ? dynamicColumns.map((column) => ({ ...column, sortKey: `dynamic:${column.key}` })) : [])
+  ];
+
+  const handleSort = (column) => {
+    setSort((current) => {
+      const targetKey = column.sortKey || column.key;
+      if (current.key === targetKey) {
+        return { key: targetKey, direction: current.direction === 'asc' ? 'desc' : 'asc' };
+      }
+      return { key: targetKey, direction: 'asc' };
+    });
+  };
+
+  const sortedRows = useMemo(() => {
+    const copy = Array.isArray(rows) ? [...rows] : [];
+    const activeColumn = columns.find((column) => (column.sortKey || column.key) === sort.key);
+    if (!activeColumn) {
+      return copy;
+    }
+
+    copy.sort((left, right) => {
+      let result;
+      if (String(sort.key).startsWith('dynamic:')) {
+        const dynamicKey = String(sort.key).slice('dynamic:'.length);
+        result = compareSortValues(getDynamicSortValue(left, dynamicKey), getDynamicSortValue(right, dynamicKey));
+      } else {
+        result = compareSortValues(resolveSortValue(left, activeColumn), resolveSortValue(right, activeColumn));
+      }
+      return sort.direction === 'desc' ? -result : result;
+    });
+
+    return copy;
+  }, [columns, getDynamicSortValue, rows, sort.direction, sort.key]);
+
+  return (
+    <section className="rx-panel rx-panel--table rx-panel--compact">
+      <div className="rx-panel__header">
+        <div>
+          <h2>{title}</h2>
+          {subtitle ? <p>{subtitle}</p> : null}
+        </div>
+      </div>
+      <div className="rx-table-wrap">
+        <table className={classNames('rx-table', 'rx-table--dense', tableClassName)}>
+          <thead>
+            <tr>
+              {columns.map((column) => {
+                const key = column.sortKey || column.key;
+                const isActive = sort.key === key;
+                const indicator = isActive ? (sort.direction === 'asc' ? ' ▲' : ' ▼') : '';
+                return (
+                  <th
+                    key={key}
+                    className={classNames('rx-th--sortable', isActive ? 'rx-th--sorted' : null)}
+                    onClick={() => handleSort(column)}
+                    role="button"
+                    aria-sort={isActive ? (sort.direction === 'asc' ? 'ascending' : 'descending') : 'none'}
+                    title="Click to sort"
+                  >{column.label}{indicator}</th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {sortedRows.length === 0 ? (
+              <tr><td className="rx-empty" colSpan={columns.length}>{emptyMessage}</td></tr>
+            ) : sortedRows.map((row) => (
+              <tr key={rowKey(row)} className={getRowClassName(row)}>
+                <td className="rx-matrix-family">{primaryColumn.render ? primaryColumn.render(row) : row[primaryColumn.key]}</td>
+                <td>{statusColumn.render ? statusColumn.render(row) : row[statusColumn.key]}</td>
+                <td>{readyColumn.render ? readyColumn.render(row) : row[readyColumn.key]}</td>
+                {(Array.isArray(dynamicColumns) ? dynamicColumns : []).map((column) => (
+                  <td key={column.key}>{renderDynamicCell(row, column.key)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function ServerPagination({ pagination, onPageChange, onPageSizeChange }) {
+  const pageNumber = Math.max(1, Number(pagination && pagination.pageNumber) || 1);
+  const pageSize = Math.max(1, Number(pagination && pagination.pageSize) || 50);
+  const total = Math.max(0, Number(pagination && pagination.total) || 0);
+  const pageCount = Math.max(1, Number(pagination && pagination.pageCount) || 1);
+  const hasPrev = pageNumber > 1;
+  const hasNext = pageNumber < pageCount;
+  const pageStart = total > 0 ? ((pageNumber - 1) * pageSize) + 1 : 0;
+  const pageEnd = total > 0 ? Math.min(pageNumber * pageSize, total) : 0;
+
+  return (
+    <section className="rx-panel rx-panel--compact rx-panel--table">
+      <div className="rx-table-footer rx-table-footer--server">
+        <span className="rx-selected-count">Showing {formatNumber(pageStart)}-{formatNumber(pageEnd)} of {formatNumber(total)}</span>
+        <label className="rx-pagination__page-size">
+          <span className="rx-selected-count">Rows per page</span>
+          <select value={String(pageSize)} onChange={(event) => onPageSizeChange(Number(event.target.value || 50))}>
+            {[25, 50, 100, 250].map((option) => <option key={option} value={option}>{option}</option>)}
+          </select>
+        </label>
+        <div className="rx-pagination">
+          <button className="rx-button rx-button--secondary" type="button" disabled={!hasPrev} onClick={() => onPageChange(pageNumber - 1)}>Previous</button>
+          <span className="rx-selected-count">Page {formatNumber(pageNumber)} of {formatNumber(pageCount)}</span>
+          <button className="rx-button rx-button--secondary" type="button" disabled={!hasNext} onClick={() => onPageChange(pageNumber + 1)}>Next</button>
+        </div>
       </div>
     </section>
   );
@@ -1800,6 +2226,9 @@ function QuotaWorkbenchView(props) {
 
 function App() {
   const deploymentEnvironment = useMemo(() => detectDeploymentEnvironment(), []);
+  const capacityGridRequestRef = useRef(0);
+  const analyticsRequestRef = useRef(0);
+  const capacityScoreRequestRef = useRef(0);
   const [auth, setAuth] = useState(null);
   const [authResolved, setAuthResolved] = useState(false);
   const [appStatus, setAppStatus] = useState({ tone: 'info', message: 'Loading React experience...' });
@@ -1817,6 +2246,7 @@ function App() {
   const [familyRows, setFamilyRows] = useState([]);
   const [capacityScores, setCapacityScores] = useState({ rows: [], pagination: { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false }, subscriptionSummary: [], desiredCount: '1', status: { tone: 'info', message: 'Load or refresh live placement to populate saved capacity score snapshots.', detail: '' }, busy: false });
   const [aiModelState, setAiModelState] = useState({ rows: [], regions: [], loading: false, status: { tone: 'info', message: 'AI model availability report ready.', detail: 'Open the sidebar report to review Azure AI model and provider coverage.' } });
+  const [paasState, setPaaSState] = useState({ rows: [], summary: { rowCount: 0, serviceSummary: [], requestedService: 'All', requestedRegionPreset: 'USMajor', requestedRegions: [] }, facets: { services: [], regions: [], categories: [] }, filters: { service: 'All', regionPreset: 'USMajor' }, status: { tone: 'info', message: 'Load cached PaaS availability or refresh to run a live scan.' }, busy: { load: false, refresh: false }, capturedAtUtc: null, metadata: null });
   const [exportBusyFormat, setExportBusyFormat] = useState('');
   const [recommendState, setRecommendState] = useState({ targetSku: '', autoTargetSku: '', regions: '', autoRegions: '', topN: 10, minScore: 50, showPricing: true, showSpot: false, result: null, status: { tone: 'info', message: 'Run the recommender to populate alternatives.' }, busy: false });
   const [aiModelFilters, setAiModelFilters] = useState({ modelName: '', provider: 'all', deploymentType: 'all', fineTuning: 'all', defaultOnly: false });
@@ -1852,6 +2282,8 @@ function App() {
       : 'Select the target family for live placement refresh.');
 
   const visibleViews = useMemo(() => REPORT_VIEWS.filter((view) => !view.adminOnly || auth?.canAccessAdmin), [auth]);
+  const reportingViews = useMemo(() => visibleViews.filter((view) => !view.adminOnly).sort((left, right) => left.label.localeCompare(right.label)), [visibleViews]);
+  const adminViews = useMemo(() => visibleViews.filter((view) => view.adminOnly).sort((left, right) => left.label.localeCompare(right.label)), [visibleViews]);
 
   const filteredAnalyticsRows = useMemo(() => (analyticsRows || [])
     .filter((row) => rowMatchesResourceType(row, filters.resourceType))
@@ -1907,6 +2339,14 @@ function App() {
       return byPreset && byRegion && bySearch && byProvider && byDeployment && byFineTuning && byDefault;
     });
   }, [aiModelFilters.defaultOnly, aiModelFilters.deploymentType, aiModelFilters.fineTuning, aiModelFilters.modelName, aiModelFilters.provider, aiModelState.rows, filters.region, filters.regionPreset]);
+  const filteredPaaSRows = useMemo(() => filterPaaSRowsByScope(paasState.rows, filters.regionPreset, filters.region), [paasState.rows, filters.regionPreset, filters.region]);
+  const filteredPaaSData = useMemo(() => summarizePaaSRows(filteredPaaSRows), [filteredPaaSRows]);
+  const paasMatrix = useMemo(() => buildPaaSRegionMatrix(filteredPaaSRows), [filteredPaaSRows]);
+  const transposedPaaSMatrix = useMemo(() => transposePaaSRegionMatrix(paasMatrix), [paasMatrix]);
+  const paasSubscriptionScope = useMemo(() => getPaaSSubscriptionScope(paasState.metadata), [paasState.metadata]);
+  const paasSubscriptionNote = selectedSubscriptionIds.length > 0
+    ? `Sidebar subscription selections (${formatNumber(selectedSubscriptionIds.length)}) do not filter PaaS yet. This snapshot reflects the worker subscription scope shown here.`
+    : 'PaaS rows are not filtered by the sidebar subscription picker yet. This snapshot reflects the worker subscription scope shown here.';
   const isAdminView = Boolean(auth?.canAccessAdmin && activeView === 'admin');
 
   useEffect(() => {
@@ -2035,6 +2475,57 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!authResolved) {
+      return;
+    }
+
+    async function loadPaaSSnapshot() {
+      setPaaSState((current) => ({
+        ...current,
+        busy: { ...current.busy, load: true },
+        status: current.rows.length > 0
+          ? current.status
+          : { tone: 'info', message: 'Loading cached PaaS availability snapshot...' }
+      }));
+
+      try {
+        const query = new URLSearchParams();
+        if (paasState.filters.service && paasState.filters.service !== 'All') {
+          query.set('service', paasState.filters.service);
+        }
+
+        const payload = await fetchJson(`/api/paas-availability${query.toString() ? `?${query.toString()}` : ''}`);
+        const rows = Array.isArray(payload.rows) ? payload.rows : [];
+        setPaaSState((current) => ({
+          ...current,
+          rows,
+          summary: payload.summary || { rowCount: rows.length, serviceSummary: [] },
+          facets: payload.facets || { services: [], regions: [], categories: [] },
+          capturedAtUtc: payload.capturedAtUtc || null,
+          metadata: payload.metadata || null,
+          busy: { ...current.busy, load: false },
+          status: rows.length > 0
+            ? { tone: 'success', message: `Showing cached PaaS availability snapshot from ${formatTimestamp(payload.capturedAtUtc)}.` }
+            : { tone: 'warn', message: 'No cached PaaS availability snapshot found yet. Run Refresh to capture one.' }
+        }));
+      } catch (error) {
+        setPaaSState((current) => ({
+          ...current,
+          rows: [],
+          summary: { rowCount: 0, serviceSummary: [], requestedService: current.filters.service, requestedRegionPreset: current.filters.regionPreset, requestedRegions: [] },
+          facets: { services: [], regions: [], categories: [] },
+          capturedAtUtc: null,
+          metadata: null,
+          busy: { ...current.busy, load: false },
+          status: { tone: 'error', message: error.message || 'Failed to load cached PaaS availability.' }
+        }));
+      }
+    }
+
+    loadPaaSSnapshot();
+  }, [authResolved, paasState.filters.service]);
+
+  useEffect(() => {
     if (filters.region === 'all') {
       return;
     }
@@ -2085,10 +2576,20 @@ function App() {
   }
 
   useEffect(() => {
+    if (activeView !== 'capacity-grid') {
+      return;
+    }
+
+    const requestId = capacityGridRequestRef.current + 1;
+    capacityGridRequestRef.current = requestId;
+
     async function loadCapacityGrid() {
       try {
         const query = new URLSearchParams({ ...queryFilters, pageNumber: String(capacityData.pagination.pageNumber || 1), pageSize: String(capacityData.pagination.pageSize || 50) });
         const payload = await fetchJson(`/api/capacity/paged?${query.toString()}`);
+        if (capacityGridRequestRef.current !== requestId) {
+          return;
+        }
         const sanitizedRegions = (Array.isArray(payload.facets && payload.facets.regions) ? payload.facets.regions : []).filter(isDisplayableRegion);
         const sanitizedFamilies = (Array.isArray(payload.facets && payload.facets.families) ? payload.facets.families : []).filter(isDisplayableFamily);
         const canonicalFamilies = buildFamilyOptions(sanitizedFamilies).map((option) => option.value);
@@ -2099,12 +2600,15 @@ function App() {
           pagination: payload.pagination || { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false }
         });
       } catch (error) {
+        if (capacityGridRequestRef.current !== requestId) {
+          return;
+        }
         setCapacityData({ rows: [], summary: null, facets: { regions: [], families: [] }, pagination: { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false } });
         setAppStatus({ tone: 'error', message: error.message || 'Failed to load capacity grid.' });
       }
     }
     loadCapacityGrid();
-  }, [queryFilters, capacityData.pagination.pageNumber, capacityData.pagination.pageSize]);
+  }, [activeView, queryFilters, capacityData.pagination.pageNumber, capacityData.pagination.pageSize]);
 
   useEffect(() => {
     if (activeView !== 'ai-model-availability') {
@@ -2124,20 +2628,25 @@ function App() {
   }, [filters.resourceType, filters.provider, aiQuotaProviderOptions]);
 
   useEffect(() => {
+    const requestId = analyticsRequestRef.current + 1;
+    analyticsRequestRef.current = requestId;
+
     async function loadAnalytics() {
       const query = new URLSearchParams(queryFilters);
       const trendQuery = new URLSearchParams({ ...queryFilters, days: '7' }).toString();
-      const scoreQuery = new URLSearchParams({ ...queryFilters, desiredCount: String(normalizeDesiredPlacementCount(capacityScores.desiredCount)), pageNumber: '1', pageSize: '50' }).toString();
 
       const results = await Promise.allSettled([
         fetchJson(`/api/capacity?${query.toString()}`),
         fetchJsonWithRetry(`/api/capacity/trends?${trendQuery}`),
         fetchJson(`/api/capacity/families?${new URLSearchParams({ ...queryFilters, family: 'all' }).toString()}`),
-        fetchJson(`/api/capacity/scores?${scoreQuery}`),
         fetchJson(`/api/capacity/subscriptions?${query.toString()}`)
       ]);
 
-      const [capacityResult, trendResult, familyResult, scoreResult, subSummaryResult] = results;
+      if (analyticsRequestRef.current !== requestId) {
+        return;
+      }
+
+      const [capacityResult, trendResult, familyResult, subSummaryResult] = results;
       const failures = results.filter((result) => result.status === 'rejected');
 
       if (capacityResult.status === 'fulfilled') {
@@ -2154,27 +2663,15 @@ function App() {
         setFamilyRows(Array.isArray(familyResult.value.rows) ? familyResult.value.rows : []);
       }
 
-      if (scoreResult.status === 'fulfilled' || subSummaryResult.status === 'fulfilled') {
+      if (subSummaryResult.status === 'fulfilled') {
         setCapacityScores((current) => {
-          const rows = scoreResult.status === 'fulfilled' && Array.isArray(scoreResult.value.rows) ? scoreResult.value.rows : current.rows;
           const desiredCount = String(normalizeDesiredPlacementCount(current.desiredCount));
           return {
             ...current,
-            rows,
-            pagination: scoreResult.status === 'fulfilled'
-              ? (scoreResult.value.pagination || { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false })
-              : current.pagination,
-            subscriptionSummary: subSummaryResult.status === 'fulfilled' && Array.isArray(subSummaryResult.value.rows)
+            subscriptionSummary: Array.isArray(subSummaryResult.value.rows)
               ? subSummaryResult.value.rows
               : current.subscriptionSummary,
-            desiredCount,
-            status: scoreResult.status === 'fulfilled'
-              ? {
-                  tone: 'info',
-                  message: buildCapacityScoreSnapshotMessage(rows, desiredCount),
-                  detail: ''
-                }
-              : current.status
+            desiredCount
           };
         });
       }
@@ -2185,7 +2682,63 @@ function App() {
       }
     }
     loadAnalytics();
-  }, [queryFilters, capacityScores.desiredCount]);
+  }, [queryFilters]);
+
+  useEffect(() => {
+    const requestId = capacityScoreRequestRef.current + 1;
+    capacityScoreRequestRef.current = requestId;
+    setCapacityScores((current) => ({ ...current, busy: true }));
+
+    async function loadCapacityScores() {
+      const scoreQuery = new URLSearchParams({
+        ...queryFilters,
+        desiredCount: String(normalizeDesiredPlacementCount(capacityScores.desiredCount)),
+        pageNumber: String(capacityScores.pagination.pageNumber || 1),
+        pageSize: String(capacityScores.pagination.pageSize || 50)
+      }).toString();
+
+      try {
+        const payload = await fetchJson(`/api/capacity/scores?${scoreQuery}`);
+        if (capacityScoreRequestRef.current !== requestId) {
+          return;
+        }
+
+        setCapacityScores((current) => {
+          const rows = Array.isArray(payload.rows) ? payload.rows : [];
+          const desiredCount = String(normalizeDesiredPlacementCount(current.desiredCount));
+          return {
+            ...current,
+            rows,
+            pagination: payload.pagination || { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false },
+            desiredCount,
+            busy: false,
+            status: {
+              tone: 'info',
+              message: buildCapacityScoreSnapshotMessage(rows, desiredCount),
+              detail: ''
+            }
+          };
+        });
+      } catch (error) {
+        if (capacityScoreRequestRef.current !== requestId) {
+          return;
+        }
+
+        setCapacityScores((current) => ({
+          ...current,
+          rows: [],
+          busy: false,
+          status: {
+            tone: 'error',
+            message: error.message || 'Failed to load capacity score data.',
+            detail: 'The requested Capacity Score page could not be loaded.'
+          }
+        }));
+      }
+    }
+
+    loadCapacityScores();
+  }, [queryFilters, capacityScores.desiredCount, capacityScores.pagination.pageNumber, capacityScores.pagination.pageSize]);
 
   useEffect(() => {
     async function loadQuotaGroups() {
@@ -2424,6 +2977,48 @@ function App() {
       setRecommendState((current) => ({ ...current, result, busy: false, status: { tone: count === 0 ? 'warn' : 'success', message: zeroResultMessage, detail: zeroResultDetailParts.join(' ') || null } }));
     } catch (error) {
       setRecommendState((current) => ({ ...current, result: null, busy: false, status: { tone: 'error', message: error.message || 'Failed to run recommendations.' } }));
+    }
+  }
+
+  async function refreshPaaSAvailability() {
+    const requestService = paasState.filters.service || 'All';
+    const requestRegion = filters.region && filters.region !== 'all' ? filters.region : null;
+    const requestRegionPreset = requestRegion ? null : (filters.regionPreset || 'USMajor');
+
+    setPaaSState((current) => ({
+      ...current,
+      busy: { ...current.busy, refresh: true },
+      status: { tone: 'info', message: `Refreshing PaaS availability for ${requestService}${requestRegion ? ` in ${requestRegion}` : ''}...` }
+    }));
+
+    try {
+      const payload = await fetchJson('/api/paas-availability/refresh', {
+        method: 'POST',
+        body: JSON.stringify({
+          service: requestService,
+          regionPreset: requestRegionPreset || undefined,
+          regions: requestRegion ? [requestRegion] : undefined,
+          sqlResourceType: 'SqlDatabase'
+        })
+      });
+
+      const rows = Array.isArray(payload.rows) ? payload.rows : [];
+      setPaaSState((current) => ({
+        ...current,
+        rows,
+        summary: payload.summary || { rowCount: rows.length, serviceSummary: [] },
+        facets: payload.facets || { services: [], regions: [], categories: [] },
+        capturedAtUtc: payload.capturedAtUtc || null,
+        metadata: payload.metadata || null,
+        busy: { ...current.busy, refresh: false },
+        status: { tone: 'success', message: `PaaS availability refreshed and saved at ${formatTimestamp(payload.capturedAtUtc)}.` }
+      }));
+    } catch (error) {
+      setPaaSState((current) => ({
+        ...current,
+        busy: { ...current.busy, refresh: false },
+        status: { tone: 'error', message: error.message || 'Failed to refresh PaaS availability.' }
+      }));
     }
   }
 
@@ -2799,7 +3394,7 @@ function App() {
 
   const viewContent = (() => {
     if (activeView === 'capacity-grid') {
-      return <DataTable key="capacity-grid" title="Capacity Grid" subtitle="Server-paged capacity observations using the shared API contract." columns={[{ key: 'subscriptionName', label: 'Subscription', headerClassName: 'rx-capacity-grid__subscription', cellClassName: 'rx-capacity-grid__subscription' }, { key: 'region', label: 'Region' }, { key: 'sku', label: 'SKU', render: (row) => normalizeSkuName(row.sku) || 'n/a' }, { key: 'family', label: 'Family', render: (row) => formatFamilyLabel(row.family) || 'n/a' }, ...(filters.resourceType === 'AI' ? [{ key: 'provider', label: 'AI Provider', render: (row) => getAIQuotaProviderDisplay(row), sortValue: (row) => getAIQuotaProviderLabel(row) }] : []), { key: 'availability', label: 'Availability', render: (row) => <StatusPill value={row.availability} /> }, { key: 'quotaCurrent', label: 'Current', render: (row) => formatNumber(row.quotaCurrent) }, { key: 'quotaLimit', label: 'Limit', render: (row) => formatNumber(row.quotaLimit) }, { key: 'available', label: 'Available', render: (row) => formatNumber(Number(row.quotaLimit || 0) - Number(row.quotaCurrent || 0)) }]} rows={capacityData.rows} emptyMessage="No capacity rows returned for the current filters." />;
+      return <div className="rx-view-stack"><DataTable key="capacity-grid" title="Capacity Grid" subtitle="Server-paged capacity observations using the shared API contract." columns={[{ key: 'subscriptionName', label: 'Subscription', headerClassName: 'rx-capacity-grid__subscription', cellClassName: 'rx-capacity-grid__subscription' }, { key: 'region', label: 'Region' }, { key: 'sku', label: 'SKU', render: (row) => normalizeSkuName(row.sku) || 'n/a' }, { key: 'family', label: 'Family', render: (row) => formatFamilyLabel(row.family) || 'n/a' }, ...(filters.resourceType === 'AI' ? [{ key: 'provider', label: 'AI Provider', render: (row) => getAIQuotaProviderDisplay(row), sortValue: (row) => getAIQuotaProviderLabel(row) }] : []), { key: 'availability', label: 'Availability', render: (row) => <StatusPill value={row.availability} /> }, { key: 'quotaCurrent', label: 'Current', render: (row) => formatNumber(row.quotaCurrent) }, { key: 'quotaLimit', label: 'Limit', render: (row) => formatNumber(row.quotaLimit) }, { key: 'available', label: 'Available', render: (row) => formatNumber(Number(row.quotaLimit || 0) - Number(row.quotaCurrent || 0)) }]} rows={capacityData.rows} emptyMessage="No capacity rows returned for the current filters." /><ServerPagination pagination={capacityData.pagination} onPageChange={(pageNumber) => setCapacityData((current) => ({ ...current, pagination: { ...current.pagination, pageNumber: Math.max(1, pageNumber) } }))} onPageSizeChange={(pageSize) => setCapacityData((current) => ({ ...current, pagination: { ...current.pagination, pageNumber: 1, pageSize: Math.max(1, pageSize) } }))} /></div>;
     }
     if (activeView === 'region-health') {
       return <DataTable key="region-health" title="Region Health" subtitle="Computed from the same capacity observations used by the classic dashboard." columns={[{ key: 'region', label: 'Region' }, { key: 'totalRows', label: 'Total Rows', render: (row) => formatNumber(row.totalRows) }, { key: 'deployableRows', label: 'Deployable', render: (row) => formatNumber(row.deployableRows) }, { key: 'constrainedRows', label: 'Constrained', render: (row) => formatNumber(row.constrainedRows) }, { key: 'totalQuotaHeadroom', label: 'Quota Headroom', render: (row) => formatNumber(Math.round(row.totalQuotaHeadroom)) }, { key: 'deployableFamilyCount', label: 'Deployable Families', render: (row) => formatNumber(row.deployableFamilyCount) }, { key: 'deployableSubscriptionCount', label: 'Subscriptions', render: (row) => formatNumber(row.deployableSubscriptionCount) }, ...(filters.resourceType === 'AI' ? [{ key: 'providers', label: 'Providers', render: (row) => row.providers.join(', ') || 'n/a', sortValue: (row) => row.providers.join(',') }] : []), { key: 'topConstrainedFamilies', label: 'Top Constrained Families', render: (row) => row.topConstrainedFamilies.join(', ') || 'n/a' }]} rows={regionHealth} emptyMessage="No region health data for this filter scope." />;
@@ -2808,6 +3403,9 @@ function App() {
       const recommendations = Array.isArray(recommendState.result && recommendState.result.recommendations) ? recommendState.result.recommendations : [];
       return <div className="rx-view-stack"><Banner tone={recommendState.status.tone} message={recommendState.status.message} detail={recommendState.status.detail} /><section className="rx-panel"><div className="rx-panel__header"><div><h2>Capacity Recommender</h2><p>Same backend recommendation API, but staged into a clearer React workflow.</p></div></div><div className="rx-field-grid rx-field-grid--filters"><label className="rx-field"><span>Target SKU</span><input className="rx-input" value={recommendState.targetSku} onChange={(event) => setRecommendState({ ...recommendState, targetSku: normalizeSkuName(event.target.value), autoTargetSku: recommendState.autoTargetSku })} placeholder="Standard_D4s_v5" /></label><label className="rx-field"><span>Regions</span><input className="rx-input" value={recommendState.regions} onChange={(event) => setRecommendState({ ...recommendState, regions: event.target.value, autoRegions: recommendState.autoRegions })} placeholder="eastus,westus2" /></label><label className="rx-field"><span>Top N</span><input className="rx-input" type="number" min="1" max="25" value={recommendState.topN} onChange={(event) => setRecommendState({ ...recommendState, topN: Number(event.target.value || 10) })} /></label><label className="rx-field"><span>Min Score</span><input className="rx-input" type="number" min="0" max="100" value={recommendState.minScore} onChange={(event) => setRecommendState({ ...recommendState, minScore: Number(event.target.value || 50) })} /></label></div><div className="rx-inline-actions"><span className="rx-selected-count">Scoped default SKU: {recommendedTargetSku || 'n/a'}</span><span className="rx-selected-count">Scoped default Regions: {recommendedRegions || 'n/a'}</span><label className="rx-check"><input type="checkbox" checked={recommendState.showPricing} onChange={(event) => setRecommendState({ ...recommendState, showPricing: event.target.checked })} />Show pricing</label><label className="rx-check"><input type="checkbox" checked={recommendState.showSpot} onChange={(event) => setRecommendState({ ...recommendState, showSpot: event.target.checked })} />Show spot</label><button className="rx-button" type="button" disabled={recommendState.busy} onClick={runRecommendation}>{recommendState.busy ? 'Running...' : 'Run Recommendation'}</button></div></section><DataTable title="Recommendation Results" columns={[{ key: 'rank', label: '#' }, { key: 'sku', label: 'SKU', render: (row) => normalizeSkuName(row.sku) || 'n/a' }, { key: 'region', label: 'Region' }, { key: 'vCPU', label: 'vCPU' }, { key: 'memGiB', label: 'Mem(GB)' }, { key: 'score', label: 'Score', render: (row) => `${row.score || 0}%` }, { key: 'cpu', label: 'CPU' }, { key: 'disk', label: 'Disk' }, { key: 'purpose', label: 'Type' }, { key: 'capacity', label: 'Capacity', render: (row) => <StatusPill value={row.capacity} /> }, { key: 'zonesOK', label: 'Zones' }, { key: 'priceHr', label: '$/Hr', render: (row) => formatMoney(row.priceHr, 2) }, { key: 'priceMo', label: '$/Mo', render: (row) => formatMoney(row.priceMo, 0) }]} rows={recommendations} emptyMessage="Run a recommendation to see results." /></div>;
     }
+    if (activeView === 'paas-availability') {
+      return <div className="rx-view-stack"><section className="rx-panel rx-panel--compact"><div className="rx-panel__header"><div><h2>PaaS Availability</h2><p>Runs the vendored Get-AzPaaSAvailability scanner, then serves the latest saved snapshot from SQL for fast reloads.</p></div></div><div className="rx-field-grid rx-field-grid--filters"><label className="rx-field"><span>Service Scope</span><select value={paasState.filters.service} onChange={(event) => setPaaSState((current) => ({ ...current, filters: { ...current.filters, service: event.target.value } }))}>{PAAS_SERVICE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label></div><div className="rx-inline-actions"><span className="rx-selected-count">Regional scope: {filters.region && filters.region !== 'all' ? filters.region : (filters.regionPreset || 'all preset')}</span><span className="rx-selected-count">Subscription scope: {paasSubscriptionScope}</span><span className="rx-selected-count">Latest run: {paasState.capturedAtUtc ? formatTimestamp(paasState.capturedAtUtc) : 'none yet'}</span><button className="rx-button" type="button" disabled={paasState.busy.refresh} onClick={refreshPaaSAvailability}>{paasState.busy.refresh ? 'Refreshing...' : 'Refresh PaaS Availability'}</button></div><Banner tone={paasState.status.tone} message={paasState.status.message} detail={paasSubscriptionNote} /></section><section className="rx-panel rx-panel--compact rx-panel--muted"><div className="rx-panel__header"><div><h2>Snapshot Summary</h2><p>Displayed counts honor the sidebar regional scope. Refresh uses the same scope, but subscription selection does not apply to PaaS yet.</p></div></div><div className="rx-summary-grid"><article className="rx-metric-card"><span>Entries</span><strong>{formatNumber(filteredPaaSData.rowCount)}</strong></article><article className="rx-metric-card"><span>Services</span><strong>{formatNumber(filteredPaaSData.facets.services.length)}</strong></article><article className="rx-metric-card"><span>Regions</span><strong>{formatNumber(filteredPaaSData.facets.regions.length)}</strong></article><article className="rx-metric-card"><span>Categories</span><strong>{formatNumber(filteredPaaSData.facets.categories.length)}</strong></article></div><p className="rx-selected-count">Snapshot subscription scope: {paasSubscriptionScope}. {paasSubscriptionNote}</p></section><SortableMatrixTable title="PaaS Region Matrix" subtitle="Service-by-region readiness across the current sidebar scope using the latest saved PaaS scan rows." tableClassName="rx-matrix-table rx-matrix-table--paas" primaryColumn={{ key: 'service', label: 'Service', render: (row) => formatPaaSMatrixServiceLabel(row.service) }} statusColumn={{ key: 'rowStatus', label: 'Key', render: (row) => <StatusPill value={row.rowStatus === 'CAUTION' ? 'PARTIAL' : row.rowStatus} />, sortValue: (row) => getStatusSortValue(row.rowStatus) }} readyColumn={{ key: 'readyRegionCount', label: 'Ready', render: (row) => formatNumber(row.readyRegionCount) }} dynamicColumns={transposedPaaSMatrix.regions.map((region) => ({ key: region, label: region }))} rows={transposedPaaSMatrix.rows} emptyMessage="No PaaS matrix rows available for the current scope." rowKey={(row) => row.service} getRowClassName={(row) => `rx-matrix-row rx-matrix-row--${String(row.rowStatus || 'blocked').toLowerCase()}`} getDynamicSortValue={(row, region) => { const cell = row.regionMap[region]; return getStatusSortValue(transposedPaaSMatrix.resolveCellStatus(cell), cell && cell.availableCount); }} renderDynamicCell={(row, region) => { const cell = row.regionMap[region]; const status = transposedPaaSMatrix.resolveCellStatus(cell); return <div className="rx-matrix-cell">{status === 'EMPTY' ? <span className="rx-matrix-cell__empty">-</span> : <><StatusPill value={status} />{cell && cell.availableCount > 1 ? <span className="rx-matrix-cell__count">{formatNumber(cell.availableCount)}</span> : null}</>}</div>; }} /><DataTable title="PaaS Snapshot Rows" subtitle="Latest persisted scan rows served from SQL, filtered by the sidebar regional scope. Subscription scope is shown above." tableClassName="rx-table--dense" sectionClassName="rx-panel--compact" columns={[{ key: 'service', label: 'Service' }, { key: 'region', label: 'Region' }, { key: 'category', label: 'Category' }, { key: 'name', label: 'Name', render: (row) => row.displayName || row.name || 'n/a' }, { key: 'edition', label: 'Edition', render: (row) => row.edition || 'n/a' }, { key: 'tier', label: 'Tier', render: (row) => row.tier || 'n/a' }, { key: 'status', label: 'Status', render: (row) => <StatusPill value={row.status || (row.available ? 'Available' : 'Unknown')} /> }, { key: 'quotaCurrent', label: 'Quota Used', render: (row) => formatNullableNumber(row.quotaCurrent) }, { key: 'quotaLimit', label: 'Quota Limit', render: (row) => formatNullableNumber(row.quotaLimit) }, { key: 'metric', label: 'Metric', render: (row) => formatPaaSMetric(row), sortValue: (row) => `${row.metricPrimary || ''}|${row.metricSecondary || ''}` }]} rows={filteredPaaSRows} pageSize={25} emptyMessage="No PaaS snapshot rows available for the current sidebar scope." /></div>;
+    }
     if (activeView === 'sku-chart') {
       return <DataTable key="sku-chart" title="Top SKUs" subtitle="Ranked by total available quota across the current filter scope." columns={[{ key: 'sku', label: 'SKU' }, { key: 'available', label: 'Available Quota', render: (row) => formatNumber(row.available) }]} rows={topSkus} emptyMessage="No SKU rollup data available." />;
     }
@@ -2815,13 +3413,13 @@ function App() {
       return <AIModelAvailabilityView rows={aiModelRows} status={aiModelState.status} loading={aiModelState.loading} filters={aiModelFilters} onRefresh={refreshAIModelAvailability} />;
     }
     if (activeView === 'capacity-score') {
-      return <div className="rx-view-stack"><section className="rx-panel rx-panel--compact"><div className="rx-panel__header"><div><h2>Regional SKU Capacity Score</h2><p>Derived capacity score plus the latest saved or refreshed live placement details.</p></div></div><div className="rx-field-grid rx-field-grid--filters"><label className="rx-field"><span>Desired Placement Count</span><input className="rx-input" type="number" min="1" max="1000" value={capacityScores.desiredCount} onChange={(event) => setCapacityScores((current) => ({ ...current, desiredCount: String(normalizeDesiredPlacementCount(event.target.value)) }))} /></label><label className="rx-field rx-field--wide"><span>Live Placement Subscription</span><select value={livePlacementSubscriptionId} onChange={(event) => setLivePlacementSubscriptionId(event.target.value)}><option value="">Select subscription</option>{subscriptionOptions.map((option) => <option key={option.subscriptionId} value={option.subscriptionId}>{option.subscriptionName || option.subscriptionId} ({option.subscriptionId})</option>)}</select></label><label className="rx-field"><span>Live Placement Family</span><select value={livePlacementFamily} onChange={(event) => setLivePlacementFamily(event.target.value)}><option value="">Select family</option>{capacityData.facets.families.map((family) => <option key={family} value={family}>{formatFamilyLabel(family) || family}</option>)}</select></label></div><div className="rx-inline-actions"><span className="rx-selected-count">{livePlacementScopeMessage}</span><button className="rx-button" type="button" disabled={capacityScores.busy || !canRefreshLivePlacement} onClick={refreshLivePlacement}>{capacityScores.busy ? 'Refreshing...' : 'Refresh Live Placement'}</button></div><Banner tone={capacityScores.status.tone} message={capacityScores.status.message} detail={capacityScores.status.detail} /></section><section className="rx-panel rx-panel--compact rx-panel--muted"><div className="rx-panel__header"><div><h2>Capacity Score Key</h2><p>Use this legend to distinguish saved capacity signals from live Azure placement responses.</p></div></div><div className="rx-matrix-key rx-matrix-key--compact"><div className="rx-matrix-key__group"><h3>Capacity Score</h3>{capacityScoreLegendItems().map((item) => <div key={item.value} className="rx-matrix-key__item"><StatusPill value={item.value} /><div><p>{item.description}</p></div></div>)}</div><div className="rx-matrix-key__group"><h3>Azure Live Score</h3>{livePlacementLegendItems().map((item) => <div key={item.value} className="rx-matrix-key__item"><StatusPill value={item.value} /><div><p>{item.description}</p></div></div>)}<div className="rx-matrix-key__item"><div><strong>Last Checked</strong><p>The timestamp shows when the latest live result or latest explicit unavailable result was saved.</p></div></div></div></div></section><DataTable title="Capacity Score" subtitle="Derived capacity score plus latest live placement details from SQL snapshots." tableClassName="rx-table--dense rx-capacity-score-table" sectionClassName="rx-panel--compact" columns={[{ key: 'region', label: 'Region' }, { key: 'sku', label: 'SKU', render: (row) => normalizeSkuName(row.sku) || 'n/a' }, { key: 'family', label: 'Family', render: (row) => formatFamilyLabel(row.family) || 'n/a' }, { key: 'score', label: 'Capacity Score', render: (row) => <StatusPill value={row.score} /> }, { key: 'livePlacementScore', label: 'Azure Live Score', render: (row) => row.livePlacementScore || 'n/a' }, { key: 'liveCheckedAtUtc', label: 'Checked', render: (row) => formatTimestamp(row.liveCheckedAtUtc) }, { key: 'subscriptionCount', label: 'Subscriptions', render: (row) => formatNumber(row.subscriptionCount) }, { key: 'okRows', label: 'OK', render: (row) => formatNumber(row.okRows) }, { key: 'limitedRows', label: 'Limited', render: (row) => formatNumber(row.limitedRows) }, { key: 'constrainedRows', label: 'Constrained', render: (row) => formatNumber(row.constrainedRows) }, { key: 'totalQuotaAvailable', label: 'Quota', render: (row) => formatNumber(row.totalQuotaAvailable) }, { key: 'reason', label: 'Reason', headerClassName: 'rx-capacity-score-table__reason', cellClassName: 'rx-capacity-score-table__reason', render: (row) => <span title={row.reason || ''}>{row.reason || 'n/a'}</span> }]} rows={capacityScores.rows} emptyMessage="No capacity score entries available." /><DataTable title="Subscription Summary" tableClassName="rx-table--dense" sectionClassName="rx-panel--compact" columns={[{ key: 'subscriptionKey', label: 'Subscription Key' }, { key: 'skuObservations', label: 'SKU Observations', render: (row) => formatNumber(row.skuObservations || row.totalRows) }, { key: 'constrainedObservations', label: 'Constrained', render: (row) => formatNumber(row.constrainedObservations || row.constrainedRows) }, { key: 'totalQuotaAvailable', label: 'Quota Available', render: (row) => formatNumber(row.totalQuotaAvailable) }]} rows={capacityScores.subscriptionSummary} emptyMessage="No subscription summary rows available." /></div>;
+      return <div className="rx-view-stack"><section className="rx-panel rx-panel--compact"><div className="rx-panel__header"><div><h2>Regional SKU Capacity Score</h2><p>Derived capacity score plus the latest saved or refreshed live placement details.</p></div></div><div className="rx-field-grid rx-field-grid--filters"><label className="rx-field"><span>Desired Placement Count</span><input className="rx-input" type="number" min="1" max="1000" value={capacityScores.desiredCount} onChange={(event) => setCapacityScores((current) => ({ ...current, desiredCount: String(normalizeDesiredPlacementCount(event.target.value)), pagination: { ...current.pagination, pageNumber: 1 } }))} /></label><label className="rx-field rx-field--wide"><span>Live Placement Subscription</span><select value={livePlacementSubscriptionId} onChange={(event) => setLivePlacementSubscriptionId(event.target.value)}><option value="">Select subscription</option>{subscriptionOptions.map((option) => <option key={option.subscriptionId} value={option.subscriptionId}>{option.subscriptionName || option.subscriptionId} ({option.subscriptionId})</option>)}</select></label><label className="rx-field"><span>Live Placement Family</span><select value={livePlacementFamily} onChange={(event) => setLivePlacementFamily(event.target.value)}><option value="">Select family</option>{capacityData.facets.families.map((family) => <option key={family} value={family}>{formatFamilyLabel(family) || family}</option>)}</select></label></div><div className="rx-inline-actions"><span className="rx-selected-count">{livePlacementScopeMessage}</span><button className="rx-button" type="button" disabled={capacityScores.busy || !canRefreshLivePlacement} onClick={refreshLivePlacement}>{capacityScores.busy ? 'Refreshing...' : 'Refresh Live Placement'}</button></div><Banner tone={capacityScores.status.tone} message={capacityScores.status.message} detail={capacityScores.status.detail} /></section><section className="rx-panel rx-panel--compact rx-panel--muted"><div className="rx-panel__header"><div><h2>Capacity Score Key</h2><p>Use this legend to distinguish saved capacity signals from live Azure placement responses.</p></div></div><div className="rx-matrix-key rx-matrix-key--compact"><div className="rx-matrix-key__group"><h3>Capacity Score</h3>{capacityScoreLegendItems().map((item) => <div key={item.value} className="rx-matrix-key__item"><StatusPill value={item.value} /><div><p>{item.description}</p></div></div>)}</div><div className="rx-matrix-key__group"><h3>Azure Live Score</h3>{livePlacementLegendItems().map((item) => <div key={item.value} className="rx-matrix-key__item"><StatusPill value={item.value} /><div><p>{item.description}</p></div></div>)}<div className="rx-matrix-key__item"><div><strong>Last Checked</strong><p>The timestamp shows when the latest live result or latest explicit unavailable result was saved.</p></div></div></div></div></section><DataTable title="Capacity Score" subtitle="Derived capacity score plus latest live placement details from SQL snapshots." tableClassName="rx-table--dense rx-capacity-score-table" sectionClassName="rx-panel--compact" columns={[{ key: 'region', label: 'Region' }, { key: 'sku', label: 'SKU', render: (row) => normalizeSkuName(row.sku) || 'n/a' }, { key: 'family', label: 'Family', render: (row) => formatFamilyLabel(row.family) || 'n/a' }, { key: 'score', label: 'Capacity Score', render: (row) => <StatusPill value={row.score} /> }, { key: 'livePlacementScore', label: 'Azure Live Score', render: (row) => row.livePlacementScore || 'n/a' }, { key: 'liveCheckedAtUtc', label: 'Checked', render: (row) => formatTimestamp(row.liveCheckedAtUtc) }, { key: 'subscriptionCount', label: 'Subscriptions', render: (row) => formatNumber(row.subscriptionCount) }, { key: 'okRows', label: 'OK', render: (row) => formatNumber(row.okRows) }, { key: 'limitedRows', label: 'Limited', render: (row) => formatNumber(row.limitedRows) }, { key: 'constrainedRows', label: 'Constrained', render: (row) => formatNumber(row.constrainedRows) }, { key: 'totalQuotaAvailable', label: 'Quota', render: (row) => formatNumber(row.totalQuotaAvailable) }, { key: 'reason', label: 'Reason', headerClassName: 'rx-capacity-score-table__reason', cellClassName: 'rx-capacity-score-table__reason', render: (row) => <span title={row.reason || ''}>{row.reason || 'n/a'}</span> }]} rows={capacityScores.rows} emptyMessage="No capacity score entries available." /><ServerPagination pagination={capacityScores.pagination} onPageChange={(pageNumber) => setCapacityScores((current) => ({ ...current, pagination: { ...current.pagination, pageNumber: Math.max(1, pageNumber) } }))} onPageSizeChange={(pageSize) => setCapacityScores((current) => ({ ...current, pagination: { ...current.pagination, pageNumber: 1, pageSize: Math.max(1, pageSize) } }))} /><DataTable title="Subscription Summary" tableClassName="rx-table--dense" sectionClassName="rx-panel--compact" columns={[{ key: 'subscriptionKey', label: 'Subscription Key' }, { key: 'skuObservations', label: 'SKU Observations', render: (row) => formatNumber(row.skuObservations || row.totalRows) }, { key: 'constrainedObservations', label: 'Constrained', render: (row) => formatNumber(row.constrainedObservations || row.constrainedRows) }, { key: 'totalQuotaAvailable', label: 'Quota Available', render: (row) => formatNumber(row.totalQuotaAvailable) }]} rows={capacityScores.subscriptionSummary} emptyMessage="No subscription summary rows available." /></div>;
     }
     if (activeView === 'family-summary') {
       return <DataTable key="family-summary" title="Family Summary" subtitle="Compute-family rollup optimized for quota planning conversations." columns={[{ key: 'family', label: 'Family' }, { key: 'skus', label: 'SKUs', render: (row) => formatNumber(row.skus) }, { key: 'ok', label: 'OK SKUs', render: (row) => formatNumber(row.ok) }, { key: 'largest', label: 'Largest' }, { key: 'zones', label: 'Zones' }, { key: 'status', label: 'Status', render: (row) => <StatusPill value={row.status} /> }, { key: 'quota', label: 'Quota', render: (row) => formatNumber(row.quota) }]} rows={familySummaryRows} emptyMessage="No family summary rows available." />;
     }
     if (activeView === 'region-matrix') {
-      return <div className="rx-view-stack"><section className="rx-panel rx-panel--compact rx-panel--muted"><div className="rx-panel__header"><div><h2>Region Matrix</h2><p>Family-by-region readiness with row rollups and a deployment-status key.</p></div></div><div className="rx-matrix-key"><div className="rx-matrix-key__group"><h3>Row Color</h3><div className="rx-matrix-key__item"><span className="rx-row-swatch rx-row-swatch--ok"></span><div><strong>Green</strong><p>At least one SKU in this family is fully available.</p></div></div><div className="rx-matrix-key__item"><span className="rx-row-swatch rx-row-swatch--caution"></span><div><strong>Yellow</strong><p>Some SKUs may work, but there are constraints.</p></div></div><div className="rx-matrix-key__item"><span className="rx-row-swatch rx-row-swatch--blocked"></span><div><strong>Gray</strong><p>No SKUs from this family available in scanned regions.</p></div></div></div><div className="rx-matrix-key__group"><h3>Cell Status</h3>{['OK', 'CONSTRAINED', 'LIMITED', 'PARTIAL', 'BLOCKED'].map((status) => { const meta = matrixStatusMeta(status); return <div key={status} className="rx-matrix-key__item"><StatusPill value={status} /><div><strong>{meta.short}</strong><p>{meta.description}</p></div></div>; })}</div></div></section><section className="rx-panel rx-panel--table rx-panel--compact"><div className="rx-panel__header"><div><h2>Region Matrix Report</h2><p>Rows are highlighted by family-level readiness across the selected region scope.</p></div></div><div className="rx-table-wrap"><table className="rx-table rx-table--dense rx-matrix-table"><thead><tr><th>Family</th><th>Key</th><th>Ready</th>{matrix.regions.map((region) => <th key={region}>{region}</th>)}</tr></thead><tbody>{matrix.rows.length === 0 ? <tr><td className="rx-empty" colSpan={Math.max(3, matrix.regions.length + 3)}>No matrix rows available.</td></tr> : matrix.rows.map((row) => <tr key={row.family} className={`rx-matrix-row rx-matrix-row--${String(row.rowStatus || 'blocked').toLowerCase()}`}><td className="rx-matrix-family">{row.family}</td><td><StatusPill value={row.rowStatus === 'CAUTION' ? 'PARTIAL' : row.rowStatus} /></td><td>{formatNumber(row.readyRegionCount)}</td>{matrix.regions.map((region) => { const status = matrix.resolveCellStatus(row.regionMap[region]); const meta = matrixStatusMeta(status); return <td key={region} title={meta.description}><div className="rx-matrix-cell"><StatusPill value={status} /></div></td>; })}</tr>)}</tbody></table></div></section></div>;
+      return <div className="rx-view-stack"><section className="rx-panel rx-panel--compact rx-panel--muted"><div className="rx-panel__header"><div><h2>Region Matrix</h2><p>Family-by-region readiness with row rollups and a deployment-status key.</p></div></div><div className="rx-matrix-key"><div className="rx-matrix-key__group"><h3>Row Color</h3><div className="rx-matrix-key__item"><span className="rx-row-swatch rx-row-swatch--ok"></span><div><strong>Green</strong><p>At least one SKU in this family is fully available.</p></div></div><div className="rx-matrix-key__item"><span className="rx-row-swatch rx-row-swatch--caution"></span><div><strong>Yellow</strong><p>Some SKUs may work, but there are constraints.</p></div></div><div className="rx-matrix-key__item"><span className="rx-row-swatch rx-row-swatch--blocked"></span><div><strong>Gray</strong><p>No SKUs from this family available in scanned regions.</p></div></div></div><div className="rx-matrix-key__group"><h3>Cell Status</h3>{['OK', 'CONSTRAINED', 'LIMITED', 'PARTIAL', 'BLOCKED'].map((status) => { const meta = matrixStatusMeta(status); return <div key={status} className="rx-matrix-key__item"><StatusPill value={status} /><div><strong>{meta.short}</strong><p>{meta.description}</p></div></div>; })}</div></div></section><SortableMatrixTable title="Region Matrix Report" subtitle="Rows are highlighted by family-level readiness across the selected region scope." tableClassName="rx-matrix-table" primaryColumn={{ key: 'family', label: 'Family' }} statusColumn={{ key: 'rowStatus', label: 'Key', render: (row) => <StatusPill value={row.rowStatus === 'CAUTION' ? 'PARTIAL' : row.rowStatus} />, sortValue: (row) => getStatusSortValue(row.rowStatus) }} readyColumn={{ key: 'readyRegionCount', label: 'Ready', render: (row) => formatNumber(row.readyRegionCount) }} dynamicColumns={matrix.regions.map((region) => ({ key: region, label: region }))} rows={matrix.rows} emptyMessage="No matrix rows available." rowKey={(row) => row.family} getRowClassName={(row) => `rx-matrix-row rx-matrix-row--${String(row.rowStatus || 'blocked').toLowerCase()}`} getDynamicSortValue={(row, region) => getStatusSortValue(matrix.resolveCellStatus(row.regionMap[region]))} renderDynamicCell={(row, region) => { const status = matrix.resolveCellStatus(row.regionMap[region]); const meta = matrixStatusMeta(status); return <div className="rx-matrix-cell" title={meta.description}><StatusPill value={status} /></div>; }} /></div>;
     }
     if (activeView === 'trend') {
       return <TrendReport rows={trendRows} filters={filters} selectedSubscriptionCount={selectedSubscriptionIds.length} totalSubscriptionCount={subscriptionOptions.length} />;
@@ -2847,11 +3445,11 @@ function App() {
         </div>
         <div className="rx-nav-group">Reporting</div>
         <nav className="rx-nav-list">
-          {visibleViews.filter((view) => !view.adminOnly).map((view) => (
+          {reportingViews.map((view) => (
             <button key={view.key} className={classNames('rx-nav-item', activeView === view.key && 'is-active')} type="button" onClick={() => setActiveView(view.key)}>{view.label}</button>
           ))}
         </nav>
-        {auth && auth.canAccessAdmin ? <><div className="rx-nav-group">Admin</div><nav className="rx-nav-list">{visibleViews.filter((view) => view.adminOnly).map((view) => <button key={view.key} className={classNames('rx-nav-item', activeView === view.key && 'is-active')} type="button" onClick={() => setActiveView(view.key)}>{view.label}</button>)}</nav></> : null}
+        {auth && auth.canAccessAdmin ? <><div className="rx-nav-group">Admin</div><nav className="rx-nav-list">{adminViews.map((view) => <button key={view.key} className={classNames('rx-nav-item', activeView === view.key && 'is-active')} type="button" onClick={() => setActiveView(view.key)}>{view.label}</button>)}</nav></> : null}
       </aside>
 
       <main className="rx-main">

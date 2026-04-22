@@ -245,6 +245,19 @@ function resolvePortablePowerShellPath() {
   return path.join(resolveRuntimeRoot(), 'powershell', 'pwsh.exe');
 }
 
+function getKnownPowerShell7Paths() {
+  if (process.platform !== 'win32') {
+    return [];
+  }
+
+  return [
+    'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+    'C:\\Program Files\\PowerShell\\7-preview\\pwsh.exe',
+    'C:\\Program Files (x86)\\PowerShell\\7\\pwsh.exe',
+    'C:\\Program Files (x86)\\PowerShell\\7-preview\\pwsh.exe'
+  ];
+}
+
 function findFileRecursive(directoryPath, targetFileName, maxDepth = 4) {
   if (!directoryPath || maxDepth < 0 || !fileExists(directoryPath)) {
     return null;
@@ -597,6 +610,7 @@ async function canResolvePlacementCmdlet(command, env) {
 
 async function ensureAzPlacementModules(command) {
   const moduleRoot = resolveModuleRoot();
+  const requiredModules = ['Az.Accounts', 'Az.Compute'];
   const env = {
     ...process.env,
     PSModulePath: buildPowerShellModulePath()
@@ -614,7 +628,7 @@ async function ensureAzPlacementModules(command) {
         '-NoLogo',
         '-NoProfile',
         '-Command',
-        `$modulePath = '${moduleRoot.replace(/'/g, "''")}'; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; if (Get-Command Set-PSRepository -ErrorAction SilentlyContinue) { try { Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction Stop } catch { } }; Save-Module -Name Az.Compute -Repository PSGallery -Path $modulePath -Force -ErrorAction Stop`
+        `$modulePath = '${moduleRoot.replace(/'/g, "''")}'; $moduleNames = @('${requiredModules.join("','")}'); [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; if (Get-Command Set-PSRepository -ErrorAction SilentlyContinue) { try { Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction Stop } catch { } }; foreach ($moduleName in $moduleNames) { Save-Module -Name $moduleName -Repository PSGallery -Path $modulePath -Force -ErrorAction Stop }`
       ], {
         cwd: resolveProjectRoot(),
         env,
@@ -642,7 +656,8 @@ async function getPowerShellCommands() {
 
   const knownPaths = [
     locatePortablePowerShellBinary(),
-    path.resolve(resolveProjectRoot(), 'tools', 'pwsh', 'pwsh.exe')
+    path.resolve(resolveProjectRoot(), 'tools', 'pwsh', 'pwsh.exe'),
+    ...getKnownPowerShell7Paths()
   ].filter(Boolean);
 
   for (const candidate of knownPaths) {

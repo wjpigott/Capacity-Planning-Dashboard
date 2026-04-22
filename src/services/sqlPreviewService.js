@@ -47,7 +47,7 @@ function buildCommonFilterPreview(filters = {}) {
   const subscriptionIds = parseSubscriptionIds(filters.subscriptionIds);
   if (subscriptionIds.length > 0) {
     const subscriptionTokens = subscriptionIds.map((_, index) => `@subId${index}`);
-    clauses.push(`AND ISNULL(subscriptionId, 'legacy-data') IN (${subscriptionTokens.join(', ')})`);
+    clauses.push(`AND CONVERT(nvarchar(64), subscriptionId) IN (${subscriptionTokens.join(', ')})`);
     subscriptionIds.forEach((subscriptionId, index) => {
       params[`subId${index}`] = subscriptionId;
     });
@@ -81,8 +81,8 @@ function buildCapacityPreview(filters = {}) {
         SELECT
           capturedAtUtc,
           subscriptionKey,
-          ISNULL(subscriptionId, 'legacy-data') AS subscriptionId,
-          ISNULL(subscriptionName, 'Legacy data') AS subscriptionName,
+          COALESCE(CONVERT(nvarchar(64), subscriptionId), 'legacy-data') AS subscriptionId,
+          COALESCE(subscriptionName, 'Legacy data') AS subscriptionName,
           region,
           skuName AS sku,
           skuFamily AS family,

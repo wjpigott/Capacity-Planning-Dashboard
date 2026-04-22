@@ -46,6 +46,54 @@ function Ensure-AzureContext {
         message = ''
     }
 
+    function Resolve-AccessibleSubscriptionContext {
+        $preferredSubscriptionId = @(
+            $env:AZURE_SUBSCRIPTION_ID,
+            $env:SUBSCRIPTION_ID,
+            $env:ARM_SUBSCRIPTION_ID
+        ) | Where-Object { $_ } | Select-Object -First 1
+
+        if (-not (Get-Command -Name 'Get-AzSubscription' -ErrorAction SilentlyContinue)) {
+            return $null
+        }
+
+        try {
+            $subscriptions = @(Get-AzSubscription -ErrorAction Stop)
+        }
+        catch {
+            return $null
+        }
+
+        if ($subscriptions.Count -eq 0) {
+            return $null
+        }
+
+        $selectedSubscription = $null
+        if ($preferredSubscriptionId) {
+            $selectedSubscription = $subscriptions | Where-Object { $_.Id -eq $preferredSubscriptionId } | Select-Object -First 1
+        }
+
+        if (-not $selectedSubscription -and $subscriptions.Count -eq 1) {
+            $selectedSubscription = $subscriptions[0]
+        }
+
+        if (-not $selectedSubscription) {
+            return $null
+        }
+
+        if (-not (Get-Command -Name 'Set-AzContext' -ErrorAction SilentlyContinue)) {
+            return $null
+        }
+
+        try {
+            $null = Set-AzContext -SubscriptionId $selectedSubscription.Id -ErrorAction Stop
+            return $selectedSubscription
+        }
+        catch {
+            return $null
+        }
+    }
+
     if (-not (Get-Command -Name 'Get-AzContext' -ErrorAction SilentlyContinue)) {
         $result.message = 'Get-AzContext cmdlet is not available in this PowerShell host.'
         return $result
@@ -74,6 +122,13 @@ function Ensure-AzureContext {
         if ($ctx -and $ctx.Subscription) {
             $result.hasContext = $true
             $result.message = "Managed identity sign-in succeeded for subscription '$($ctx.Subscription.Id)'."
+            return $result
+        }
+
+        $selectedSubscription = Resolve-AccessibleSubscriptionContext
+        if ($selectedSubscription) {
+            $result.hasContext = $true
+            $result.message = "Managed identity sign-in succeeded and selected subscription '$($selectedSubscription.Id)'."
             return $result
         }
 

@@ -3,6 +3,7 @@ const { mockRows } = require('../store/mockCapacity');
 const { getRegionsForPreset } = require('../config/regionPresets');
 const { CapacityDetailDTO, SubscriptionSummaryDTO, FamilySummaryDTO, TrendDTO, PaginationDTO } = require('../models/dtos');
 const { getAIQuotaProviderFromSnapshot } = require('./aiIngestionService');
+const { normalizeFamilyName } = require('../lib/familyNormalization');
 
 const CANONICAL_COMPUTE_FAMILY_PATTERNS = [
   ['NCC', /^(NCC)/],
@@ -67,7 +68,8 @@ function normalizeSkuName(value) {
 function normalizeCapacityRow(row) {
   const normalized = {
     ...row,
-    sku: normalizeSkuName(row?.sku)
+    sku: normalizeSkuName(row?.sku),
+    family: normalizeFamilyName(row?.family)
   };
   const provider = resolveAIQuotaProvider(normalized);
   return {
@@ -204,7 +206,7 @@ function appendCommonSqlFilters(filters, request) {
   }
   if (filters.family && filters.family !== 'all') {
     where += ' AND skuFamily = @family';
-    request.input('family', filters.family);
+    request.input('family', normalizeFamilyName(filters.family));
   }
   if (filters.availability && filters.availability !== 'all') {
     where += ' AND availabilityState = @availability';

@@ -625,21 +625,27 @@ body {
   background: #fff;
 }
 
-.rx-subscription-item span {
+.rx-subscription-item__text {
+  display: grid;
+  gap: 4px;
   min-width: 0;
 }
 
-.rx-subscription-item strong,
-.rx-subscription-item small {
+.rx-subscription-item__name {
   display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
-.rx-subscription-item small {
-  margin-top: 4px;
+.rx-subscription-item__id {
+  display: block;
+  font-size: 12px;
+  line-height: 1.3;
   color: var(--rx-muted);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .rx-link-button,

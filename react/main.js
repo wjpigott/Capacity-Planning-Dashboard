@@ -131,7 +131,8 @@ async function fetchJson(url, options) {
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload.ok === false) {
-    const reason = payload.detail || payload.error || `Request failed (${response.status})`;
+    const baseReason = payload.error || `Request failed (${response.status})`;
+    const reason = payload.requestId ? `${baseReason} [Ref ${payload.requestId}]` : baseReason;
     throw new Error(`${String(url)}: ${reason}`);
   }
 
@@ -308,6 +309,36 @@ function formatFamilyLabel(family) {
   return String(family || '')
     .replace(/Family$/i, '')
     .replace(/^(Standard|Basic|Premium)([A-Z])/i, '$1_$2');
+}
+
+function normalizeFamilyOptionLabel(family) {
+  const raw = String(family || '').trim();
+  if (!raw) return '';
+  return formatFamilyLabel(normalizeSkuName(raw));
+}
+
+function canonicalFamilyOptionKey(family) {
+  return String(normalizeFamilyOptionLabel(family) || family || '')
+    .toLowerCase()
+    .replace(/[\s_-]/g, '');
+}
+
+function buildFamilyOptions(values) {
+  const byCanonicalValue = new Map();
+  (Array.isArray(values) ? values : []).forEach((value) => {
+    const rawValue = String(value || '').trim();
+    if (!rawValue) return;
+
+    const key = canonicalFamilyOptionKey(rawValue);
+    if (!key || byCanonicalValue.has(key)) return;
+
+    byCanonicalValue.set(key, {
+      value: rawValue,
+      label: normalizeFamilyOptionLabel(rawValue)
+    });
+  });
+
+  return [...byCanonicalValue.values()].sort((left, right) => compareSkuValues(left.label, right.label));
 }
 
 function isDisplayableRegion(region) {
@@ -1207,9 +1238,9 @@ function SubscriptionPicker({ options, selectedIds, search, onSearch, onToggle, 
         {filtered.map((option) => (
           <label key={option.subscriptionId} className="rx-subscription-item">
             <input type="checkbox" checked={selectedIds.includes(option.subscriptionId)} onChange={() => onToggle(option.subscriptionId)} />
-            <span>
-              <strong>{option.subscriptionName || option.subscriptionId}</strong>
-              <small>{option.subscriptionId}</small>
+            <span className="rx-subscription-item__text">
+              <strong className="rx-subscription-item__name">{option.subscriptionName || option.subscriptionId}</strong>
+              <small className="rx-subscription-item__id">{option.subscriptionId}</small>
             </span>
           </label>
         ))}
@@ -2060,10 +2091,11 @@ function App() {
         const payload = await fetchJson(`/api/capacity/paged?${query.toString()}`);
         const sanitizedRegions = (Array.isArray(payload.facets && payload.facets.regions) ? payload.facets.regions : []).filter(isDisplayableRegion);
         const sanitizedFamilies = (Array.isArray(payload.facets && payload.facets.families) ? payload.facets.families : []).filter(isDisplayableFamily);
+        const canonicalFamilies = buildFamilyOptions(sanitizedFamilies).map((option) => option.value);
         setCapacityData({
           rows: Array.isArray(payload.data) ? payload.data.map((row) => ({ ...row, sku: normalizeSkuName(row.sku) })) : [],
           summary: payload.summary || null,
-          facets: { regions: sanitizedRegions, families: sanitizedFamilies },
+          facets: { regions: sanitizedRegions, families: canonicalFamilies },
           pagination: payload.pagination || { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false }
         });
       } catch (error) {
@@ -2328,7 +2360,7 @@ function App() {
         let errorMessage = `Export failed (${response.status})`;
         try {
           const payload = await response.json();
-          errorMessage = payload.error || payload.detail || errorMessage;
+          errorMessage = payload.error || errorMessage;
         } catch {
           const text = await response.text();
           if (text) {
@@ -2490,7 +2522,7 @@ function App() {
         status: {
           tone: 'error',
           message: error.message || 'Failed to refresh live placement scores.',
-          detail: error.stack || error.message || 'Failed to refresh live placement scores.'
+          detail: error.message || 'Failed to refresh live placement scores.'
         }
       }));
     }
@@ -2746,7 +2778,7 @@ function App() {
         <section className="rx-panel rx-access-gate__panel">
           <div className="rx-kicker">Checking Access</div>
           <h1>Loading</h1>
-          <p>Verifying your session for the React dashboard.</p>
+          <p>Verifying your session for the Capacity Dashboard.</p>
         </section>
       </div>
     );
@@ -2758,7 +2790,7 @@ function App() {
         <section className="rx-panel rx-access-gate__panel">
           <div className="rx-kicker">Access Restricted</div>
           <h1>You do not have access</h1>
-          <p>This React dashboard is only available to authenticated users.</p>
+          <p>This Capacity Dashboard is only available to authenticated users.</p>
           <a className="rx-link-button" href="/auth/login">Sign In</a>
         </section>
       </div>

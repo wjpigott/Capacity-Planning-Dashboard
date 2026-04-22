@@ -16,14 +16,21 @@ GO
 -- Back-fill from existing ingest data
 MERGE dbo.Subscriptions AS tgt
 USING (
-    SELECT
-        ISNULL(subscriptionId, 'legacy-data')       AS subscriptionId,
-        ISNULL(subscriptionName, 'Legacy data')      AS subscriptionName,
-        MAX(capturedAtUtc)                           AS updatedAtUtc
-    FROM dbo.CapacitySnapshot
-    WHERE subscriptionId IS NOT NULL
-      AND subscriptionId <> 'legacy-data'
-    GROUP BY subscriptionId, subscriptionName
+    SELECT subscriptionId, subscriptionName, updatedAtUtc
+    FROM (
+        SELECT
+            ISNULL(subscriptionId, 'legacy-data') AS subscriptionId,
+            ISNULL(subscriptionName, 'Legacy data') AS subscriptionName,
+            capturedAtUtc AS updatedAtUtc,
+            ROW_NUMBER() OVER (
+                PARTITION BY ISNULL(subscriptionId, 'legacy-data')
+                ORDER BY capturedAtUtc DESC, ISNULL(subscriptionName, 'Legacy data') DESC
+            ) AS rowNumber
+        FROM dbo.CapacitySnapshot
+        WHERE subscriptionId IS NOT NULL
+          AND subscriptionId <> 'legacy-data'
+    ) AS ranked
+    WHERE rowNumber = 1
 ) AS src
 ON tgt.subscriptionId = src.subscriptionId
 WHEN MATCHED THEN

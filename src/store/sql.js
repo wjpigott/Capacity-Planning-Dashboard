@@ -1,4 +1,5 @@
 const sql = require('mssql');
+const { normalizeFamilyName } = require('../lib/familyNormalization');
 
 let cachedPool;
 
@@ -22,7 +23,8 @@ function buildSqlConfig({ accessToken } = {}) {
   const config = {
     server,
     database,
-    requestTimeout: Number(process.env.SQL_REQUEST_TIMEOUT_MS) || 30000,
+    requestTimeout: Number(process.env.SQL_REQUEST_TIMEOUT_MS) || 600000,
+    connectionTimeout: 30000,
     options: {
       encrypt: true,
       trustServerCertificate: false
@@ -157,6 +159,7 @@ async function insertCapacitySnapshots(rows) {
     for (const row of rows) {
       const request = new sql.Request(transaction);
       const normalizedSkuName = normalizeSkuName(row.skuName);
+      const normalizedFamilyName = normalizeFamilyName(row.skuFamily);
       request.input('capturedAtUtc', sql.DateTime2, row.capturedAtUtc || new Date());
       request.input('sourceType', sql.NVarChar(50), row.sourceType || 'live-azure-ingest');
       request.input('subscriptionKey', sql.NVarChar(64), row.subscriptionKey || 'legacy-data');
@@ -164,7 +167,7 @@ async function insertCapacitySnapshots(rows) {
       request.input('subscriptionName', sql.NVarChar(256), row.subscriptionName || 'Legacy data');
       request.input('region', sql.NVarChar(64), row.region);
       request.input('skuName', sql.NVarChar(128), normalizedSkuName);
-      request.input('skuFamily', sql.NVarChar(128), row.skuFamily);
+      request.input('skuFamily', sql.NVarChar(128), normalizedFamilyName);
       request.input('vCpu', sql.Int, row.vCpu ?? null);
       request.input('memoryGB', sql.Decimal(10, 2), row.memoryGB ?? null);
       request.input('zonesCsv', sql.NVarChar(256), row.zonesCsv ?? null);
@@ -396,10 +399,11 @@ async function insertCapacityScoreSnapshots(rows) {
     for (const row of rows) {
       const request = new sql.Request(transaction);
       const normalizedSkuName = normalizeSkuName(row.sku);
+      const normalizedFamilyName = normalizeFamilyName(row.family);
       request.input('capturedAtUtc', sql.DateTime2, row.capturedAtUtc || new Date());
       request.input('region', sql.NVarChar(64), row.region);
       request.input('skuName', sql.NVarChar(128), normalizedSkuName);
-      request.input('skuFamily', sql.NVarChar(128), row.family);
+      request.input('skuFamily', sql.NVarChar(128), normalizedFamilyName);
       request.input('subscriptionCount', sql.Int, row.subscriptionCount ?? 0);
       request.input('okRows', sql.Int, row.okRows ?? 0);
       request.input('limitedRows', sql.Int, row.limitedRows ?? 0);

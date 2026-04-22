@@ -45,11 +45,17 @@ const {
   updateLivePlacementScheduler,
   getLivePlacementSchedulerConfig
 } = require('./services/livePlacementService');
+const {
+  runPaaSAvailabilityScan,
+  getPaaSAvailabilitySnapshot,
+  getPaaSPowerShellProbe
+} = require('./services/paasAvailabilityService');
 const { getQuotaCandidates, captureQuotaCandidateSnapshots } = require('./services/quotaCandidateService');
 const { buildQuotaMovePlan, getQuotaCandidateRunHistory, simulateQuotaMovePlan } = require('./services/quotaPlanService');
 const { applyQuotaMovePlan } = require('./services/quotaApplyService');
 const {
   runCapacityIngestion,
+  refreshModelCatalog,
   getIngestionStatus,
   startIngestionScheduler,
   updateIngestionScheduler,
@@ -72,6 +78,7 @@ const {
   upsertDashboardSettings
 } = require('./store/sql');
 const { applyIndexes } = require('./maintenance/applyPerformanceIndexes');
+const { getAIQuotaProviderFromSnapshot, isAIQuotaSourceType } = require('./services/aiIngestionService');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -85,6 +92,7 @@ const DASHBOARD_SETTING_KEYS = {
   ingestRunOnStartup: 'schedule.ingest.runOnStartup',
   livePlacementIntervalMinutes: 'schedule.livePlacement.intervalMinutes',
   livePlacementRunOnStartup: 'schedule.livePlacement.runOnStartup',
+  aiModelCatalogIntervalMinutes: 'schedule.aiModelCatalog.intervalMinutes',
   showSqlPreview: 'ui.showSqlPreview'
 };
 
@@ -108,6 +116,168 @@ function normalizeBoolean(value, fallback = false) {
 
   const raw = String(value).trim().toLowerCase();
   return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on';
+}
+
+async function sqlObjectExists(pool, objectName, objectTypes = ['U']) {
+  const checks = objectTypes
+    .map((objectType) => `OBJECT_ID(@objectName, '${String(objectType).replace(/'/g, "''")}') IS NOT NULL`)
+    .join(' OR ');
+
+  const result = await pool.request()
+    .input('objectName', sql.NVarChar(256), objectName)
+    .query(`
+      SELECT CASE WHEN ${checks} THEN 1 ELSE 0 END AS existsFlag
+    `);
+
+  return Boolean(result.recordset?.[0]?.existsFlag);
+}
+
+function mapAIQuotaResponseRow(row) {
+  return {
+    ...row,
+    provider: getAIQuotaProviderFromSnapshot(row),
+    quotaAvailable: Number(row?.quotaLimit || 0) - Number(row?.quotaCurrent || 0)
+  };
+}
+
+function truncateText(value, maxLength, fallback = null) {
+  if (value == null) {
+    return fallback;
+  }
+
+  const normalized = String(value).trim();
+  if (!normalized) {
+    return fallback;
+  }
+
+  return normalized.slice(0, maxLength);
+}
+
+function normalizeInteger(value, { min = null, max = null, fallback = null } = {}) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+
+  let normalized = Math.trunc(numeric);
+  if (Number.isFinite(min)) {
+    normalized = Math.max(min, normalized);
+  }
+  if (Number.isFinite(max)) {
+    normalized = Math.min(max, normalized);
+  }
+  return normalized;
+}
+
+function normalizeJsonContext(value, maxLength = 4096) {
+  if (value == null) {
+    return null;
+  }
+
+  try {
+    const serialized = JSON.stringify(value);
+    if (!serialized) {
+      return null;
+    }
+    if (serialized.length <= maxLength) {
+      return JSON.parse(serialized);
+    }
+    return {
+      truncated: true,
+      preview: serialized.slice(0, maxLength)
+    };
+  } catch {
+    const preview = truncateText(value, maxLength, null);
+    return preview ? { truncated: true, preview } : null;
+  }
+}
+
+function normalizeErrorSeverity(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['error', 'warn', 'info'].includes(normalized) ? normalized : 'error';
+}
+
+function normalizeOperationStatus(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['queued', 'running', 'success', 'failed', 'info'].includes(normalized) ? normalized : 'success';
+}
+
+function normalizeErrorLogEntry(body = {}) {
+  return {
+    source: truncateText(body.source, 64, 'unknown'),
+    type: truncateText(body.type, 128, 'UnknownError'),
+    message: truncateText(body.message, 2048, 'No error message'),
+    stack: truncateText(body.stack, 8192, null),
+    severity: normalizeErrorSeverity(body.severity),
+    context: normalizeJsonContext(body.context),
+    region: truncateText(body.region, 64, null),
+    sku: truncateText(body.sku, 128, null),
+    desiredCount: normalizeInteger(body.desiredCount, { min: 0, max: 100000, fallback: null }),
+    occurredAtUtc: new Date()
+  };
+}
+
+function normalizeOperationLogEntry(body = {}) {
+  return {
+    type: truncateText(body.type, 64, 'unknown'),
+    name: truncateText(body.name || body.type, 128, 'Unknown'),
+    status: normalizeOperationStatus(body.status),
+    triggerSource: truncateText(body.triggerSource, 32, 'manual'),
+    startedAtUtc: body.startedAtUtc || new Date(),
+    completedAtUtc: body.completedAtUtc || new Date(),
+    durationMs: normalizeInteger(body.durationMs, { min: 0, max: 7 * 24 * 60 * 60 * 1000, fallback: null }),
+    rowsAffected: normalizeInteger(body.rowsAffected, { min: 0, max: 100000000, fallback: null }),
+    subscriptionCount: normalizeInteger(body.subscriptionCount, { min: 0, max: 1000000, fallback: null }),
+    requestedDesiredCount: normalizeInteger(body.requestedDesiredCount, { min: 0, max: 100000, fallback: null }),
+    effectiveDesiredCount: normalizeInteger(body.effectiveDesiredCount, { min: 0, max: 100000, fallback: null }),
+    regionPreset: truncateText(body.regionPreset, 64, null),
+    note: truncateText(body.note, 512, null),
+    errorMessage: truncateText(body.errorMessage, 2048, null)
+  };
+}
+
+function sendErrorResponse(res, {
+  status = 500,
+  clientMessage = 'Request failed.',
+  err = null,
+  scope = 'request',
+  exposeMessage = false,
+  extra = {}
+} = {}) {
+  const requestId = randomUUID();
+  if (err) {
+    console.error(`[${scope}] [${requestId}]`, err);
+  }
+
+  const payload = {
+    ok: false,
+    error: exposeMessage && err && err.message ? String(err.message) : clientMessage,
+    requestId,
+    ...extra
+  };
+
+  return res.status(status).json(payload);
+}
+
+function getFirstQueryValue(value) {
+  if (Array.isArray(value)) {
+    return value.length > 0 ? value[0] : undefined;
+  }
+
+  return value;
+}
+
+function getCapacityFiltersFromQuery(query = {}) {
+  return {
+    regionPreset: getFirstQueryValue(query.regionPreset),
+    subscriptionIds: query.subscriptionIds,
+    region: getFirstQueryValue(query.region),
+    family: getFirstQueryValue(query.family),
+    availability: getFirstQueryValue(query.availability),
+    resourceType: getFirstQueryValue(query.resourceType),
+    pageNumber: getFirstQueryValue(query.pageNumber),
+    pageSize: getFirstQueryValue(query.pageSize)
+  };
 }
 
 function cleanupQuotaApplyJobs() {
@@ -364,12 +534,15 @@ const CAPACITY_EXPORT_STATUS_META = {
 
 function getCapacityFiltersFromQuery(query = {}) {
   return {
-    regionPreset: query.regionPreset,
+    regionPreset: getFirstQueryValue(query.regionPreset),
     subscriptionIds: query.subscriptionIds,
-    region: query.region,
-    family: query.family,
-    availability: query.availability,
-    resourceType: query.resourceType
+    region: getFirstQueryValue(query.region),
+    family: getFirstQueryValue(query.family),
+    availability: getFirstQueryValue(query.availability),
+    resourceType: getFirstQueryValue(query.resourceType),
+    provider: getFirstQueryValue(query.provider),
+    pageNumber: getFirstQueryValue(query.pageNumber),
+    pageSize: getFirstQueryValue(query.pageSize)
   };
 }
 
@@ -390,6 +563,7 @@ function buildCapacityExportRows(rows = []) {
       region: row.region || '',
       sku: row.sku || '',
       family: row.family || '',
+      provider: row.provider || '',
       availability: row.availability || '',
       quotaCurrent,
       quotaLimit,
@@ -421,6 +595,7 @@ function buildCapacityExportSummary(rows = [], filters = {}) {
     { metric: 'Region Preset', value: filters.regionPreset || 'all' },
     { metric: 'Region Filter', value: filters.region || 'all' },
     { metric: 'Family Filter', value: filters.family || 'all' },
+    { metric: 'Provider Filter', value: filters.provider || 'all' },
     { metric: 'Availability Filter', value: filters.availability || 'all' },
     { metric: 'Resource Type Filter', value: filters.resourceType || 'all' },
     { metric: 'Selected Subscription Count', value: selectedSubscriptions.length }
@@ -444,6 +619,7 @@ function buildCapacityCsv(exportRows = []) {
     'region',
     'sku',
     'family',
+    'provider',
     'availability',
     'quotaCurrent',
     'quotaLimit',
@@ -518,6 +694,7 @@ async function buildCapacityWorkbook({ exportRows, filters }) {
     { header: 'Region', key: 'region', width: 18 },
     { header: 'SKU', key: 'sku', width: 24 },
     { header: 'Family', key: 'family', width: 18 },
+    { header: 'Provider', key: 'provider', width: 18 },
     { header: 'Availability', key: 'availability', width: 16 },
     { header: 'Quota Current', key: 'quotaCurrent', width: 14 },
     { header: 'Quota Limit', key: 'quotaLimit', width: 14 },
@@ -529,7 +706,7 @@ async function buildCapacityWorkbook({ exportRows, filters }) {
   ];
   exportRows.forEach((row) => detailSheet.addRow(row));
   styleWorksheetHeader(detailSheet, detailSheet.columns.length);
-  detailSheet.autoFilter = 'A1:O1';
+  detailSheet.autoFilter = 'A1:P1';
 
   ['quotaCurrent', 'quotaLimit', 'quotaAvailable', 'vCpu', 'memoryGB'].forEach((key) => {
     detailSheet.getColumn(key).numFmt = '#,##0';
@@ -599,6 +776,12 @@ function getDefaultSchedulerSettings() {
     livePlacement: {
       intervalMinutes: normalizeIntervalMinutes(process.env.LIVE_PLACEMENT_REFRESH_INTERVAL_MINUTES, 0),
       runOnStartup: normalizeBoolean(process.env.LIVE_PLACEMENT_REFRESH_ON_STARTUP, false)
+    },
+    aiModelCatalog: {
+      intervalMinutes: normalizeIntervalMinutes(
+        process.env.INGEST_AI_MODEL_CATALOG_INTERVAL_MINUTES || process.env.INGEST_OPENAI_MODEL_CATALOG_INTERVAL_MINUTES,
+        1440
+      )
     }
   };
 }
@@ -615,6 +798,12 @@ function parseSchedulerSettingsFromDb(dbMap = {}) {
     livePlacement: {
       intervalMinutes: normalizeIntervalMinutes(readValue(DASHBOARD_SETTING_KEYS.livePlacementIntervalMinutes), defaults.livePlacement.intervalMinutes),
       runOnStartup: normalizeBoolean(readValue(DASHBOARD_SETTING_KEYS.livePlacementRunOnStartup), defaults.livePlacement.runOnStartup)
+    },
+    aiModelCatalog: {
+      intervalMinutes: normalizeIntervalMinutes(
+        readValue(DASHBOARD_SETTING_KEYS.aiModelCatalogIntervalMinutes),
+        defaults.aiModelCatalog.intervalMinutes
+      )
     }
   };
 }
@@ -637,6 +826,9 @@ function applyRuntimeSchedulerSettings(settings = {}) {
     livePlacement: {
       intervalMinutes: normalizeIntervalMinutes(settings?.livePlacement?.intervalMinutes, 0),
       runOnStartup: normalizeBoolean(settings?.livePlacement?.runOnStartup, false)
+    },
+    aiModelCatalog: {
+      intervalMinutes: normalizeIntervalMinutes(settings?.aiModelCatalog?.intervalMinutes, 1440)
     }
   };
 
@@ -654,6 +846,9 @@ async function saveSchedulerSettings(settings = {}) {
     livePlacement: {
       intervalMinutes: normalizeIntervalMinutes(settings?.livePlacement?.intervalMinutes, 0),
       runOnStartup: normalizeBoolean(settings?.livePlacement?.runOnStartup, false)
+    },
+    aiModelCatalog: {
+      intervalMinutes: normalizeIntervalMinutes(settings?.aiModelCatalog?.intervalMinutes, 1440)
     }
   };
 
@@ -661,10 +856,11 @@ async function saveSchedulerSettings(settings = {}) {
     [DASHBOARD_SETTING_KEYS.ingestIntervalMinutes]: String(normalized.ingest.intervalMinutes),
     [DASHBOARD_SETTING_KEYS.ingestRunOnStartup]: normalized.ingest.runOnStartup ? 'true' : 'false',
     [DASHBOARD_SETTING_KEYS.livePlacementIntervalMinutes]: String(normalized.livePlacement.intervalMinutes),
-    [DASHBOARD_SETTING_KEYS.livePlacementRunOnStartup]: normalized.livePlacement.runOnStartup ? 'true' : 'false'
+    [DASHBOARD_SETTING_KEYS.livePlacementRunOnStartup]: normalized.livePlacement.runOnStartup ? 'true' : 'false',
+    [DASHBOARD_SETTING_KEYS.aiModelCatalogIntervalMinutes]: String(normalized.aiModelCatalog.intervalMinutes)
   });
 
-  if (savedCount < 4) {
+  if (savedCount < 5) {
     throw new Error('SQL scheduler settings could not be saved. Verify SQL connectivity and permissions.');
   }
 
@@ -876,7 +1072,7 @@ function sendReactAuthGate(res) {
     <div class="card">
       <div style="letter-spacing: .12em; text-transform: uppercase; font-size: 12px; font-weight: 700; color: #005a9c;">Access Restricted</div>
       <h1>You do not have access</h1>
-      <p>Sign in to use the React dashboard experience.</p>
+      <p>Sign in to use the Capacity Dashboard experience.</p>
       <a href="/auth/login">Sign In</a>
     </div>
   </div>
@@ -1185,8 +1381,6 @@ app.get('/api/auth/me', (req, res) => {
       isAuthenticated,
       name: account?.name || null,
       username: account?.username || null,
-      userId: account?.userId || null,
-      isAdmin: adminAccess,
       canAccessAdmin: adminAccess
     }
   });
@@ -1197,7 +1391,7 @@ app.get('/api/capacity', async (req, res) => {
     const rows = await getCapacityRows(getCapacityFiltersFromQuery(req.query));
     res.json({ rows });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to retrieve capacity rows', detail: err.message });
+    sendErrorResponse(res, { clientMessage: 'Failed to retrieve capacity rows.', err, scope: 'api/capacity' });
   }
 });
 
@@ -1221,7 +1415,7 @@ app.get('/api/capacity/export', async (req, res) => {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     return res.send(csv);
   } catch (err) {
-    return res.status(500).json({ error: 'Failed to export capacity rows', detail: err.message });
+    return sendErrorResponse(res, { clientMessage: 'Failed to export capacity rows.', err, scope: 'api/capacity/export' });
   }
 });
 
@@ -1233,19 +1427,15 @@ app.get('/api/capacity/export', async (req, res) => {
  */
 app.get('/api/capacity/paged', async (req, res) => {
   try {
-    const result = await getCapacityRowsPaginated({
-      regionPreset: req.query.regionPreset,
-      subscriptionIds: req.query.subscriptionIds,
-      region: req.query.region,
-      family: req.query.family,
-      availability: req.query.availability,
-      resourceType: req.query.resourceType,
-      pageNumber: req.query.pageNumber,
-      pageSize: req.query.pageSize
-    });
+    const result = await getCapacityRowsPaginated(getCapacityFiltersFromQuery(req.query));
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to retrieve paginated capacity data', detail: err.message });
+    sendErrorResponse(res, {
+      clientMessage: 'Failed to retrieve paginated capacity data.',
+      err,
+      scope: 'api/capacity/paged',
+      exposeMessage: process.env.NODE_ENV !== 'production'
+    });
   }
 });
 
@@ -1255,7 +1445,7 @@ app.get('/api/quota/groups', requireAdmin, async (_, res) => {
     res.json({ ok: true, ...result });
   } catch (err) {
     const status = err.message.includes('QUOTA_MANAGEMENT_GROUP_ID') ? 503 : 500;
-    res.status(status).json({ ok: false, error: err.message, groups: [] });
+    sendErrorResponse(res, { status, clientMessage: 'Failed to discover quota groups.', err, scope: 'api/quota/groups', extra: { groups: [] } });
   }
 });
 
@@ -1264,7 +1454,7 @@ app.get('/api/quota/management-groups', requireAdmin, async (_, res) => {
     const groups = await listManagementGroups();
     res.json({ ok: true, groups, defaultManagementGroupId: process.env.QUOTA_MANAGEMENT_GROUP_ID || null });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message, groups: [] });
+    sendErrorResponse(res, { clientMessage: 'Failed to retrieve management groups.', err, scope: 'api/quota/management-groups', extra: { groups: [] } });
   }
 });
 
@@ -1280,7 +1470,7 @@ app.get('/api/quota/candidates', requireAdmin, async (req, res) => {
     res.json({ ok: true, ...result });
   } catch (err) {
     const status = err.message.includes('required') ? 400 : 500;
-    res.status(status).json({ ok: false, error: err.message, candidates: [] });
+    sendErrorResponse(res, { status, clientMessage: status === 400 ? 'Quota candidate request is invalid.' : 'Failed to generate quota candidates.', err, scope: 'api/quota/candidates', exposeMessage: status === 400, extra: { candidates: [] } });
   }
 });
 
@@ -1296,7 +1486,7 @@ app.post('/api/quota/candidates/capture', requireAdmin, async (req, res) => {
     res.json({ ok: true, ...result });
   } catch (err) {
     const status = err.message.includes('required') ? 400 : 500;
-    res.status(status).json({ ok: false, error: err.message });
+    sendErrorResponse(res, { status, clientMessage: status === 400 ? 'Quota capture request is invalid.' : 'Failed to capture quota candidate history.', err, scope: 'api/quota/candidates/capture', exposeMessage: status === 400 });
   }
 });
 
@@ -1311,7 +1501,7 @@ app.get('/api/quota/candidate-runs', requireAdmin, async (req, res) => {
     res.json({ ok: true, ...result });
   } catch (err) {
     const status = err.message.includes('required') ? 400 : 500;
-    res.status(status).json({ ok: false, error: err.message, runs: [] });
+    sendErrorResponse(res, { status, clientMessage: status === 400 ? 'Quota run history request is invalid.' : 'Failed to retrieve quota run history.', err, scope: 'api/quota/candidate-runs', exposeMessage: status === 400, extra: { runs: [] } });
   }
 });
 
@@ -1331,7 +1521,7 @@ app.get('/api/quota/plan', requireAdmin, async (req, res) => {
     res.json({ ok: true, ...result });
   } catch (err) {
     const status = err.message.includes('required') || err.message.includes('Run Capture History first') ? 400 : 500;
-    res.status(status).json({ ok: false, error: err.message, planRows: [] });
+    sendErrorResponse(res, { status, clientMessage: status === 400 ? 'Quota plan request is invalid.' : 'Failed to build quota move plan.', err, scope: 'api/quota/plan', exposeMessage: status === 400, extra: { planRows: [] } });
   }
 });
 
@@ -1351,7 +1541,7 @@ app.post('/api/quota/simulate', requireAdmin, async (req, res) => {
     res.json({ ok: true, ...result });
   } catch (err) {
     const status = err.message.includes('required') || err.message.includes('Run Capture History first') ? 400 : 500;
-    res.status(status).json({ ok: false, error: err.message, impactRows: [] });
+    sendErrorResponse(res, { status, clientMessage: status === 400 ? 'Quota simulation request is invalid.' : 'Failed to simulate quota move plan.', err, scope: 'api/quota/simulate', exposeMessage: status === 400, extra: { impactRows: [] } });
   }
 });
 
@@ -1369,7 +1559,7 @@ app.post('/api/quota/apply', requireAdmin, async (req, res) => {
     res.json({ ok: true, ...result });
   } catch (err) {
     const status = err.message.includes('required') || err.message.includes('Build a plan first') || err.message.includes('No plan rows') ? 400 : 500;
-    res.status(status).json({ ok: false, error: err.message, applyResults: [] });
+    sendErrorResponse(res, { status, clientMessage: status === 400 ? 'Quota apply request is invalid.' : 'Failed to apply quota move plan.', err, scope: 'api/quota/apply', exposeMessage: status === 400, extra: { applyResults: [] } });
   }
 });
 
@@ -1392,7 +1582,7 @@ app.get('/api/subscriptions', async (req, res) => {
     });
     res.json({ rows });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to retrieve subscriptions', detail: err.message });
+    sendErrorResponse(res, { clientMessage: 'Failed to retrieve subscriptions.', err, scope: 'api/subscriptions' });
   }
 });
 
@@ -1407,7 +1597,7 @@ app.get('/api/capacity/subscriptions', async (req, res) => {
     });
     res.json({ rows });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to retrieve subscription summary', detail: err.message });
+    sendErrorResponse(res, { clientMessage: 'Failed to retrieve subscription summary.', err, scope: 'api/capacity/subscriptions' });
   }
 });
 
@@ -1431,7 +1621,7 @@ app.get('/api/admin/sql-preview', requireAdmin, async (req, res) => {
     });
     res.json({ rows });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to build SQL preview', detail: err.message });
+    sendErrorResponse(res, { clientMessage: 'Failed to build SQL preview.', err, scope: 'api/admin/sql-preview' });
   }
 });
 
@@ -1448,7 +1638,7 @@ app.get('/api/capacity/trends', async (req, res) => {
     });
     res.json({ rows });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to retrieve capacity trends', detail: err.message });
+    sendErrorResponse(res, { clientMessage: 'Failed to retrieve capacity trends.', err, scope: 'api/capacity/trends' });
   }
 });
 
@@ -1463,7 +1653,7 @@ app.get('/api/capacity/families', async (req, res) => {
     });
     res.json({ rows });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to retrieve family summary', detail: err.message });
+    sendErrorResponse(res, { clientMessage: 'Failed to retrieve family summary.', err, scope: 'api/capacity/families' });
   }
 });
 
@@ -1483,7 +1673,7 @@ app.get('/api/capacity/scores', async (req, res) => {
     
     res.json(payload);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to retrieve capacity score summary', detail: err.message });
+    sendErrorResponse(res, { clientMessage: 'Failed to retrieve capacity score summary.', err, scope: 'api/capacity/scores' });
   }
 });
 
@@ -1498,7 +1688,7 @@ app.get('/api/capacity/scores/history', async (req, res) => {
     });
     res.json({ rows });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to retrieve capacity score history', detail: err.message });
+    sendErrorResponse(res, { clientMessage: 'Failed to retrieve capacity score history.', err, scope: 'api/capacity/scores/history' });
   }
 });
 
@@ -1517,7 +1707,7 @@ app.post('/api/capacity/scores/live', async (req, res) => {
   } catch (err) {
     const status = err.statusCode
       || (err.message.includes('not found') || err.message.includes('not configured') ? 503 : 500);
-    res.status(status).json({ error: 'Failed to retrieve live placement scores', detail: err.message, rows: [], diagnostics: err.details || null });
+    sendErrorResponse(res, { status, clientMessage: 'Failed to retrieve live placement scores.', err, scope: 'api/capacity/scores/live', extra: { rows: [] } });
   }
 });
 
@@ -1535,8 +1725,61 @@ app.post('/api/capacity/recommendations', async (req, res) => {
     res.json({ ok: true, result });
   } catch (err) {
     const status = err.message.includes('not found') || err.message.includes('not configured') ? 503 : 500;
-    const diagnostics = getRecommendationDiagnostics();
-    res.status(status).json({ ok: false, error: 'Failed to retrieve capacity recommendations', detail: err.message, diagnostics });
+    sendErrorResponse(res, { status, clientMessage: 'Failed to retrieve capacity recommendations.', err, scope: 'api/capacity/recommendations' });
+  }
+});
+
+app.get('/api/paas-availability', async (req, res) => {
+  try {
+    const result = await getPaaSAvailabilitySnapshot({
+      service: req.query.service,
+      maxAgeHours: req.query.maxAgeHours
+    });
+    res.json(result);
+  } catch (err) {
+    sendErrorResponse(res, { clientMessage: 'Failed to retrieve cached PaaS availability.', err, scope: 'api/paas-availability:get', extra: { rows: [] } });
+  }
+});
+
+app.get('/api/paas-availability/probe', async (_req, res) => {
+  try {
+    const result = await getPaaSPowerShellProbe();
+    res.json(result);
+  } catch (err) {
+    sendErrorResponse(res, {
+      clientMessage: 'Failed to probe PaaS PowerShell runtime.',
+      err,
+      scope: 'api/paas-availability:probe',
+      extra: { runtimes: [] }
+    });
+  }
+});
+
+app.post('/api/paas-availability/refresh', async (req, res) => {
+  try {
+    const result = await runPaaSAvailabilityScan({
+      service: req.body?.service,
+      regions: req.body?.regions,
+      regionPreset: req.body?.regionPreset,
+      edition: req.body?.edition,
+      computeModel: req.body?.computeModel,
+      sqlResourceType: req.body?.sqlResourceType,
+      includeDisabled: req.body?.includeDisabled,
+      fetchPricing: req.body?.fetchPricing
+    });
+    res.json(result);
+  } catch (err) {
+    const status = err.message.includes('not found') || err.message.includes('not configured') ? 503 : 500;
+    sendErrorResponse(res, {
+      status,
+      clientMessage: 'Failed to refresh PaaS availability.',
+      err,
+      scope: 'api/paas-availability:refresh',
+      extra: {
+        rows: [],
+        detail: err && err.message ? String(err.message).slice(0, 4000) : null
+      }
+    });
   }
 });
 
@@ -1545,7 +1788,240 @@ app.get('/api/admin/recommendations/diagnostics', requireAdmin, (req, res) => {
     const diagnostics = getRecommendationDiagnostics();
     res.json({ ok: true, diagnostics });
   } catch (err) {
-    res.status(500).json({ ok: false, error: 'Failed to retrieve diagnostics', detail: err.message });
+    sendErrorResponse(res, { clientMessage: 'Failed to retrieve diagnostics.', err, scope: 'api/admin/recommendations/diagnostics' });
+  }
+});
+
+// AI Model Availability endpoints
+app.get('/api/ai/models', async (req, res) => {
+  try {
+    const pool = await getSqlPool();
+    if (!pool) {
+      res.status(503).json({ error: 'Database not configured' });
+      return;
+    }
+
+    if (!(await sqlObjectExists(pool, 'dbo.AIModelAvailabilityLatest', ['V']))) {
+      res.json({ rows: [] });
+      return;
+    }
+    
+    const region = req.query.region;
+    const provider = req.query.provider;
+    const modelName = req.query.modelName;
+    const deploymentType = req.query.deploymentType;
+    
+    let query = 'SELECT * FROM dbo.AIModelAvailabilityLatest WHERE 1=1';
+    const request = pool.request();
+    
+    if (region) {
+      query += ' AND region = @region';
+      request.input('region', sql.NVarChar, region);
+    }
+
+    if (provider) {
+      query += ' AND provider = @provider';
+      request.input('provider', sql.NVarChar, provider);
+    }
+    
+    if (modelName) {
+      query += ' AND modelName LIKE @modelName';
+      request.input('modelName', sql.NVarChar, `%${modelName}%`);
+    }
+    
+    if (deploymentType) {
+      query += ' AND deploymentTypes LIKE @deploymentType';
+      request.input('deploymentType', sql.NVarChar, `%${deploymentType}%`);
+    }
+    
+    query += ' ORDER BY provider, region, modelName, modelVersion';
+    
+    const result = await request.query(query);
+    res.json({ rows: result.recordset });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve AI model availability', detail: err.message });
+  }
+});
+
+app.get('/api/ai/models/providers', async (req, res) => {
+  try {
+    const pool = await getSqlPool();
+    if (!pool) {
+      res.status(503).json({ error: 'Database not configured' });
+      return;
+    }
+
+    if (!(await sqlObjectExists(pool, 'dbo.AIModelAvailabilityLatest', ['V']))) {
+      res.json({ providers: [] });
+      return;
+    }
+
+    const region = req.query.region;
+    const request = pool.request();
+    let query = `
+      SELECT DISTINCT provider
+      FROM dbo.AIModelAvailabilityLatest
+      WHERE provider IS NOT NULL AND LTRIM(RTRIM(provider)) <> ''
+    `;
+
+    if (region) {
+      query += ' AND region = @region';
+      request.input('region', sql.NVarChar, region);
+    }
+
+    query += ' ORDER BY provider';
+
+    const result = await request.query(query);
+    res.json({ providers: result.recordset.map((row) => row.provider) });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve AI providers', detail: err.message });
+  }
+});
+
+app.get('/api/ai/models/regions', async (req, res) => {
+  try {
+    const pool = await getSqlPool();
+    if (!pool) {
+      res.status(503).json({ error: 'Database not configured' });
+      return;
+    }
+
+    if (!(await sqlObjectExists(pool, 'dbo.AIModelAvailabilityLatest', ['V']))) {
+      res.json({ regions: [] });
+      return;
+    }
+
+    const provider = req.query.provider;
+    const request = pool.request();
+    let query = `
+      SELECT DISTINCT region 
+      FROM dbo.AIModelAvailabilityLatest
+      WHERE 1 = 1
+    `;
+
+    if (provider) {
+      query += ' AND provider = @provider';
+      request.input('provider', sql.NVarChar, provider);
+    }
+
+    query += ' ORDER BY region';
+
+    const result = await request.query(query);
+
+    res.json({ regions: result.recordset.map(r => r.region) });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve AI regions', detail: err.message });
+  }
+});
+
+app.get('/api/ai/quota/providers', async (req, res) => {
+  try {
+    const pool = await getSqlPool();
+    if (!pool) {
+      res.status(503).json({ error: 'Database not configured' });
+      return;
+    }
+
+    const request = pool.request();
+    const result = await request.query(`
+      WITH LatestAICapture AS (
+        SELECT MAX(capturedAtUtc) AS capturedAtUtc
+        FROM dbo.CapacitySnapshot
+        WHERE sourceType = 'live-azure-openai-ingest'
+           OR sourceType LIKE 'live-azure-ai-%-ingest'
+      )
+      SELECT snapshot.sourceType, snapshot.skuFamily, snapshot.skuName
+      FROM dbo.CapacitySnapshot AS snapshot
+      INNER JOIN LatestAICapture
+        ON snapshot.capturedAtUtc = LatestAICapture.capturedAtUtc
+      WHERE snapshot.sourceType = 'live-azure-openai-ingest'
+         OR snapshot.sourceType LIKE 'live-azure-ai-%-ingest'
+    `);
+
+    const providers = [...new Set(
+      (result.recordset || [])
+        .filter((row) => isAIQuotaSourceType(row?.sourceType))
+        .map((row) => getAIQuotaProviderFromSnapshot(row))
+        .filter((provider) => provider && provider !== 'Unknown')
+    )].sort((left, right) => left.localeCompare(right));
+
+    res.json({ providers });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve AI quota providers', detail: err.message });
+  }
+});
+
+app.get('/api/ai/quota', async (req, res) => {
+  try {
+    const pool = await getSqlPool();
+    if (!pool) {
+      res.status(503).json({ error: 'Database not configured' });
+      return;
+    }
+    
+    const region = req.query.region;
+    const provider = req.query.provider;
+    const modelName = req.query.modelName;
+    
+    let query = `
+      WITH LatestAICapture AS (
+        SELECT MAX(capturedAtUtc) AS capturedAtUtc
+        FROM dbo.CapacitySnapshot
+        WHERE sourceType = 'live-azure-openai-ingest'
+           OR sourceType LIKE 'live-azure-ai-%-ingest'
+      )
+      SELECT 
+        snapshot.region,
+        snapshot.sourceType,
+        snapshot.skuFamily,
+        snapshot.skuName,
+        snapshot.quotaCurrent,
+        snapshot.quotaLimit,
+        snapshot.availabilityState,
+        snapshot.capturedAtUtc,
+        snapshot.subscriptionName
+      FROM dbo.CapacitySnapshot AS snapshot
+      INNER JOIN LatestAICapture
+        ON snapshot.capturedAtUtc = LatestAICapture.capturedAtUtc
+      WHERE snapshot.sourceType = 'live-azure-openai-ingest'
+         OR snapshot.sourceType LIKE 'live-azure-ai-%-ingest'
+    `;
+    
+    const request = pool.request();
+    
+    if (region) {
+      query += ' AND snapshot.region = @region';
+      request.input('region', sql.NVarChar, region);
+    }
+    
+    if (modelName) {
+      query += ' AND (snapshot.skuFamily LIKE @modelName OR snapshot.skuName LIKE @modelName)';
+      request.input('modelName', sql.NVarChar, `%${modelName}%`);
+    }
+    
+    query += ' ORDER BY snapshot.region, snapshot.skuFamily, snapshot.skuName';
+    
+    const result = await request.query(query);
+    const rows = (result.recordset || [])
+      .filter((row) => isAIQuotaSourceType(row?.sourceType))
+      .map((row) => mapAIQuotaResponseRow(row))
+      .filter((row) => !provider || row.provider === provider)
+      .sort((left, right) => {
+        if (left.provider !== right.provider) {
+          return left.provider.localeCompare(right.provider);
+        }
+        if (left.region !== right.region) {
+          return left.region.localeCompare(right.region);
+        }
+        if (left.skuFamily !== right.skuFamily) {
+          return left.skuFamily.localeCompare(right.skuFamily);
+        }
+        return left.skuName.localeCompare(right.skuName);
+      });
+
+    res.json({ rows });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve AI quota', detail: err.message });
   }
 });
 
@@ -1570,6 +2046,15 @@ app.get('/api/admin/ingest/status', requireAdmin, (_, res) => {
   res.json({ ok: true, status: getIngestionStatus(), activeJob: activeJob ? serializeIngestionJob(activeJob) : null });
 });
 
+app.post('/api/admin/ingest/model-catalog', requireAdmin, async (req, res) => {
+  try {
+    const result = await refreshModelCatalog(buildCapacityIngestionOptions(req.body));
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 app.get('/api/admin/ingest/jobs/:jobId', requireAdmin, (req, res) => {
   cleanupIngestionJobs();
   const job = ingestionJobs.get(req.params.jobId);
@@ -1587,12 +2072,15 @@ app.get('/api/admin/ingest/schedule', requireAdmin, async (_, res) => {
     const persistence = await getDashboardSettingsPersistence();
     const runtime = {
       ingest: getIngestionSchedulerConfig(),
-      livePlacement: getLivePlacementSchedulerConfig()
+      livePlacement: getLivePlacementSchedulerConfig(),
+      aiModelCatalog: {
+        intervalMinutes: persisted.aiModelCatalog.intervalMinutes
+      }
     };
 
     res.json({ ok: true, settings: persisted, runtime, persistence });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message || 'Failed to load scheduler settings.' });
+    sendErrorResponse(res, { clientMessage: 'Failed to load scheduler settings.', err, scope: 'api/admin/ingest/schedule' });
   }
 });
 
@@ -1601,7 +2089,7 @@ app.get('/api/admin/ui-settings', requireAdmin, async (_, res) => {
     const settings = await getEffectiveUiSettings();
     res.json({ ok: true, settings });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message || 'Failed to load UI settings.' });
+    sendErrorResponse(res, { clientMessage: 'Failed to load UI settings.', err, scope: 'api/admin/ui-settings:get' });
   }
 });
 
@@ -1612,7 +2100,7 @@ app.put('/api/admin/ui-settings', requireAdmin, async (req, res) => {
     });
     res.json({ ok: true, settings });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message || 'Failed to save UI settings.' });
+    sendErrorResponse(res, { clientMessage: 'Failed to save UI settings.', err, scope: 'api/admin/ui-settings:put' });
   }
 });
 
@@ -1625,7 +2113,13 @@ app.put('/api/admin/ingest/schedule', requireAdmin, async (req, res) => {
         error: `${persistence.message} Runtime schedule remains available, but SQL-backed persistence cannot be updated from the UI.`,
         runtime: {
           ingest: getIngestionSchedulerConfig(),
-          livePlacement: getLivePlacementSchedulerConfig()
+          livePlacement: getLivePlacementSchedulerConfig(),
+          aiModelCatalog: {
+            intervalMinutes: normalizeIntervalMinutes(
+              req.body?.aiModelCatalog?.intervalMinutes,
+              process.env.INGEST_AI_MODEL_CATALOG_INTERVAL_MINUTES || process.env.INGEST_OPENAI_MODEL_CATALOG_INTERVAL_MINUTES || 1440
+            )
+          }
         },
         persistence
       });
@@ -1639,6 +2133,9 @@ app.put('/api/admin/ingest/schedule', requireAdmin, async (req, res) => {
       livePlacement: {
         intervalMinutes: req.body?.livePlacement?.intervalMinutes,
         runOnStartup: req.body?.livePlacement?.runOnStartup
+      },
+      aiModelCatalog: {
+        intervalMinutes: req.body?.aiModelCatalog?.intervalMinutes
       }
     };
 
@@ -1647,31 +2144,18 @@ app.put('/api/admin/ingest/schedule', requireAdmin, async (req, res) => {
 
     res.json({ ok: true, settings: savedSettings, runtime, persistence });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message || 'Failed to save scheduler settings.' });
+    sendErrorResponse(res, { clientMessage: 'Failed to save scheduler settings.', err, scope: 'api/admin/ingest/schedule:put' });
   }
 });
 
-app.post('/api/admin/errors/log', async (req, res) => {
+app.post('/api/admin/errors/log', requireAuth, async (req, res) => {
   try {
-    const entry = {
-      source: req.body?.source || 'unknown',
-      type: req.body?.type || 'UnknownError',
-      message: req.body?.message || 'No error message',
-      stack: req.body?.stack || null,
-      severity: req.body?.severity || 'error',
-      context: req.body?.context || null,
-      region: req.body?.region || null,
-      sku: req.body?.sku || null,
-      desiredCount: req.body?.desiredCount || null,
-      occurredAtUtc: new Date()
-    };
+    const entry = normalizeErrorLogEntry(req.body);
 
     const result = await insertDashboardErrorLog(entry);
     res.json({ ok: true, logged: result > 0 });
   } catch (err) {
-    // Log to console but return success so client doesn't break
-    console.error('Failed to log error entry:', err.message);
-    res.json({ ok: false, logged: false, error: err.message });
+    sendErrorResponse(res, { clientMessage: 'Failed to record the error event.', err, scope: 'api/admin/errors/log', extra: { logged: false } });
   }
 });
 
@@ -1688,34 +2172,18 @@ app.get('/api/admin/errors', requireAdmin, async (req, res) => {
     const logs = await listDashboardErrorLogs(options);
     res.json({ ok: true, rows: logs });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    sendErrorResponse(res, { clientMessage: 'Failed to retrieve error history.', err, scope: 'api/admin/errors' });
   }
 });
 
-app.post('/api/admin/operations/log', async (req, res) => {
+app.post('/api/admin/operations/log', requireAuth, async (req, res) => {
   try {
-    const entry = {
-      type: req.body?.type || 'unknown',
-      name: req.body?.name || req.body?.type || 'Unknown',
-      status: req.body?.status || 'success',
-      triggerSource: req.body?.triggerSource || 'manual',
-      startedAtUtc: req.body?.startedAtUtc || new Date(),
-      completedAtUtc: req.body?.completedAtUtc || new Date(),
-      durationMs: req.body?.durationMs || null,
-      rowsAffected: req.body?.rowsAffected || null,
-      subscriptionCount: req.body?.subscriptionCount || null,
-      requestedDesiredCount: req.body?.requestedDesiredCount || null,
-      effectiveDesiredCount: req.body?.effectiveDesiredCount || null,
-      regionPreset: req.body?.regionPreset || null,
-      note: req.body?.note || null,
-      errorMessage: req.body?.errorMessage || null
-    };
+    const entry = normalizeOperationLogEntry(req.body);
 
     const result = await logDashboardOperation(entry);
     res.json({ ok: true, logged: result > 0 });
   } catch (err) {
-    console.error('Failed to log operation:', err.message);
-    res.json({ ok: false, logged: false, error: err.message });
+    sendErrorResponse(res, { clientMessage: 'Failed to record the operation event.', err, scope: 'api/admin/operations/log', extra: { logged: false } });
   }
 });
 
@@ -1730,7 +2198,7 @@ app.get('/api/admin/operations', requireAdmin, async (req, res) => {
     const logs = await listDashboardOperations(options);
     res.json({ ok: true, rows: logs });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    sendErrorResponse(res, { clientMessage: 'Failed to retrieve operation history.', err, scope: 'api/admin/operations' });
   }
 });
 
@@ -1744,7 +2212,7 @@ app.post('/internal/ingest/capacity', requireIngestKey, async (req, res) => {
     });
     res.json({ ok: true, result });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    sendErrorResponse(res, { clientMessage: 'Failed to run capacity ingestion.', err, scope: 'internal/ingest/capacity' });
   }
 });
 
@@ -1757,7 +2225,7 @@ app.post('/internal/db/ensure-phase3-schema', requireIngestKey, async (_, res) =
     const result = await ensurePhase3Schema();
     res.json(result);
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    sendErrorResponse(res, { clientMessage: 'Failed to ensure the phase-3 schema.', err, scope: 'internal/db/ensure-phase3-schema' });
   }
 });
 
@@ -1766,7 +2234,7 @@ app.post('/internal/db/bootstrap', requireIngestKey, async (_, res) => {
     const result = await runDatabaseBootstrap();
     res.json(result);
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    sendErrorResponse(res, { clientMessage: 'Failed to bootstrap the database.', err, scope: 'internal/db/bootstrap' });
   }
 });
 
@@ -1775,7 +2243,7 @@ app.post('/internal/db/migrate', requireIngestKey, express.json(), async (req, r
     const result = await runNamedDatabaseMigration(req.body?.migrationName);
     res.json(result);
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    sendErrorResponse(res, { clientMessage: 'Failed to run the requested migration.', err, scope: 'internal/db/migrate' });
   }
 });
 
@@ -1784,7 +2252,7 @@ app.post('/internal/db/normalize-family-casing', requireIngestKey, express.json(
     const result = await runFamilyCasingNormalizationBatch(req.body?.batchSize);
     res.json(result);
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    sendErrorResponse(res, { clientMessage: 'Failed to normalize family casing.', err, scope: 'internal/db/normalize-family-casing' });
   }
 });
 
@@ -1817,7 +2285,7 @@ app.post('/internal/db/bootstrap-admin', requireIngestKey, async (req, res) => {
       grantedRoles
     });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    sendErrorResponse(res, { clientMessage: 'Failed to complete admin database bootstrap.', err, scope: 'internal/db/bootstrap-admin' });
   } finally {
     if (adminPool) {
       adminPool.close().catch(() => {});

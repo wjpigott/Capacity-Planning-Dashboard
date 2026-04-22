@@ -62,6 +62,15 @@ if (Test-Path $toolsCheck) {
     exit 1
 }
 
+$paasToolsCheck = Join-Path $stagingPath 'tools\Get-AzPaaSAvailability\Get-AzPaaSAvailability.ps1'
+if (Test-Path $paasToolsCheck) {
+    Write-Host "✓ Verified: Get-AzPaaSAvailability.ps1 is in staging"
+} else {
+    Write-Host "✗ ERROR: Get-AzPaaSAvailability.ps1 NOT found in staging!"
+    Write-Host "  Expected: $paasToolsCheck"
+    exit 1
+}
+
 # Create zip
 $zipPath = "$env:TEMP\webpackage-capdash-verified-$(Get-Date -Format 'yyyyMMdd-HHmmss').zip"
 Write-Host "Creating zip package: $zipPath"
@@ -76,12 +85,20 @@ Write-Host "✓ Package created: $zipSize MB"
 Write-Host "Verifying zip contents..."
 $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
 $hasTools = $zip.Entries | Where-Object { $_.FullName -match 'tools/Get-AzVMAvailability/Get-AzVMAvailability.ps1' }
+$hasPaaSTools = $zip.Entries | Where-Object { $_.FullName -match 'tools/Get-AzPaaSAvailability/Get-AzPaaSAvailability.ps1' }
 $zip.Dispose()
 
 if ($hasTools) {
     Write-Host "✓ Zip contains Get-AzVMAvailability.ps1"
 } else {
     Write-Host "✗ ERROR: Get-AzVMAvailability.ps1 not found in zip!"
+    exit 1
+}
+
+if ($hasPaaSTools) {
+    Write-Host "✓ Zip contains Get-AzPaaSAvailability.ps1"
+} else {
+    Write-Host "✗ ERROR: Get-AzPaaSAvailability.ps1 not found in zip!"
     exit 1
 }
 

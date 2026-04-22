@@ -625,21 +625,27 @@ body {
   background: #fff;
 }
 
-.rx-subscription-item span {
+.rx-subscription-item__text {
+  display: grid;
+  gap: 4px;
   min-width: 0;
 }
 
-.rx-subscription-item strong,
-.rx-subscription-item small {
+.rx-subscription-item__name {
   display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
-.rx-subscription-item small {
-  margin-top: 4px;
+.rx-subscription-item__id {
+  display: block;
+  font-size: 12px;
+  line-height: 1.3;
   color: var(--rx-muted);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .rx-link-button,
@@ -798,6 +804,7 @@ body {
 
 .rx-table-wrap {
   overflow: auto;
+  max-height: 70vh;
 }
 
 .rx-table {
@@ -1049,6 +1056,46 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
+}
+
+.rx-matrix-cell__count {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--rx-ink);
+}
+
+.rx-matrix-cell__empty {
+  font-weight: 700;
+  color: var(--rx-muted);
+}
+
+.rx-table-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.rx-pagination {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rx-table-footer--server {
+  justify-content: center;
+}
+
+.rx-pagination__page-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rx-pagination__page-size select {
+  min-width: 72px;
 }
 
 .rx-capacity-score-table {

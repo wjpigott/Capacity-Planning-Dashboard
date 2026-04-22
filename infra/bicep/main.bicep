@@ -333,6 +333,10 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'WEBSITE_VNET_ROUTE_ALL'
           value: '1'
         }
+        {
+          name: 'SCM_DO_BUILD_DURING_DEPLOYMENT'
+          value: 'true'
+        }
       ]
     }
   }

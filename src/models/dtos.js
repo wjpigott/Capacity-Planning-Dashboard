@@ -10,6 +10,8 @@
  */
 class CapacityListDTO {
   constructor(row) {
+    this.sourceType = row.sourceType || null;
+    this.provider = row.provider || null;
     this.region = row.region;
     this.sku = row.sku;
     this.family = row.family;
@@ -26,6 +28,8 @@ class CapacityListDTO {
 class CapacityDetailDTO {
   constructor(row) {
     this.capturedAtUtc = row.capturedAtUtc;
+    this.sourceType = row.sourceType || null;
+    this.provider = row.provider || null;
     this.region = row.region;
     this.sku = row.sku;
     this.family = row.family;

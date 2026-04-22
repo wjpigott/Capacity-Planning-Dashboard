@@ -22,6 +22,25 @@ Both implementations provision the same set of resources:
 - Role Assignments (Key Vault Secrets User, Storage Blob/Queue/Table)
 - Cross-subscription RBAC modules (worker RBAC, web Reader, web GroupQuota Request Operator)
 
+## Design principles
+
+- No subscription IDs, tenant IDs, resource group names, or secrets are stored in this repo.
+- Web App uses managed identity and receives Key Vault Secrets User role on the deployed vault.
+- Web App can optionally receive subscription-level `Reader` assignments during infra deployment to support cross-subscription discovery.
+- The same Web App `Reader` access is sufficient for the Phase 2A provider-discovered AI model catalog; no extra RBAC or Bicep resources are required for xAI/Meta/Mistral-style catalog reads.
+- Web App can optionally receive subscription-level `GroupQuota Request Operator` assignments during infra deployment by passing `webQuotaWriterSubscriptionIds` for quota apply writes.
+- Function App uses managed identity and receives Key Vault Secrets User role on the deployed vault.
+- Function App host storage should use identity-based `AzureWebJobsStorage` settings with storage data-plane RBAC instead of shared-key auth.
+- Worker Function App runs on its own dedicated App Service plan instead of Flex Consumption.
+- Web App and Function App set `WEBSITE_DNS_SERVER=168.63.129.16` and `WEBSITE_VNET_ROUTE_ALL=1` for private endpoint name resolution and routing.
+- SQL defaults to private-access mode (`sqlPublicNetworkAccess = 'Disabled'`) and is reachable from App Service/Function App via VNet integration and private endpoint.
+- Key Vault defaults to private-access mode (`keyVaultPublicNetworkAccess = 'Disabled'`) and is reachable from App Service/Function App via VNet integration and private endpoint.
+- Live placement and pricing RBAC can now be assigned automatically during infra deployment by passing `workerSubscriptionRbacSubscriptionIds` (and optional role toggles) to apply `Compute Recommendations Role`, `Cost Management Reader`, and `Billing Reader` on those subscriptions.
+- Dashboard subscription discovery RBAC can now be assigned automatically during infra deployment by passing `webReaderSubscriptionIds` to apply `Reader` on those subscriptions.
+- Dashboard quota-apply RBAC can now be assigned automatically during infra deployment by passing `webQuotaWriterSubscriptionIds` to apply `GroupQuota Request Operator` on those subscriptions.
+- Dashboard Entra sign-in can now be configured during infra deployment through app settings (`authEnabled`, `entraTenantId`, `entraClientId`, `entraClientSecret`, `adminGroupId`, and optional `authRedirectUri`).
+- Split read/write identities in later phases (recommended) for least privilege.
+
 ---
 
 ## Option A – Bicep (recommended for Azure-only)

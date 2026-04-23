@@ -431,6 +431,11 @@ function rowMatchesAIQuotaProvider(row, provider) {
   return !provider || provider === 'all' || (getRowResourceType(row) === 'AI' && getAIQuotaProviderLabel(row) === provider);
 }
 
+function isBlockedAvailability(value) {
+  const normalized = String(value || '').trim().toUpperCase();
+  return normalized === 'CONSTRAINED' || normalized === 'RESTRICTED';
+}
+
 function rowMatchesResourceType(row, resourceType) {
   return !resourceType || resourceType === 'all' || getRowResourceType(row) === resourceType;
 }
@@ -949,7 +954,7 @@ function familySummaryFromRows(rows) {
     entry.maxVcpu = Math.max(entry.maxVcpu, Number(row.vCpu || 0));
     entry.maxMemoryGB = Math.max(entry.maxMemoryGB, Number(row.memoryGB || 0));
     entry.hasLimited = entry.hasLimited || row.availability === 'LIMITED';
-    entry.hasConstrained = entry.hasConstrained || row.availability === 'CONSTRAINED';
+    entry.hasConstrained = entry.hasConstrained || isBlockedAvailability(row.availability);
     String(row.zonesCsv || '').split(',').map((v) => v.trim()).filter(Boolean).forEach((zone) => entry.zones.add(zone));
   });
   return [...byFamily.values()].map((entry) => ({
@@ -1016,7 +1021,7 @@ function getQuotaRecipientNeed(row) {
     return shortfall;
   }
 
-  if ((row?.availability === 'CONSTRAINED' || row?.availabilityState === 'CONSTRAINED' || row?.availability === 'LIMITED' || row?.availabilityState === 'LIMITED') && quotaAvailable <= 0) {
+  if ((isBlockedAvailability(row?.availability) || isBlockedAvailability(row?.availabilityState) || row?.availability === 'LIMITED' || row?.availabilityState === 'LIMITED') && quotaAvailable <= 0) {
     return Math.max(1, Math.min(5, safetyBuffer || 1));
   }
 
@@ -2241,7 +2246,7 @@ function App() {
   const [livePlacementFamily, setLivePlacementFamily] = useState('');
   const [filters, setFilters] = useState({ regionPreset: 'USMajor', region: 'all', family: 'all', availability: 'all', resourceType: 'all', provider: 'all' });
   const [capacityData, setCapacityData] = useState({ rows: [], summary: null, facets: { regions: [], families: [] }, pagination: { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false } });
-  const [analyticsRows, setAnalyticsRows] = useState([]);
+  const [capacityAnalytics, setCapacityAnalytics] = useState({ regionHealth: [], topSkus: [], matrix: { regions: [], rows: [] }, recommendedTargetSku: '', aiQuotaProviderOptions: [] });
   const [trendRows, setTrendRows] = useState([]);
   const [familyRows, setFamilyRows] = useState([]);
   const [capacityScores, setCapacityScores] = useState({ rows: [], pagination: { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false }, subscriptionSummary: [], desiredCount: '1', status: { tone: 'info', message: 'Load or refresh live placement to populate saved capacity score snapshots.', detail: '' }, busy: false });
@@ -2285,11 +2290,8 @@ function App() {
   const reportingViews = useMemo(() => visibleViews.filter((view) => !view.adminOnly).sort((left, right) => left.label.localeCompare(right.label)), [visibleViews]);
   const adminViews = useMemo(() => visibleViews.filter((view) => view.adminOnly).sort((left, right) => left.label.localeCompare(right.label)), [visibleViews]);
 
-  const filteredAnalyticsRows = useMemo(() => (analyticsRows || [])
-    .filter((row) => rowMatchesResourceType(row, filters.resourceType))
-    .filter((row) => rowMatchesAIQuotaProvider(row, filters.provider)), [analyticsRows, filters.resourceType, filters.provider]);
-  const recommendedTargetSku = useMemo(() => defaultRecommendTargetSkuFromRows(filteredAnalyticsRows), [filteredAnalyticsRows]);
-  const recommendedRegions = useMemo(() => defaultRecommendRegionsFromFilters(filters, capacityData.facets.regions, filteredAnalyticsRows), [filters, capacityData.facets.regions, filteredAnalyticsRows]);
+  const recommendedTargetSku = useMemo(() => String(capacityAnalytics.recommendedTargetSku || '').trim(), [capacityAnalytics.recommendedTargetSku]);
+  const recommendedRegions = useMemo(() => defaultRecommendRegionsFromFilters(filters, capacityData.facets.regions, []), [filters, capacityData.facets.regions]);
   const scopedRegionOptions = useMemo(() => {
     const baseOptions = activeView === 'ai-model-availability'
       ? (Array.isArray(aiModelState.regions) ? aiModelState.regions : [])
@@ -2302,10 +2304,53 @@ function App() {
     }
     return baseOptions;
   }, [activeView, aiModelState.regions, filters.regionPreset, capacityData.facets.regions]);
-  const regionHealth = useMemo(() => deriveRegionHealth(filteredAnalyticsRows), [filteredAnalyticsRows]);
-  const topSkus = useMemo(() => topSkuRows(filteredAnalyticsRows), [filteredAnalyticsRows]);
-  const familySummaryRows = useMemo(() => (familyRows.length > 0 ? familyRows : familySummaryFromRows(filteredAnalyticsRows)), [familyRows, filteredAnalyticsRows]);
-  const matrix = useMemo(() => regionMatrixRows(filteredAnalyticsRows, filters.region, scopedRegionOptions), [filteredAnalyticsRows, filters.region, scopedRegionOptions]);
+  const regionHealth = useMemo(() => (Array.isArray(capacityAnalytics.regionHealth) ? capacityAnalytics.regionHealth : []), [capacityAnalytics.regionHealth]);
+  const topSkus = useMemo(() => (Array.isArray(capacityAnalytics.topSkus) ? capacityAnalytics.topSkus : []), [capacityAnalytics.topSkus]);
+  const familySummaryRows = useMemo(() => (familyRows.length > 0 ? familyRows : []), [familyRows]);
+  const matrix = useMemo(() => {
+    const source = capacityAnalytics.matrix || { regions: [], rows: [] };
+    const availableRegions = new Set((Array.isArray(source.regions) ? source.regions : []).map((region) => String(region || '').trim().toLowerCase()).filter(Boolean));
+    const resolveCellStatus = (cell) => {
+      if (!cell) return 'BLOCKED';
+      const hasOk = Number(cell.okCount || 0) > 0;
+      const hasLimited = Number(cell.limitedCount || 0) > 0;
+      const hasConstrained = Number(cell.constrainedCount || 0) > 0;
+      if (hasOk && (hasLimited || hasConstrained)) return 'PARTIAL';
+      if (hasOk) return 'OK';
+      if (hasLimited) return 'LIMITED';
+      if (hasConstrained) return 'CONSTRAINED';
+      return 'BLOCKED';
+    };
+    const selectedRegions = filters.region && filters.region !== 'all'
+      ? [String(filters.region || '').trim().toLowerCase()].filter(Boolean)
+      : (Array.isArray(scopedRegionOptions) && scopedRegionOptions.length > 0
+        ? scopedRegionOptions.map((region) => String(region || '').trim().toLowerCase()).filter((region) => availableRegions.has(region))
+        : [...availableRegions]);
+    return {
+      regions: selectedRegions,
+      rows: (Array.isArray(source.rows) ? source.rows : []).map((row) => {
+        const regionMap = {};
+        selectedRegions.forEach((region) => {
+          if (row && row.regionMap) {
+            regionMap[region] = row.regionMap[region];
+          }
+        });
+        const statuses = Object.values(regionMap).map((cell) => resolveCellStatus(cell));
+        const rowStatus = statuses.includes('OK')
+          ? 'OK'
+          : (statuses.includes('PARTIAL') || statuses.includes('LIMITED') || statuses.includes('CONSTRAINED'))
+            ? 'CAUTION'
+            : 'BLOCKED';
+        return {
+          ...row,
+          regionMap,
+          rowStatus,
+          readyRegionCount: statuses.filter((status) => status === 'OK' || status === 'PARTIAL').length
+        };
+      }),
+      resolveCellStatus
+    };
+  }, [capacityAnalytics.matrix, filters.region, scopedRegionOptions]);
   const aiDeploymentTypeOptions = useMemo(() => [...new Set((aiModelState.rows || [])
     .flatMap((row) => String(row.deploymentTypes || '')
       .split(',')
@@ -2314,10 +2359,7 @@ function App() {
   const aiProviderOptions = useMemo(() => [...new Set((aiModelState.rows || [])
     .map((row) => getAIModelProviderLabel(row))
     .filter(Boolean))].sort((left, right) => left.localeCompare(right)), [aiModelState.rows]);
-  const aiQuotaProviderOptions = useMemo(() => [...new Set((analyticsRows || [])
-    .filter((row) => getRowResourceType(row) === 'AI')
-    .map((row) => getAIQuotaProviderLabel(row))
-    .filter((provider) => provider && provider !== 'Unknown'))].sort((left, right) => left.localeCompare(right)), [analyticsRows]);
+  const aiQuotaProviderOptions = useMemo(() => (Array.isArray(capacityAnalytics.aiQuotaProviderOptions) ? capacityAnalytics.aiQuotaProviderOptions : []), [capacityAnalytics.aiQuotaProviderOptions]);
   const aiModelRows = useMemo(() => {
     const scopedPresetRegions = regionPresets[filters.regionPreset] || [];
     const scopedPresetRegionSet = new Set(scopedPresetRegions.map((region) => String(region || '').trim().toLowerCase()));
@@ -2636,7 +2678,7 @@ function App() {
       const trendQuery = new URLSearchParams({ ...queryFilters, days: '7' }).toString();
 
       const results = await Promise.allSettled([
-        fetchJson(`/api/capacity?${query.toString()}`),
+        fetchJson(`/api/capacity/analytics?${query.toString()}`),
         fetchJsonWithRetry(`/api/capacity/trends?${trendQuery}`),
         fetchJson(`/api/capacity/families?${new URLSearchParams({ ...queryFilters, family: 'all' }).toString()}`),
         fetchJson(`/api/capacity/subscriptions?${query.toString()}`)
@@ -2650,7 +2692,15 @@ function App() {
       const failures = results.filter((result) => result.status === 'rejected');
 
       if (capacityResult.status === 'fulfilled') {
-        setAnalyticsRows(Array.isArray(capacityResult.value.rows) ? capacityResult.value.rows.map((row) => ({ ...row, sku: normalizeSkuName(row.sku) })) : []);
+        setCapacityAnalytics({
+          regionHealth: Array.isArray(capacityResult.value.regionHealth) ? capacityResult.value.regionHealth : [],
+          topSkus: Array.isArray(capacityResult.value.topSkus) ? capacityResult.value.topSkus.map((row) => ({ ...row, sku: normalizeSkuName(row.sku) })) : [],
+          matrix: capacityResult.value.matrix || { regions: [], rows: [] },
+          recommendedTargetSku: normalizeSkuName(capacityResult.value.recommendedTargetSku),
+          aiQuotaProviderOptions: Array.isArray(capacityResult.value.aiQuotaProviderOptions) ? capacityResult.value.aiQuotaProviderOptions : []
+        });
+      } else {
+        setCapacityAnalytics({ regionHealth: [], topSkus: [], matrix: { regions: [], rows: [] }, recommendedTargetSku: '', aiQuotaProviderOptions: [] });
       }
 
       if (trendResult.status === 'fulfilled') {
@@ -3502,7 +3552,7 @@ function App() {
             <label className="rx-field"><span>Resource type</span><select value={filters.resourceType} onChange={(event) => updateFilter('resourceType', event.target.value)}>{RESOURCE_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
             {filters.resourceType === 'AI' && aiQuotaProviderOptions.length > 0 ? <label className="rx-field"><span>AI provider</span><select value={filters.provider} onChange={(event) => updateFilter('provider', event.target.value)}><option value="all">All verified providers</option>{aiQuotaProviderOptions.map((provider) => <option key={provider} value={provider}>{provider}</option>)}</select></label> : null}
             <label className="rx-field"><span>Family</span><select value={filters.family} onChange={(event) => updateFilter('family', event.target.value)}><option value="all">All Families</option>{capacityData.facets.families.map((family) => <option key={family} value={family}>{formatFamilyLabel(family) || family}</option>)}</select></label>
-            <label className="rx-field"><span>Availability</span><select value={filters.availability} onChange={(event) => updateFilter('availability', event.target.value)}><option value="all">All states</option><option value="OK">OK</option><option value="LIMITED">LIMITED</option><option value="CONSTRAINED">CONSTRAINED</option></select></label>
+            <label className="rx-field"><span>Availability</span><select value={filters.availability} onChange={(event) => updateFilter('availability', event.target.value)}><option value="all">All states</option><option value="OK">OK</option><option value="LIMITED">LIMITED</option><option value="CONSTRAINED">CONSTRAINED</option><option value="RESTRICTED">RESTRICTED</option></select></label>
           </DrawerFilterSection>
           <DrawerFilterSection title="Subscriptions">
             <SubscriptionPicker options={filteredSubscriptionOptions} selectedIds={selectedSubscriptionIds} search={subscriptionSearch} onSearch={setSubscriptionSearch} onToggle={toggleSubscription} onSelectAll={selectAllSubscriptions} onClear={clearSubscriptions} />

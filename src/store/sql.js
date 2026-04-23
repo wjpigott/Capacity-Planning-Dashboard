@@ -1508,19 +1508,18 @@ async function getLatestLivePlacementSnapshots(desiredCount = 1, maxAgeHours = 1
 }
 
 async function ensurePhase3SchemaForPool(pool) {
-  await ensureSubscriptionsTableSchema(pool);
-  await ensureCapacityScoreSnapshotSchema(pool);
-  await ensureLivePlacementSnapshotSchema(pool);
-  await ensurePaaSAvailabilitySnapshotSchema(pool);
-  await ensureDashboardErrorLogSchema(pool);
-  await ensureDashboardOperationLogSchema(pool);
-
   const alterScript = `
+    IF COL_LENGTH('dbo.CapacitySnapshot', 'subscriptionKey') IS NULL
+      EXEC('ALTER TABLE dbo.CapacitySnapshot ADD subscriptionKey NVARCHAR(64) NULL');
+
     IF COL_LENGTH('dbo.CapacitySnapshot', 'subscriptionId') IS NULL
       EXEC('ALTER TABLE dbo.CapacitySnapshot ADD subscriptionId NVARCHAR(64) NULL');
 
     IF COL_LENGTH('dbo.CapacitySnapshot', 'subscriptionName') IS NULL
       EXEC('ALTER TABLE dbo.CapacitySnapshot ADD subscriptionName NVARCHAR(256) NULL');
+
+    IF COL_LENGTH('dbo.CapacitySnapshot', 'sourceType') IS NULL
+      EXEC('ALTER TABLE dbo.CapacitySnapshot ADD sourceType NVARCHAR(50) NOT NULL CONSTRAINT DF_CapacitySnapshot_SourceType DEFAULT ''live-azure-ingest''');
 
     IF COL_LENGTH('dbo.CapacitySnapshot', 'vCpu') IS NULL
       EXEC('ALTER TABLE dbo.CapacitySnapshot ADD vCpu INT NULL');
@@ -1580,9 +1579,10 @@ async function ensurePhase3SchemaForPool(pool) {
   const updateScript = `
     UPDATE dbo.CapacitySnapshot
     SET
+      subscriptionKey = ISNULL(subscriptionKey, 'legacy-data'),
       subscriptionId = ISNULL(subscriptionId, 'legacy-data'),
       subscriptionName = ISNULL(subscriptionName, 'Legacy data')
-    WHERE subscriptionId IS NULL OR subscriptionName IS NULL;
+    WHERE subscriptionKey IS NULL OR subscriptionId IS NULL OR subscriptionName IS NULL;
   `;
 
   const aiSchemaScript = `
@@ -1772,8 +1772,14 @@ async function ensurePhase3SchemaForPool(pool) {
   `;
 
   await pool.request().query(alterScript);
-  await pool.request().query(viewScript);
   await pool.request().query(updateScript);
+  await ensureSubscriptionsTableSchema(pool);
+  await ensureCapacityScoreSnapshotSchema(pool);
+  await ensureLivePlacementSnapshotSchema(pool);
+  await ensurePaaSAvailabilitySnapshotSchema(pool);
+  await ensureDashboardErrorLogSchema(pool);
+  await ensureDashboardOperationLogSchema(pool);
+  await pool.request().query(viewScript);
   await pool.request().query(aiSchemaScript);
   await pool.request().query(aiProviderMigrationScript);
   await pool.request().query(aiViewScript);

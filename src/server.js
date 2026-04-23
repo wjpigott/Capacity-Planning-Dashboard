@@ -29,6 +29,7 @@ const { AUTH_ENABLED, buildAuthRouter, requireAuth, requireAdmin, getAccountFrom
 const {
   getCapacityRows,
   getCapacityRowsPaginated,
+  getCapacityAnalyticsSummary,
   getSubscriptions,
   getSubscriptionSummary,
   getCapacityTrends,
@@ -130,6 +131,60 @@ async function sqlObjectExists(pool, objectName, objectTypes = ['U']) {
     `);
 
   return Boolean(result.recordset?.[0]?.existsFlag);
+}
+
+async function getSqlObjectRowCount(pool, objectName, objectTypes = ['U']) {
+  if (!(await sqlObjectExists(pool, objectName, objectTypes))) {
+    return null;
+  }
+
+  const result = await pool.request().query(`SELECT COUNT(1) AS rowCount FROM ${objectName}`);
+  return Number(result.recordset?.[0]?.rowCount || 0);
+}
+
+async function getSqlObjectLatestCapture(pool, objectName, objectTypes = ['U'], columnName = 'capturedAtUtc') {
+  if (!(await sqlObjectExists(pool, objectName, objectTypes))) {
+    return null;
+  }
+
+  const result = await pool.request().query(`SELECT MAX(${columnName}) AS latestCapture FROM ${objectName}`);
+  return result.recordset?.[0]?.latestCapture || null;
+}
+
+async function sqlColumnExists(pool, objectName, columnName) {
+  const result = await pool.request()
+    .input('objectName', sql.NVarChar(256), objectName)
+    .input('columnName', sql.NVarChar(128), columnName)
+    .query(`
+      SELECT CASE WHEN EXISTS (
+        SELECT 1
+        FROM sys.columns
+        WHERE object_id = OBJECT_ID(@objectName)
+          AND name = @columnName
+      ) THEN 1 ELSE 0 END AS existsFlag
+    `);
+
+  return Boolean(result.recordset?.[0]?.existsFlag);
+}
+
+async function getAIModelAvailabilitySource(pool) {
+  const latestViewName = 'dbo.AIModelAvailabilityLatest';
+  if (await sqlObjectExists(pool, latestViewName, ['V'])) {
+    return {
+      objectName: latestViewName,
+      hasProviderColumn: await sqlColumnExists(pool, latestViewName, 'provider')
+    };
+  }
+
+  const tableName = 'dbo.AIModelAvailability';
+  if (await sqlObjectExists(pool, tableName, ['U'])) {
+    return {
+      objectName: tableName,
+      hasProviderColumn: await sqlColumnExists(pool, tableName, 'provider')
+    };
+  }
+
+  return null;
 }
 
 function mapAIQuotaResponseRow(row) {
@@ -257,6 +312,34 @@ function sendErrorResponse(res, {
   };
 
   return res.status(status).json(payload);
+}
+
+async function runDiagnosticCheck(name, fn, { timeoutMs = 0 } = {}) {
+  let timeoutHandle = null;
+
+  try {
+    const pendingValue = Promise.resolve().then(fn);
+    const value = timeoutMs > 0
+      ? await Promise.race([
+        pendingValue,
+        new Promise((_, reject) => {
+          timeoutHandle = setTimeout(() => reject(new Error(`Timed out after ${timeoutMs}ms`)), timeoutMs);
+        })
+      ])
+      : await pendingValue;
+
+    return { name, ok: true, value };
+  } catch (err) {
+    return {
+      name,
+      ok: false,
+      error: err?.message || String(err)
+    };
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
 }
 
 function getFirstQueryValue(value) {
@@ -1439,6 +1522,20 @@ app.get('/api/capacity/paged', async (req, res) => {
   }
 });
 
+app.get('/api/capacity/analytics', async (req, res) => {
+  try {
+    const result = await getCapacityAnalyticsSummary(getCapacityFiltersFromQuery(req.query));
+    res.json(result);
+  } catch (err) {
+    sendErrorResponse(res, {
+      clientMessage: 'Failed to retrieve capacity analytics summary.',
+      err,
+      scope: 'api/capacity/analytics',
+      exposeMessage: process.env.NODE_ENV !== 'production'
+    });
+  }
+});
+
 app.get('/api/quota/groups', requireAdmin, async (_, res) => {
   try {
     const result = await listQuotaGroups(_.query.managementGroupId);
@@ -1801,17 +1898,21 @@ app.get('/api/ai/models', async (req, res) => {
       return;
     }
 
-    if (!(await sqlObjectExists(pool, 'dbo.AIModelAvailabilityLatest', ['V']))) {
+    const availabilitySource = await getAIModelAvailabilitySource(pool);
+    if (!availabilitySource) {
       res.json({ rows: [] });
       return;
     }
-    
+
+    const { objectName, hasProviderColumn } = availabilitySource;
     const region = req.query.region;
     const provider = req.query.provider;
     const modelName = req.query.modelName;
     const deploymentType = req.query.deploymentType;
-    
-    let query = 'SELECT * FROM dbo.AIModelAvailabilityLatest WHERE 1=1';
+
+    let query = hasProviderColumn
+      ? `SELECT * FROM ${objectName} WHERE 1=1`
+      : `SELECT *, CAST('OpenAI' AS NVARCHAR(128)) AS provider FROM ${objectName} WHERE 1=1`;
     const request = pool.request();
     
     if (region) {
@@ -1820,6 +1921,14 @@ app.get('/api/ai/models', async (req, res) => {
     }
 
     if (provider) {
+      if (!hasProviderColumn) {
+        const normalizedProvider = String(provider).trim().toLowerCase();
+        if (normalizedProvider !== 'openai') {
+          res.json({ rows: [] });
+          return;
+        }
+      }
+
       query += ' AND provider = @provider';
       request.input('provider', sql.NVarChar, provider);
     }
@@ -1834,7 +1943,9 @@ app.get('/api/ai/models', async (req, res) => {
       request.input('deploymentType', sql.NVarChar, `%${deploymentType}%`);
     }
     
-    query += ' ORDER BY provider, region, modelName, modelVersion';
+    query += hasProviderColumn
+      ? ' ORDER BY provider, region, modelName, modelVersion'
+      : ' ORDER BY region, modelName, modelVersion';
     
     const result = await request.query(query);
     res.json({ rows: result.recordset });
@@ -1851,8 +1962,15 @@ app.get('/api/ai/models/providers', async (req, res) => {
       return;
     }
 
-    if (!(await sqlObjectExists(pool, 'dbo.AIModelAvailabilityLatest', ['V']))) {
+    const availabilitySource = await getAIModelAvailabilitySource(pool);
+    if (!availabilitySource) {
       res.json({ providers: [] });
+      return;
+    }
+
+    const { objectName, hasProviderColumn } = availabilitySource;
+    if (!hasProviderColumn) {
+      res.json({ providers: ['OpenAI'] });
       return;
     }
 
@@ -1860,7 +1978,7 @@ app.get('/api/ai/models/providers', async (req, res) => {
     const request = pool.request();
     let query = `
       SELECT DISTINCT provider
-      FROM dbo.AIModelAvailabilityLatest
+      FROM ${objectName}
       WHERE provider IS NOT NULL AND LTRIM(RTRIM(provider)) <> ''
     `;
 
@@ -1886,20 +2004,31 @@ app.get('/api/ai/models/regions', async (req, res) => {
       return;
     }
 
-    if (!(await sqlObjectExists(pool, 'dbo.AIModelAvailabilityLatest', ['V']))) {
+    const availabilitySource = await getAIModelAvailabilitySource(pool);
+    if (!availabilitySource) {
       res.json({ regions: [] });
       return;
     }
+
+    const { objectName, hasProviderColumn } = availabilitySource;
 
     const provider = req.query.provider;
     const request = pool.request();
     let query = `
       SELECT DISTINCT region 
-      FROM dbo.AIModelAvailabilityLatest
+      FROM ${objectName}
       WHERE 1 = 1
     `;
 
     if (provider) {
+      if (!hasProviderColumn) {
+        const normalizedProvider = String(provider).trim().toLowerCase();
+        if (normalizedProvider !== 'openai') {
+          res.json({ regions: [] });
+          return;
+        }
+      }
+
       query += ' AND provider = @provider';
       request.input('provider', sql.NVarChar, provider);
     }
@@ -2220,6 +2349,214 @@ app.get('/internal/ingest/status', requireIngestKey, (req, res) => {
   res.json({ ok: true, status: getIngestionStatus() });
 });
 
+app.get('/internal/diagnostics/report-counts', requireIngestKey, async (req, res) => {
+  try {
+    const filters = getCapacityFiltersFromQuery(req.query);
+    const pool = await getSqlPool();
+
+    const checks = await Promise.all([
+      runDiagnosticCheck('capacityRows', () => getCapacityRows(filters), { timeoutMs: 8000 }),
+      runDiagnosticCheck('capacityPaged', () => getCapacityRowsPaginated({ ...filters, pageNumber: 1, pageSize: 10 }), { timeoutMs: 8000 }),
+      runDiagnosticCheck('subscriptions', () => getSubscriptions({ limit: 20 }), { timeoutMs: 8000 }),
+      runDiagnosticCheck('subscriptionSummary', () => getSubscriptionSummary(filters), { timeoutMs: 8000 }),
+      runDiagnosticCheck('trendRows', () => getCapacityTrends({ ...filters, days: 7 }), { timeoutMs: 8000 }),
+      runDiagnosticCheck('familyRows', () => getFamilySummary(filters), { timeoutMs: 8000 }),
+      runDiagnosticCheck('scoreSummary', () => getCapacityScoreSummary(filters), { timeoutMs: 8000 }),
+      runDiagnosticCheck('capacitySnapshotCount', () => (pool ? getSqlObjectRowCount(pool, 'dbo.CapacitySnapshot', ['U']) : null), { timeoutMs: 8000 }),
+      runDiagnosticCheck('capacitySnapshotLatestUtc', () => (pool ? getSqlObjectLatestCapture(pool, 'dbo.CapacitySnapshot', ['U']) : null), { timeoutMs: 8000 }),
+      runDiagnosticCheck('capacityLatestCount', () => (pool ? getSqlObjectRowCount(pool, 'dbo.CapacityLatest', ['V']) : null), { timeoutMs: 8000 }),
+      runDiagnosticCheck('capacityLatestLatestUtc', () => (pool ? getSqlObjectLatestCapture(pool, 'dbo.CapacityLatest', ['V']) : null), { timeoutMs: 8000 }),
+      runDiagnosticCheck('subscriptionsTableCount', () => (pool ? getSqlObjectRowCount(pool, 'dbo.Subscriptions', ['U']) : null), { timeoutMs: 8000 }),
+      runDiagnosticCheck('scoreSnapshotCount', () => (pool ? getSqlObjectRowCount(pool, 'dbo.CapacityScoreSnapshot', ['U']) : null), { timeoutMs: 8000 })
+    ]);
+
+    const byName = Object.fromEntries(checks.map((check) => [check.name, check]));
+
+    res.json({
+      ok: true,
+      filters,
+      raw: {
+        capacitySnapshotCount: byName.capacitySnapshotCount?.value ?? null,
+        capacitySnapshotLatestUtc: byName.capacitySnapshotLatestUtc?.value ?? null,
+        capacityLatestCount: byName.capacityLatestCount?.value ?? null,
+        capacityLatestLatestUtc: byName.capacityLatestLatestUtc?.value ?? null,
+        subscriptionsTableCount: byName.subscriptionsTableCount?.value ?? null,
+        scoreSnapshotCount: byName.scoreSnapshotCount?.value ?? null
+      },
+      app: {
+        capacityRows: Array.isArray(byName.capacityRows?.value) ? byName.capacityRows.value.length : 0,
+        pagedRows: Array.isArray(byName.capacityPaged?.value?.data) ? byName.capacityPaged.value.data.length : 0,
+        pagedTotal: Number(byName.capacityPaged?.value?.pagination?.total || 0),
+        subscriptions: Array.isArray(byName.subscriptions?.value) ? byName.subscriptions.value.length : 0,
+        subscriptionSummary: Array.isArray(byName.subscriptionSummary?.value) ? byName.subscriptionSummary.value.length : 0,
+        trendRows: Array.isArray(byName.trendRows?.value) ? byName.trendRows.value.length : 0,
+        familyRows: Array.isArray(byName.familyRows?.value) ? byName.familyRows.value.length : 0,
+        scoreRows: Array.isArray(byName.scoreSummary?.value) ? byName.scoreSummary.value.length : 0,
+        sampleCapacityRows: Array.isArray(byName.capacityRows?.value) ? byName.capacityRows.value.slice(0, 3) : [],
+        sampleSubscriptions: Array.isArray(byName.subscriptions?.value) ? byName.subscriptions.value.slice(0, 5) : []
+      },
+      failures: checks.filter((check) => !check.ok),
+      ingestStatus: getIngestionStatus()
+    });
+  } catch (err) {
+    sendErrorResponse(res, { clientMessage: 'Failed to retrieve internal report diagnostics.', err, scope: 'internal/diagnostics/report-counts' });
+  }
+});
+
+app.get('/internal/diagnostics/sql-objects', requireIngestKey, async (_req, res) => {
+  try {
+    const pool = await getSqlPool();
+    if (!pool) {
+      return res.status(503).json({ ok: false, error: 'SQL connection is not configured.' });
+    }
+
+    const checks = await Promise.all([
+      runDiagnosticCheck('capacitySnapshotCount', () => getSqlObjectRowCount(pool, 'dbo.CapacitySnapshot', ['U']), { timeoutMs: 8000 }),
+      runDiagnosticCheck('capacitySnapshotLatestUtc', () => getSqlObjectLatestCapture(pool, 'dbo.CapacitySnapshot', ['U']), { timeoutMs: 8000 }),
+      runDiagnosticCheck('capacityLatestCount', () => getSqlObjectRowCount(pool, 'dbo.CapacityLatest', ['V']), { timeoutMs: 8000 }),
+      runDiagnosticCheck('capacityLatestLatestUtc', () => getSqlObjectLatestCapture(pool, 'dbo.CapacityLatest', ['V']), { timeoutMs: 8000 }),
+      runDiagnosticCheck('subscriptionsTableCount', () => getSqlObjectRowCount(pool, 'dbo.Subscriptions', ['U']), { timeoutMs: 8000 }),
+      runDiagnosticCheck('scoreSnapshotCount', () => getSqlObjectRowCount(pool, 'dbo.CapacityScoreSnapshot', ['U']), { timeoutMs: 8000 })
+    ]);
+
+    const byName = Object.fromEntries(checks.map((check) => [check.name, check]));
+
+    res.json({
+      ok: true,
+      capacitySnapshotCount: byName.capacitySnapshotCount?.value ?? null,
+      capacitySnapshotLatestUtc: byName.capacitySnapshotLatestUtc?.value ?? null,
+      capacityLatestCount: byName.capacityLatestCount?.value ?? null,
+      capacityLatestLatestUtc: byName.capacityLatestLatestUtc?.value ?? null,
+      subscriptionsTableCount: byName.subscriptionsTableCount?.value ?? null,
+      scoreSnapshotCount: byName.scoreSnapshotCount?.value ?? null,
+      failures: checks.filter((check) => !check.ok)
+    });
+  } catch (err) {
+    sendErrorResponse(res, { clientMessage: 'Failed to retrieve SQL object diagnostics.', err, scope: 'internal/diagnostics/sql-objects' });
+  }
+});
+
+app.get('/internal/diagnostics/sql-ping', requireIngestKey, async (req, res) => {
+  try {
+    const pool = await getSqlPool();
+    if (!pool) {
+      return res.status(503).json({ ok: false, error: 'SQL connection is not configured.' });
+    }
+
+    const target = String(req.query.target || 'ping').trim().toLowerCase();
+    const targetMap = {
+      ping: {
+        name: 'sqlPing',
+        query: `
+          SELECT
+            DB_NAME() AS databaseName,
+            @@SPID AS sessionId,
+            SYSUTCDATETIME() AS currentUtc
+        `
+      },
+      snapshot: {
+        name: 'capacitySnapshotTop1',
+        query: `
+          SELECT TOP (1)
+            capturedAtUtc,
+            subscriptionId,
+            region,
+            skuName
+          FROM dbo.CapacitySnapshot WITH (READUNCOMMITTED)
+          ORDER BY capturedAtUtc DESC
+        `
+      },
+      subscriptions: {
+        name: 'subscriptionsTop1',
+        query: `
+          SELECT TOP (1)
+            subscriptionId,
+            subscriptionName,
+            updatedAtUtc
+          FROM dbo.Subscriptions WITH (READUNCOMMITTED)
+          ORDER BY updatedAtUtc DESC
+        `
+      },
+      latest: {
+        name: 'capacityLatestTop1',
+        query: `
+          SELECT TOP (1)
+            capturedAtUtc,
+            subscriptionId,
+            region,
+            skuName,
+            skuFamily,
+            availabilityState
+          FROM dbo.CapacityLatest
+          ORDER BY capturedAtUtc DESC
+        `
+      }
+    };
+
+    const targetConfig = targetMap[target];
+    if (!targetConfig) {
+      return res.status(400).json({ ok: false, error: 'Unsupported target. Use ping, snapshot, subscriptions, or latest.' });
+    }
+
+    const check = await runDiagnosticCheck(targetConfig.name, async () => {
+      const result = await pool.request().query(targetConfig.query);
+      return result.recordset?.[0] || null;
+    }, { timeoutMs: 8000 });
+
+    res.json({
+      ok: true,
+      target,
+      result: check.ok ? check.value ?? null : null,
+      failures: check.ok ? [] : [check]
+    });
+  } catch (err) {
+    sendErrorResponse(res, { clientMessage: 'Failed to retrieve SQL ping diagnostics.', err, scope: 'internal/diagnostics/sql-ping' });
+  }
+});
+
+app.get('/internal/diagnostics/capacity-read', requireIngestKey, async (req, res) => {
+  try {
+    const filters = getCapacityFiltersFromQuery(req.query);
+    const target = String(req.query.target || 'all').trim().toLowerCase();
+    const targetChecks = {
+      capacityrows: { name: 'capacityRows', run: () => getCapacityRows(filters) },
+      capacitypaged: { name: 'capacityPaged', run: () => getCapacityRowsPaginated({ ...filters, pageNumber: 1, pageSize: 10 }) },
+      trendrows: { name: 'trendRows', run: () => getCapacityTrends({ ...filters, days: 7 }) },
+      familyrows: { name: 'familyRows', run: () => getFamilySummary(filters) },
+      subscriptions: { name: 'subscriptions', run: () => getSubscriptions({ limit: 20 }) }
+    };
+
+    const requestedChecks = target === 'all'
+      ? Object.values(targetChecks)
+      : (targetChecks[target] ? [targetChecks[target]] : null);
+
+    if (!requestedChecks) {
+      return res.status(400).json({ ok: false, error: 'Unsupported target. Use all, capacityRows, capacityPaged, trendRows, familyRows, or subscriptions.' });
+    }
+
+    const checks = await Promise.all(requestedChecks.map((check) => runDiagnosticCheck(check.name, check.run, { timeoutMs: 8000 })));
+
+    const byName = Object.fromEntries(checks.map((check) => [check.name, check]));
+
+    res.json({
+      ok: true,
+      target,
+      filters,
+      capacityRows: Array.isArray(byName.capacityRows?.value) ? byName.capacityRows.value.length : 0,
+      pagedRows: Array.isArray(byName.capacityPaged?.value?.data) ? byName.capacityPaged.value.data.length : 0,
+      pagedTotal: Number(byName.capacityPaged?.value?.pagination?.total || 0),
+      trendRows: Array.isArray(byName.trendRows?.value) ? byName.trendRows.value.length : 0,
+      familyRows: Array.isArray(byName.familyRows?.value) ? byName.familyRows.value.length : 0,
+      subscriptions: Array.isArray(byName.subscriptions?.value) ? byName.subscriptions.value.length : 0,
+      sampleCapacityRows: Array.isArray(byName.capacityRows?.value) ? byName.capacityRows.value.slice(0, 3) : [],
+      sampleSubscriptions: Array.isArray(byName.subscriptions?.value) ? byName.subscriptions.value.slice(0, 5) : [],
+      failures: checks.filter((check) => !check.ok)
+    });
+  } catch (err) {
+    sendErrorResponse(res, { clientMessage: 'Failed to retrieve capacity read diagnostics.', err, scope: 'internal/diagnostics/capacity-read' });
+  }
+});
+
 app.post('/internal/db/ensure-phase3-schema', requireIngestKey, async (_, res) => {
   try {
     const result = await ensurePhase3Schema();
@@ -2313,8 +2650,28 @@ app.get('/react/*', (req, res, next) => {
   return res.sendFile(path.resolve(__dirname, '..', 'react', 'index.html'));
 });
 
-app.get('*', (_, res) => {
-  res.sendFile(path.resolve(__dirname, '..', 'index.html'));
+app.get('/classic', (req, res) => {
+  return res.sendFile(path.resolve(__dirname, '..', 'index.html'));
+});
+
+app.get('/classic/*', (req, res) => {
+  return res.sendFile(path.resolve(__dirname, '..', 'index.html'));
+});
+
+app.get('/', (req, res) => {
+  if (AUTH_ENABLED && !getAccountFromSession(req)) {
+    return sendReactAuthGate(res);
+  }
+
+  return res.redirect('/react/');
+});
+
+app.get('*', (req, res) => {
+  if (AUTH_ENABLED && !getAccountFromSession(req)) {
+    return sendReactAuthGate(res);
+  }
+
+  return res.redirect('/react/');
 });
 
 async function startServer() {

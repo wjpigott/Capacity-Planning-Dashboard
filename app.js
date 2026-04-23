@@ -1518,7 +1518,7 @@ function renderSummary(data, summaryOverride = null) {
     : `${total.toLocaleString()}`;
   const constrained = summaryOverride && Number.isFinite(Number(summaryOverride.constrainedRows))
     ? Number(summaryOverride.constrainedRows)
-    : data.filter((r) => r.availability === 'CONSTRAINED').length;
+    : data.filter((r) => isBlockedAvailability(r.availability)).length;
   const totalAvailQuota = summaryOverride && Number.isFinite(Number(summaryOverride.availableQuota))
     ? Number(summaryOverride.availableQuota)
     : data.reduce((acc, r) => acc + (r.quotaLimit - r.quotaCurrent), 0);
@@ -1549,7 +1549,7 @@ function renderRegionMatrixSummary(data) {
   const scopedData = (Array.isArray(data) ? data : []).filter((row) => isVmComputeFamily(row.family));
   const regions = resolveMatrixRegions(scopedData);
   const familyMap = {};
-  const priority = { OK: 3, LIMITED: 2, CONSTRAINED: 1 };
+  const priority = { OK: 4, LIMITED: 3, CONSTRAINED: 2, RESTRICTED: 1 };
 
   scopedData.forEach((row) => {
     const fam = normalizeFamilyLabel(row.family, row.sku) || deriveFamilyFromSkuName(row.sku) || '?';
@@ -1580,7 +1580,7 @@ function renderRegionMatrixSummary(data) {
       return;
     }
 
-    if (!statuses.includes('LIMITED') && !statuses.includes('CONSTRAINED')) {
+    if (!statuses.includes('LIMITED') && !statuses.some((status) => isBlockedAvailability(status))) {
       familiesFullyBlocked += 1;
     }
   });
@@ -2346,7 +2346,7 @@ function deriveFamilySummaryFromRows(dataRows) {
     entry.maxMemoryGB = Math.max(entry.maxMemoryGB, Number(row.memoryGB || 0));
     entry.quotaMax = Math.max(entry.quotaMax, Number(row.quotaLimit || 0));
     entry.hasLimited = entry.hasLimited || row.availability === 'LIMITED';
-    entry.hasConstrained = entry.hasConstrained || row.availability === 'CONSTRAINED';
+    entry.hasConstrained = entry.hasConstrained || isBlockedAvailability(row.availability);
 
     String(row.zonesCsv || '')
       .split(',')
@@ -2379,6 +2379,11 @@ function deriveFamilySummaryFromRows(dataRows) {
 
 function normalizeFamilyLabel(rawFamily, skuName) {
   return canonicalComputeFamilyLabel(rawFamily, skuName);
+}
+
+function isBlockedAvailability(value) {
+  const normalized = String(value || '').trim().toUpperCase();
+  return normalized === 'CONSTRAINED' || normalized === 'RESTRICTED';
 }
 
 function deriveFamilyFromSkuName(skuName) {
@@ -2424,7 +2429,7 @@ function renderRegionMatrix(data) {
   if (empty) empty.style.display = 'none';
 
   // Status priority: OK > LIMITED > CONSTRAINED > (absent)
-  const priority = { OK: 3, LIMITED: 2, CONSTRAINED: 1 };
+  const priority = { OK: 4, LIMITED: 3, CONSTRAINED: 2, RESTRICTED: 1 };
 
   // Build map: family -> region -> best status
   const familyMap = {};
@@ -2452,6 +2457,7 @@ function renderRegionMatrix(data) {
     if (statuses.includes('OK')) return 'OK';
     if (statuses.includes('LIMITED')) return 'LIMITED';
     if (statuses.includes('CONSTRAINED')) return 'CONSTRAINED';
+    if (statuses.includes('RESTRICTED')) return 'RESTRICTED';
     return 'NONE';
   }
 
@@ -2459,6 +2465,7 @@ function renderRegionMatrix(data) {
     if (status === 'OK') return '✓ OK';
     if (status === 'LIMITED') return '⚠ LTD';
     if (status === 'CONSTRAINED') return '⚠ CON';
+    if (status === 'RESTRICTED') return '⛔ RST';
     return '✗';
   }
 
@@ -2466,6 +2473,7 @@ function renderRegionMatrix(data) {
     if (rollup === 'OK') return 'background:#f0fbf4;';
     if (rollup === 'LIMITED') return 'background:#fffbf0;';
     if (rollup === 'CONSTRAINED') return 'background:#fff5f6;';
+    if (rollup === 'RESTRICTED') return 'background:#fff2f2;';
     return 'background:#f9fafb;';
   }
 

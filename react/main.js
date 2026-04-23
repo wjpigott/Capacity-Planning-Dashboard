@@ -51,6 +51,7 @@ const REPORT_VIEWS = [
   { key: 'family-summary', label: 'Family Summary', adminOnly: false },
   { key: 'region-matrix', label: 'Region Matrix', adminOnly: false },
   { key: 'trend', label: 'Trend History', adminOnly: false },
+  { key: 'ai-summary-report', label: 'AI Summary Report', adminOnly: false },
   { key: 'ai-model-availability', label: 'AI Model Availability', adminOnly: false },
   { key: 'admin', label: 'Data Ingestion', adminOnly: true },
   { key: 'quota-workbench', label: 'Quota Workbench', adminOnly: true }
@@ -1757,7 +1758,7 @@ function AdminIngestionView(props) {
   );
 }
 
-function AIModelAvailabilityView({ rows, loading, status, onRefresh }) {
+function AIModelAvailabilityView({ rows, loading, status }) {
   const uniqueModels = useMemo(() => new Set((rows || []).map((row) => String(row.modelName || '').trim()).filter(Boolean)).size, [rows]);
   const uniqueRegions = useMemo(() => new Set((rows || []).map((row) => String(row.region || '').trim()).filter(Boolean)).size, [rows]);
   const uniqueProviders = useMemo(() => new Set((rows || []).map((row) => getAIModelProviderLabel(row))).size, [rows]);
@@ -1774,7 +1775,6 @@ function AIModelAvailabilityView({ rows, loading, status, onRefresh }) {
           <span className="rx-selected-count">Models: {formatNumber(uniqueModels)}</span>
           <span className="rx-selected-count">Regions: {formatNumber(uniqueRegions)}</span>
           <span className="rx-selected-count">Providers: {formatNumber(uniqueProviders)}</span>
-          <button className="rx-button rx-button--secondary" type="button" disabled={loading} onClick={onRefresh}>{loading ? 'Refreshing...' : 'Refresh AI Catalog'}</button>
         </div>
       </section>
       <section className="rx-panel rx-panel--compact rx-panel--muted">
@@ -1805,6 +1805,286 @@ function AIModelAvailabilityView({ rows, loading, status, onRefresh }) {
         ]}
         rows={rows}
         emptyMessage={loading ? 'Loading AI model availability...' : 'No AI model availability rows returned for the current provider and filter scope.'}
+      />
+    </div>
+  );
+}
+
+function AIModelSummaryReportView({ rows, loading, status, availableRegions }) {
+  const regionOrder = useMemo(() => {
+    const scopedRegions = Array.isArray(availableRegions)
+      ? availableRegions.map((region) => String(region || '').trim()).filter(Boolean)
+      : [];
+    const discoveredRegions = [...new Set((rows || [])
+      .map((row) => String(row.region || '').trim())
+      .filter(Boolean))].sort((left, right) => left.localeCompare(right));
+    const ordered = [];
+    scopedRegions.forEach((region) => {
+      if (!ordered.includes(region)) ordered.push(region);
+    });
+    discoveredRegions.forEach((region) => {
+      if (!ordered.includes(region)) ordered.push(region);
+    });
+    return ordered;
+  }, [availableRegions, rows]);
+
+  const summaryModel = useMemo(() => {
+    const providerRegionMap = new Map();
+    const providers = new Set();
+    const allRows = Array.isArray(rows) ? rows : [];
+
+    allRows.forEach((row) => {
+      const region = String(row.region || '').trim();
+      const provider = getAIModelProviderLabel(row);
+      if (!region || !provider) return;
+
+      providers.add(provider);
+      const key = `${region}::${provider}`;
+      if (!providerRegionMap.has(key)) {
+        providerRegionMap.set(key, {
+          region,
+          provider,
+          totalModels: 0,
+          uniqueNames: new Set(),
+          gaCount: 0,
+          stableCount: 0,
+          previewCount: 0,
+          deploymentTypes: new Set(),
+          modelStats: new Map()
+        });
+      }
+
+      const entry = providerRegionMap.get(key);
+      entry.totalModels += 1;
+
+      const modelName = String(row.modelName || '').trim();
+      if (modelName) {
+        entry.uniqueNames.add(modelName);
+      }
+
+      const lifecycle = String(row.lifecycle || row.lifecycleStatus || '').trim().toLowerCase();
+      if (lifecycle === 'generallyavailable') {
+        entry.gaCount += 1;
+      } else if (lifecycle === 'stable') {
+        entry.stableCount += 1;
+      } else if (lifecycle === 'preview') {
+        entry.previewCount += 1;
+      }
+
+      String(row.deploymentTypes || '')
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean)
+        .forEach((deploymentType) => entry.deploymentTypes.add(deploymentType));
+
+      if (modelName) {
+        if (!entry.modelStats.has(modelName)) {
+          entry.modelStats.set(modelName, { count: 0, deploymentTypeCount: 0 });
+        }
+        const modelStat = entry.modelStats.get(modelName);
+        modelStat.count += 1;
+        modelStat.deploymentTypeCount = Math.max(
+          modelStat.deploymentTypeCount,
+          String(row.deploymentTypes || '').split(',').map((value) => value.trim()).filter(Boolean).length
+        );
+      }
+    });
+
+    const summariesByRegion = new Map();
+    regionOrder.forEach((region) => summariesByRegion.set(region, []));
+
+    providerRegionMap.forEach((entry) => {
+      const topModel = [...entry.modelStats.entries()]
+        .sort((left, right) => {
+          const countDelta = right[1].count - left[1].count;
+          if (countDelta !== 0) return countDelta;
+          const deployDelta = right[1].deploymentTypeCount - left[1].deploymentTypeCount;
+          if (deployDelta !== 0) return deployDelta;
+          return left[0].localeCompare(right[0]);
+        })[0]?.[0] || 'n/a';
+
+      const summaryRow = {
+        id: `${entry.region}-${entry.provider}`,
+        region: entry.region,
+        provider: entry.provider,
+        totalModels: entry.totalModels,
+        uniqueNames: entry.uniqueNames.size,
+        gaCount: entry.gaCount,
+        stableCount: entry.stableCount,
+        previewCount: entry.previewCount,
+        deploymentTypes: [...entry.deploymentTypes].sort((left, right) => left.localeCompare(right)).join(','),
+        topModel
+      };
+
+      if (!summariesByRegion.has(entry.region)) {
+        summariesByRegion.set(entry.region, []);
+      }
+      summariesByRegion.get(entry.region).push(summaryRow);
+    });
+
+    summariesByRegion.forEach((summaryRows) => {
+      summaryRows.sort((left, right) => left.provider.localeCompare(right.provider));
+    });
+
+    const providerOrder = [...providers].sort((left, right) => left.localeCompare(right));
+    const matrixRows = providerOrder.map((provider) => {
+      const row = { provider, coveredRegions: 0 };
+      regionOrder.forEach((region) => {
+        const summary = (summariesByRegion.get(region) || []).find((candidate) => candidate.provider === provider);
+        row[region] = summary ? `${formatNumber(summary.totalModels)} model${summary.totalModels === 1 ? '' : 's'}` : '-';
+        if (summary) row.coveredRegions += 1;
+      });
+      return row;
+    });
+
+    return {
+      summariesByRegion,
+      providerOrder,
+      matrixRows,
+      totalRows: allRows.length,
+      totalRegions: regionOrder.length
+    };
+  }, [regionOrder, rows]);
+
+  const [summaryRegion, setSummaryRegion] = useState('');
+  const [drillRegion, setDrillRegion] = useState('');
+  const drillRegionOptions = useMemo(() => regionOrder.filter((region) => (summaryModel.summariesByRegion.get(region) || []).length > 0), [regionOrder, summaryModel.summariesByRegion]);
+
+  useEffect(() => {
+    if (drillRegionOptions.length === 0) {
+      if (summaryRegion) setSummaryRegion('');
+      return;
+    }
+    if (!drillRegionOptions.includes(summaryRegion)) {
+      setSummaryRegion(drillRegionOptions[0]);
+    }
+  }, [drillRegionOptions, summaryRegion]);
+
+  useEffect(() => {
+    if (drillRegionOptions.length === 0) {
+      if (drillRegion) setDrillRegion('');
+      return;
+    }
+    if (!drillRegionOptions.includes(drillRegion)) {
+      setDrillRegion(drillRegionOptions[0]);
+    }
+  }, [drillRegion, drillRegionOptions]);
+
+  const drillProviderOptions = useMemo(
+    () => (summaryModel.summariesByRegion.get(drillRegion) || []).map((row) => row.provider),
+    [drillRegion, summaryModel.summariesByRegion]
+  );
+  const [drillProvider, setDrillProvider] = useState('');
+
+  useEffect(() => {
+    if (drillProviderOptions.length === 0) {
+      if (drillProvider) setDrillProvider('');
+      return;
+    }
+    if (!drillProviderOptions.includes(drillProvider)) {
+      setDrillProvider(drillProviderOptions[0]);
+    }
+  }, [drillProvider, drillProviderOptions]);
+
+  const drillDownRows = useMemo(() => {
+    if (!drillRegion || !drillProvider) return [];
+    return (rows || [])
+      .filter((row) => String(row.region || '').trim() === drillRegion && getAIModelProviderLabel(row) === drillProvider)
+      .sort((left, right) => {
+        const nameDelta = String(left.modelName || '').localeCompare(String(right.modelName || ''));
+        if (nameDelta !== 0) return nameDelta;
+        return String(left.modelVersion || '').localeCompare(String(right.modelVersion || ''));
+      });
+  }, [drillProvider, drillRegion, rows]);
+
+  const uniqueProviders = useMemo(() => summaryModel.providerOrder.length, [summaryModel.providerOrder]);
+
+  return (
+    <div className="rx-view-stack">
+      <Banner tone={status.tone} message={status.message} detail={status.detail} />
+      <section className="rx-panel">
+        <div className="rx-panel__header"><div><h2>AI Summary Report</h2><p>Summary-first operational report for provider counts, region matrix coverage, and provider drill-down detail.</p></div></div>
+        <div className="rx-inline-actions">
+          <span className="rx-selected-count">Rows in scope: {formatNumber(summaryModel.totalRows)}</span>
+          <span className="rx-selected-count">Regions: {formatNumber(summaryModel.totalRegions)}</span>
+          <span className="rx-selected-count">Providers: {formatNumber(uniqueProviders)}</span>
+        </div>
+      </section>
+
+      <section className="rx-panel rx-panel--compact rx-panel--muted">
+        <div className="rx-panel__header"><div><h2>Summary Layout</h2><p>This report keeps the three recommended sections: per-region provider summary, multi-region matrix, and provider drill-down.</p></div></div>
+        <div className="rx-summary-grid">
+          <article className="rx-metric-card"><span>Per-Region Summaries</span><strong>{formatNumber(drillRegionOptions.length)}</strong></article>
+          <article className="rx-metric-card"><span>Matrix Columns</span><strong>{formatNumber(regionOrder.length)}</strong></article>
+          <article className="rx-metric-card"><span>Drill-Down Providers</span><strong>{formatNumber(drillProviderOptions.length)}</strong></article>
+        </div>
+      </section>
+
+      <DataTable
+        title="Multi-Region Matrix"
+        subtitle="Provider coverage across the current region scope using the existing dashboard AI catalog snapshot."
+        tableClassName="rx-table--dense"
+        sectionClassName="rx-panel--compact"
+        columns={[
+          { key: 'provider', label: 'Provider' },
+          ...regionOrder.map((region) => ({ key: region, label: region })),
+          { key: 'coveredRegions', label: 'Covered', render: (row) => formatNumber(row.coveredRegions) }
+        ]}
+        rows={summaryModel.matrixRows}
+        emptyMessage="No AI provider matrix rows are available for the current scope."
+      />
+
+      <section className="rx-panel rx-panel--compact">
+        <div className="rx-panel__header"><div><h2>Per-Region Provider Summary</h2><p>Choose a region to review the provider rollup underneath the matrix.</p></div></div>
+        <div className="rx-field-grid rx-field-grid--filters">
+          <label className="rx-field"><span>Region</span><select value={summaryRegion} onChange={(event) => setSummaryRegion(event.target.value)}><option value="">Select region</option>{drillRegionOptions.map((region) => <option key={region} value={region}>{region}</option>)}</select></label>
+        </div>
+      </section>
+
+      <DataTable
+        key={summaryRegion || 'ai-summary-region-empty'}
+        title={summaryRegion ? `Per-Region Provider Summary: ${summaryRegion}` : 'Per-Region Provider Summary'}
+        subtitle="Provider rollup for the selected region and AI catalog filter scope."
+        tableClassName="rx-table--dense"
+        sectionClassName="rx-panel--compact"
+        columns={[
+          { key: 'provider', label: 'Provider' },
+          { key: 'totalModels', label: 'Models', render: (row) => formatNumber(row.totalModels) },
+          { key: 'uniqueNames', label: 'Unique', render: (row) => formatNumber(row.uniqueNames) },
+          { key: 'gaCount', label: 'GA', render: (row) => formatNumber(row.gaCount) },
+          { key: 'stableCount', label: 'Stable', render: (row) => formatNumber(row.stableCount) },
+          { key: 'previewCount', label: 'Prevw', render: (row) => formatNumber(row.previewCount) },
+          { key: 'deploymentTypes', label: 'Deploy Types', render: (row) => row.deploymentTypes || 'n/a' },
+          { key: 'topModel', label: 'Top Model' }
+        ]}
+        rows={summaryRegion ? (summaryModel.summariesByRegion.get(summaryRegion) || []) : []}
+        emptyMessage="Select a region to review provider summary rows."
+      />
+
+      <section className="rx-panel rx-panel--compact">
+        <div className="rx-panel__header"><div><h2>Drill-Down Detail</h2><p>Max capacity is not currently persisted in the dashboard AI catalog snapshot, so that column is shown as `n/a` for now.</p></div></div>
+        <div className="rx-field-grid rx-field-grid--filters">
+          <label className="rx-field"><span>Region</span><select value={drillRegion} onChange={(event) => setDrillRegion(event.target.value)}><option value="">Select region</option>{drillRegionOptions.map((region) => <option key={region} value={region}>{region}</option>)}</select></label>
+          <label className="rx-field"><span>Provider</span><select value={drillProvider} onChange={(event) => setDrillProvider(event.target.value)}><option value="">Select provider</option>{drillProviderOptions.map((provider) => <option key={provider} value={provider}>{provider}</option>)}</select></label>
+        </div>
+      </section>
+
+      <DataTable
+        title={drillRegion && drillProvider ? `Drill-Down Detail: ${drillProvider} in ${drillRegion}` : 'Drill-Down Detail'}
+        subtitle="Detailed model rows for the selected provider and region."
+        tableClassName="rx-table--dense"
+        sectionClassName="rx-panel--compact"
+        columns={[
+          { key: 'modelName', label: 'Model' },
+          { key: 'modelVersion', label: 'Version' },
+          { key: 'lifecycleStatus', label: 'Lifecycle', render: (row) => row.lifecycleStatus || row.lifecycle || 'n/a' },
+          { key: 'maxCapacity', label: 'Max Capacity', render: (row) => (row.maxCapacity == null ? 'n/a' : formatNumber(row.maxCapacity)) },
+          { key: 'deploymentTypes', label: 'Deploy Types', render: (row) => row.deploymentTypes || 'n/a' },
+          { key: 'isDefault', label: 'Default', render: (row) => <StatusPill value={row.isDefault ? 'DEFAULT' : 'N/A'} /> },
+          { key: 'finetuneCapable', label: 'Fine-Tuning', render: (row) => <StatusPill value={row.finetuneCapable ? 'OK' : 'N/A'} /> }
+        ]}
+        rows={drillDownRows}
+        emptyMessage="Select a region and provider to inspect detailed AI model rows."
       />
     </div>
   );
@@ -2293,7 +2573,7 @@ function App() {
   const recommendedTargetSku = useMemo(() => String(capacityAnalytics.recommendedTargetSku || '').trim(), [capacityAnalytics.recommendedTargetSku]);
   const recommendedRegions = useMemo(() => defaultRecommendRegionsFromFilters(filters, capacityData.facets.regions, []), [filters, capacityData.facets.regions]);
   const scopedRegionOptions = useMemo(() => {
-    const baseOptions = activeView === 'ai-model-availability'
+    const baseOptions = activeView === 'ai-model-availability' || activeView === 'ai-summary-report'
       ? (Array.isArray(aiModelState.regions) ? aiModelState.regions : [])
       : (Array.isArray(capacityData.facets.regions) ? capacityData.facets.regions : []);
     const presetRegions = regionPresets[filters.regionPreset] || [];
@@ -2653,7 +2933,7 @@ function App() {
   }, [activeView, queryFilters, capacityData.pagination.pageNumber, capacityData.pagination.pageSize]);
 
   useEffect(() => {
-    if (activeView !== 'ai-model-availability') {
+    if (activeView !== 'ai-model-availability' && activeView !== 'ai-summary-report') {
       return;
     }
     refreshAIModelAvailability();
@@ -3459,8 +3739,11 @@ function App() {
     if (activeView === 'sku-chart') {
       return <DataTable key="sku-chart" title="Top SKUs" subtitle="Ranked by total available quota across the current filter scope." columns={[{ key: 'sku', label: 'SKU' }, { key: 'available', label: 'Available Quota', render: (row) => formatNumber(row.available) }]} rows={topSkus} emptyMessage="No SKU rollup data available." />;
     }
+    if (activeView === 'ai-summary-report') {
+      return <AIModelSummaryReportView rows={aiModelRows} status={aiModelState.status} loading={aiModelState.loading} availableRegions={scopedRegionOptions} />;
+    }
     if (activeView === 'ai-model-availability') {
-      return <AIModelAvailabilityView rows={aiModelRows} status={aiModelState.status} loading={aiModelState.loading} filters={aiModelFilters} onRefresh={refreshAIModelAvailability} />;
+      return <AIModelAvailabilityView rows={aiModelRows} status={aiModelState.status} loading={aiModelState.loading} filters={aiModelFilters} />;
     }
     if (activeView === 'capacity-score') {
       return <div className="rx-view-stack"><section className="rx-panel rx-panel--compact"><div className="rx-panel__header"><div><h2>Regional SKU Capacity Score</h2><p>Derived capacity score plus the latest saved or refreshed live placement details.</p></div></div><div className="rx-field-grid rx-field-grid--filters"><label className="rx-field"><span>Desired Placement Count</span><input className="rx-input" type="number" min="1" max="1000" value={capacityScores.desiredCount} onChange={(event) => setCapacityScores((current) => ({ ...current, desiredCount: String(normalizeDesiredPlacementCount(event.target.value)), pagination: { ...current.pagination, pageNumber: 1 } }))} /></label><label className="rx-field rx-field--wide"><span>Live Placement Subscription</span><select value={livePlacementSubscriptionId} onChange={(event) => setLivePlacementSubscriptionId(event.target.value)}><option value="">Select subscription</option>{subscriptionOptions.map((option) => <option key={option.subscriptionId} value={option.subscriptionId}>{option.subscriptionName || option.subscriptionId} ({option.subscriptionId})</option>)}</select></label><label className="rx-field"><span>Live Placement Family</span><select value={livePlacementFamily} onChange={(event) => setLivePlacementFamily(event.target.value)}><option value="">Select family</option>{capacityData.facets.families.map((family) => <option key={family} value={family}>{formatFamilyLabel(family) || family}</option>)}</select></label></div><div className="rx-inline-actions"><span className="rx-selected-count">{livePlacementScopeMessage}</span><button className="rx-button" type="button" disabled={capacityScores.busy || !canRefreshLivePlacement} onClick={refreshLivePlacement}>{capacityScores.busy ? 'Refreshing...' : 'Refresh Live Placement'}</button></div><Banner tone={capacityScores.status.tone} message={capacityScores.status.message} detail={capacityScores.status.detail} /></section><section className="rx-panel rx-panel--compact rx-panel--muted"><div className="rx-panel__header"><div><h2>Capacity Score Key</h2><p>Use this legend to distinguish saved capacity signals from live Azure placement responses.</p></div></div><div className="rx-matrix-key rx-matrix-key--compact"><div className="rx-matrix-key__group"><h3>Capacity Score</h3>{capacityScoreLegendItems().map((item) => <div key={item.value} className="rx-matrix-key__item"><StatusPill value={item.value} /><div><p>{item.description}</p></div></div>)}</div><div className="rx-matrix-key__group"><h3>Azure Live Score</h3>{livePlacementLegendItems().map((item) => <div key={item.value} className="rx-matrix-key__item"><StatusPill value={item.value} /><div><p>{item.description}</p></div></div>)}<div className="rx-matrix-key__item"><div><strong>Last Checked</strong><p>The timestamp shows when the latest live result or latest explicit unavailable result was saved.</p></div></div></div></div></section><DataTable title="Capacity Score" subtitle="Derived capacity score plus latest live placement details from SQL snapshots." tableClassName="rx-table--dense rx-capacity-score-table" sectionClassName="rx-panel--compact" columns={[{ key: 'region', label: 'Region' }, { key: 'sku', label: 'SKU', render: (row) => normalizeSkuName(row.sku) || 'n/a' }, { key: 'family', label: 'Family', render: (row) => formatFamilyLabel(row.family) || 'n/a' }, { key: 'score', label: 'Capacity Score', render: (row) => <StatusPill value={row.score} /> }, { key: 'livePlacementScore', label: 'Azure Live Score', render: (row) => row.livePlacementScore || 'n/a' }, { key: 'liveCheckedAtUtc', label: 'Checked', render: (row) => formatTimestamp(row.liveCheckedAtUtc) }, { key: 'subscriptionCount', label: 'Subscriptions', render: (row) => formatNumber(row.subscriptionCount) }, { key: 'okRows', label: 'OK', render: (row) => formatNumber(row.okRows) }, { key: 'limitedRows', label: 'Limited', render: (row) => formatNumber(row.limitedRows) }, { key: 'constrainedRows', label: 'Constrained', render: (row) => formatNumber(row.constrainedRows) }, { key: 'totalQuotaAvailable', label: 'Quota', render: (row) => formatNumber(row.totalQuotaAvailable) }, { key: 'reason', label: 'Reason', headerClassName: 'rx-capacity-score-table__reason', cellClassName: 'rx-capacity-score-table__reason', render: (row) => <span title={row.reason || ''}>{row.reason || 'n/a'}</span> }]} rows={capacityScores.rows} emptyMessage="No capacity score entries available." /><ServerPagination pagination={capacityScores.pagination} onPageChange={(pageNumber) => setCapacityScores((current) => ({ ...current, pagination: { ...current.pagination, pageNumber: Math.max(1, pageNumber) } }))} onPageSizeChange={(pageSize) => setCapacityScores((current) => ({ ...current, pagination: { ...current.pagination, pageNumber: 1, pageSize: Math.max(1, pageSize) } }))} /><DataTable title="Subscription Summary" tableClassName="rx-table--dense" sectionClassName="rx-panel--compact" columns={[{ key: 'subscriptionKey', label: 'Subscription Key' }, { key: 'skuObservations', label: 'SKU Observations', render: (row) => formatNumber(row.skuObservations || row.totalRows) }, { key: 'constrainedObservations', label: 'Constrained', render: (row) => formatNumber(row.constrainedObservations || row.constrainedRows) }, { key: 'totalQuotaAvailable', label: 'Quota Available', render: (row) => formatNumber(row.totalQuotaAvailable) }]} rows={capacityScores.subscriptionSummary} emptyMessage="No subscription summary rows available." /></div>;
@@ -3491,7 +3774,7 @@ function App() {
             <div className="rx-kicker">React V2</div>
             <h1>Capacity Dashboard</h1>
           </div>
-          <a className="rx-link-button" href="/">Classic UI</a>
+          <a className="rx-link-button" href="/classic/">Classic UI</a>
         </div>
         <div className="rx-nav-group">Reporting</div>
         <nav className="rx-nav-list">
@@ -3514,7 +3797,6 @@ function App() {
               <button className="rx-button rx-button--secondary" type="button" disabled={Boolean(exportBusyFormat)} onClick={() => downloadCapacityExport('csv')}>{exportBusyFormat === 'csv' ? 'Exporting CSV...' : 'Export CSV'}</button>
               <button className="rx-button rx-button--secondary" type="button" disabled={Boolean(exportBusyFormat)} onClick={() => downloadCapacityExport('xlsx')}>{exportBusyFormat === 'xlsx' ? 'Exporting Excel...' : 'Export Excel'}</button>
             </> : null}
-            {activeView === 'ai-model-availability' ? <button className="rx-button rx-button--secondary" type="button" disabled={aiModelState.loading} onClick={refreshAIModelAvailability}>{aiModelState.loading ? 'Refreshing...' : 'Refresh AI Catalog'}</button> : null}
             {isAdminView ? <label className="rx-check rx-check--sql-toggle"><input type="checkbox" checked={showSqlPreview} disabled={uiSettingsBusy} onChange={(event) => handleShowSqlPreviewChange(event.target.checked)} />Show SQL</label> : null}
             <div className="rx-user-chip">
               <strong>{auth?.name || 'Loading user...'}</strong>
@@ -3541,7 +3823,7 @@ function App() {
           <label className="rx-field"><span>Region preset</span><select value={filters.regionPreset} onChange={(event) => updateFilter('regionPreset', event.target.value)}>{REGION_PRESET_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
           <label className="rx-field"><span>Region</span><select value={filters.region} onChange={(event) => updateFilter('region', event.target.value)}><option value="all">All Regions</option>{scopedRegionOptions.map((region) => <option key={region} value={region}>{region}</option>)}</select></label>
         </DrawerFilterSection>
-        {activeView === 'ai-model-availability' ? <DrawerFilterSection title="AI catalog filters">
+        {activeView === 'ai-model-availability' || activeView === 'ai-summary-report' ? <DrawerFilterSection title="AI catalog filters">
           <label className="rx-field"><span>Model search</span><input className="rx-input" value={aiModelFilters.modelName} onChange={(event) => setAiModelFilters((current) => ({ ...current, modelName: event.target.value }))} placeholder="gpt-4o, llama, text-embedding" /></label>
           <label className="rx-field"><span>Provider</span><select value={aiModelFilters.provider} onChange={(event) => setAiModelFilters((current) => ({ ...current, provider: event.target.value }))}><option value="all">All providers</option>{aiProviderOptions.map((provider) => <option key={provider} value={provider}>{provider}</option>)}</select></label>
           <label className="rx-field"><span>Deployment type</span><select value={aiModelFilters.deploymentType} onChange={(event) => setAiModelFilters((current) => ({ ...current, deploymentType: event.target.value }))}><option value="all">All deployment types</option>{aiDeploymentTypeOptions.map((type) => <option key={type} value={type}>{type}</option>)}</select></label>

@@ -86,7 +86,9 @@ foreach ($migration in $migrationFiles) {
 }
 
 $roleStatements = @()
+$roleIndex = 0
 foreach ($roleName in $normalizedRoles) {
+    $varName = "@grantRoleSql$roleIndex"
     $roleStatements += @"
 IF NOT EXISTS (
     SELECT 1
@@ -99,10 +101,11 @@ IF NOT EXISTS (
       AND memberPrincipal.name = N'$AppIdentityName'
 )
 BEGIN
-    DECLARE @grantRoleSql NVARCHAR(4000) = N'ALTER ROLE $roleName ADD MEMBER ' + QUOTENAME(N'$AppIdentityName');
-    EXEC sp_executesql @grantRoleSql;
+    DECLARE $varName NVARCHAR(4000) = N'ALTER ROLE $roleName ADD MEMBER ' + QUOTENAME(N'$AppIdentityName');
+    EXEC sp_executesql $varName;
 END;
 "@
+    $roleIndex++
 }
 
 $grantQuery = @"

@@ -7,6 +7,9 @@ Thumbs.db
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+app-logs/
+app-logs.zip
+app_logs/
 appservice-logs*/
 test-app-logs/
 test-current-logs*/
@@ -53,6 +56,17 @@ tools/Get-AzVMAvailability/TEST_MARKER.txt
 # Terraform/Bicep local artifacts
 *.tfstate
 *.tfstate.*
+.terraform/
+.terraform.lock.hcl
+*.tfvars
+!*.tfvars.example
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
 .bicep/
 # Squad: SubSquad activation file (local to this machine)
 .squad-workstream

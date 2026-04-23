@@ -1201,7 +1201,48 @@ async function getCapacityRecommendations(options = {}) {
       });
     }
   } catch (error) {
-    if (useWorkerFirstMode() && !shouldDisableLocalFallback()) {
+    if (showSpot) {
+      try {
+        const retryResult = useWorkerFirstMode()
+          ? await runRemoteRecommendationLookup({
+              targetSku,
+              regions: resolvedRegions,
+              topN,
+              minScore,
+              showPricing,
+              showSpot: false
+            })
+          : await runRecommendationLookupLocal({
+              targetSku,
+              regions: resolvedRegions,
+              topN,
+              minScore,
+              showPricing,
+              showSpot: false
+            });
+
+        contract = {
+          ...retryResult,
+          diagnostics: retryResult?.diagnostics
+            ? {
+                ...retryResult.diagnostics,
+                executionMode: useWorkerFirstMode() ? 'function-app-spot-disabled' : retryResult.diagnostics.executionMode,
+                fallbackReason: error.message
+              }
+            : {
+                executionMode: useWorkerFirstMode() ? 'function-app-spot-disabled' : 'local-spot-disabled',
+                fallbackReason: error.message
+              }
+        };
+        fallbackApplied = true;
+      } catch {
+        // Fall through to the normal worker/local fallback handling below.
+      }
+    }
+
+    if (contract) {
+      // A showSpot retry succeeded; treat the request as degraded but successful.
+    } else if (useWorkerFirstMode() && !shouldDisableLocalFallback()) {
       const localResult = await runRecommendationLookupLocal({
         targetSku,
         regions: resolvedRegions,
@@ -1226,7 +1267,7 @@ async function getCapacityRecommendations(options = {}) {
             }
       };
       fallbackApplied = true;
-    } else {
+      } else {
       const errorText = String(error?.message || '').toLowerCase();
       const isNoOutputFailure = errorText.includes('returned no json output') || errorText.includes('no output was returned by the recommendation wrapper');
 
@@ -1248,10 +1289,15 @@ async function getCapacityRecommendations(options = {}) {
 
   if (fallbackApplied) {
     const warnings = Array.isArray(contract?.warnings) ? contract.warnings : [];
+    const executionMode = String(contract?.diagnostics?.executionMode || '').toLowerCase();
     if (!warnings.some((warning) => /fallback/i.test(String(warning || '')))) {
-      warnings.push(useWorkerFirstMode()
-        ? 'Recommendations were served from the local fallback runner after the remote worker failed.'
-        : 'Spot pricing request was retried with Show Spot disabled after an empty-output runner response.');
+      warnings.push(
+        executionMode === 'function-app-spot-disabled' || executionMode === 'local-spot-disabled'
+          ? 'Spot pricing could not be retrieved, so recommendations were retried with Show Spot disabled.'
+          : (useWorkerFirstMode()
+            ? 'Recommendations were served from the local fallback runner after the remote worker failed.'
+            : 'Spot pricing request was retried with Show Spot disabled after an empty-output runner response.')
+      );
     }
     contract = {
       ...contract,

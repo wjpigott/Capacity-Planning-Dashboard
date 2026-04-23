@@ -356,6 +356,7 @@ function getCapacityFiltersFromQuery(query = {}) {
     subscriptionIds: query.subscriptionIds,
     region: getFirstQueryValue(query.region),
     family: getFirstQueryValue(query.family),
+    familyBase: getFirstQueryValue(query.familyBase),
     availability: getFirstQueryValue(query.availability),
     resourceType: getFirstQueryValue(query.resourceType),
     pageNumber: getFirstQueryValue(query.pageNumber),
@@ -621,6 +622,7 @@ function getCapacityFiltersFromQuery(query = {}) {
     subscriptionIds: query.subscriptionIds,
     region: getFirstQueryValue(query.region),
     family: getFirstQueryValue(query.family),
+    familyBase: getFirstQueryValue(query.familyBase),
     availability: getFirstQueryValue(query.availability),
     resourceType: getFirstQueryValue(query.resourceType),
     provider: getFirstQueryValue(query.provider),
@@ -1690,6 +1692,7 @@ app.get('/api/capacity/subscriptions', async (req, res) => {
       subscriptionIds: req.query.subscriptionIds,
       region: req.query.region,
       family: req.query.family,
+      familyBase: req.query.familyBase,
       availability: req.query.availability
     });
     res.json({ rows });
@@ -1709,6 +1712,7 @@ app.get('/api/admin/sql-preview', requireAdmin, async (req, res) => {
       subscriptionIds: req.query.subscriptionIds,
       region: req.query.region,
       family: req.query.family,
+      familyBase: req.query.familyBase,
       quotaName: req.query.quotaName,
       availability: req.query.availability,
       resourceType: req.query.resourceType,
@@ -1730,6 +1734,7 @@ app.get('/api/capacity/trends', async (req, res) => {
       subscriptionIds: req.query.subscriptionIds,
       region: req.query.region,
       family: req.query.family,
+      familyBase: req.query.familyBase,
       availability: req.query.availability,
       resourceType: req.query.resourceType
     });
@@ -1746,6 +1751,7 @@ app.get('/api/capacity/families', async (req, res) => {
       subscriptionIds: req.query.subscriptionIds,
       region: req.query.region,
       family: req.query.family,
+      familyBase: req.query.familyBase,
       availability: req.query.availability
     });
     res.json({ rows });
@@ -1764,6 +1770,7 @@ app.get('/api/capacity/scores', async (req, res) => {
       subscriptionIds: req.query.subscriptionIds,
       region: req.query.region,
       family: req.query.family,
+      familyBase: req.query.familyBase,
       availability: req.query.availability,
       desiredCount: req.query.desiredCount
     }, pageNumber, pageSize);
@@ -1821,7 +1828,7 @@ app.post('/api/capacity/recommendations', async (req, res) => {
     });
     res.json({ ok: true, result });
   } catch (err) {
-    const status = err.message.includes('not found') || err.message.includes('not configured') ? 503 : 500;
+    const status = err.statusCode || (err.message.includes('not found') || err.message.includes('not configured') ? 503 : 500);
     sendErrorResponse(res, { status, clientMessage: 'Failed to retrieve capacity recommendations.', err, scope: 'api/capacity/recommendations' });
   }
 });

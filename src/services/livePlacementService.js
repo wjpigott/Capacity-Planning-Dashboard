@@ -62,6 +62,11 @@ function normalizeSkuName(value) {
   return trimmed;
 }
 
+function isAggregateSkuName(value) {
+  const normalized = String(value || '').trim();
+  return /(?:^|[_-])aggregate$/i.test(normalized) || /family-aggregate$/i.test(normalized);
+}
+
 function normalizeRecommendationContract(contract) {
   if (!contract || typeof contract !== 'object') {
     return contract;
@@ -1154,6 +1159,11 @@ async function getCapacityRecommendations(options = {}) {
   const targetSku = normalizeSkuName(options.targetSku);
   if (!targetSku) {
     throw new Error('Target SKU is required for recommendations.');
+  }
+  if (isAggregateSkuName(targetSku)) {
+    const aggregateError = new Error(`Target SKU must be a concrete Azure VM size, not an aggregate label. Use a real SKU such as Standard_NC24ads_A100_v4, Standard_NC4as_T4_v3, or Standard_NC40ads_H100_v5 instead of ${targetSku}.`);
+    aggregateError.statusCode = 400;
+    throw aggregateError;
   }
 
   const explicitRegions = (Array.isArray(options.regions)

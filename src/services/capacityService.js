@@ -159,16 +159,22 @@ function canonicalComputeFamilyLabel(rawFamily, skuName) {
   return '';
 }
 
-function applyFilters(rows, { region, family, availability, resourceType, provider }) {
+function normalizeFamilyBaseFilter(value) {
+  return String(value || '').trim().toUpperCase();
+}
+
+function applyFilters(rows, { region, family, familyBase, availability, resourceType, provider }) {
   const providerFilter = String(provider || '').trim();
+  const normalizedFamilyBase = normalizeFamilyBaseFilter(familyBase);
   return rows.filter((r) => {
     const byRegion = !region || region === 'all' || r.region === region;
     const byFamily = !family || family === 'all' || r.family === family;
+    const byFamilyBase = !normalizedFamilyBase || normalizedFamilyBase === 'ALL' || canonicalComputeFamilyLabel(r.family, r.sku) === normalizedFamilyBase;
     const byAvailability = !availability || availability === 'all' || r.availability === availability;
     const byType = !resourceType || resourceType === 'all' || getRowResourceType(r) === resourceType;
     const byProvider = !providerFilter || providerFilter === 'all'
       || (getRowResourceType(r) === 'AI' && String(resolveAIQuotaProvider(r) || '').trim() === providerFilter);
-    return byRegion && byFamily && byAvailability && byType && byProvider;
+    return byRegion && byFamily && byFamilyBase && byAvailability && byType && byProvider;
   });
 }
 

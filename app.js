@@ -186,12 +186,29 @@ function compareSkuValues(left, right) {
   });
 }
 
+const skuCatalog = window.CAPACITY_SKU_CATALOG || null;
+
 const FAMILY_EXTRA_SKU_MAP = {
-  standardHBv3Family: ['Standard_HB120rs_v3'],
-  standardHBv4Family: ['Standard_HB176rs_v4'],
-  standardNDH100v5Family: ['Standard_ND96isr_H100_v5'],
-  standardNCA100v4Family: ['Standard_NC96ads_A100_v4'],
-  standardDSv5Family: [
+  standardHBv3Family: skuCatalog?.getSkusForFamily('standardHBv3Family') || ['Standard_HB120rs_v3'],
+  standardHBv4Family: skuCatalog?.getSkusForFamily('standardHBv4Family') || ['Standard_HB176rs_v4'],
+  standardNDH100v5Family: skuCatalog?.getSkusForFamily('standardNDH100v5Family') || ['Standard_ND96isr_H100_v5'],
+  standardNCasT4v3Family: skuCatalog?.getSkusForFamily('standardNCasT4v3Family') || [
+    'Standard_NC4as_T4_v3',
+    'Standard_NC8as_T4_v3',
+    'Standard_NC16as_T4_v3',
+    'Standard_NC64as_T4_v3'
+  ],
+  standardNCA100v4Family: skuCatalog?.getSkusForFamily('standardNCA100v4Family') || [
+    'Standard_NC24ads_A100_v4',
+    'Standard_NC48ads_A100_v4',
+    'Standard_NC96ads_A100_v4'
+  ],
+  standardNCadsH100v5Family: skuCatalog?.getSkusForFamily('standardNCadsH100v5Family') || [
+    'Standard_NC40ads_H100_v5',
+    'Standard_NC80adis_H100_v5'
+  ],
+  standardNCCadsH100v5Family: skuCatalog?.getSkusForFamily('standardNCCadsH100v5Family') || ['Standard_NCC40ads_H100_v5'],
+  standardDSv5Family: skuCatalog?.getSkusForFamily('standardDSv5Family') || [
     'Standard_D2s_v5',
     'Standard_D4s_v5',
     'Standard_D8s_v5',
@@ -225,7 +242,11 @@ const regionPresets = {
 };
 
 const RECOMMENDER_FAMILY_SKU_OPTIONS = {
-  standardDSv5Family: FAMILY_EXTRA_SKU_MAP.standardDSv5Family
+  standardDSv5Family: FAMILY_EXTRA_SKU_MAP.standardDSv5Family,
+  standardNCasT4v3Family: FAMILY_EXTRA_SKU_MAP.standardNCasT4v3Family,
+  standardNCA100v4Family: FAMILY_EXTRA_SKU_MAP.standardNCA100v4Family,
+  standardNCadsH100v5Family: FAMILY_EXTRA_SKU_MAP.standardNCadsH100v5Family,
+  standardNCCadsH100v5Family: FAMILY_EXTRA_SKU_MAP.standardNCCadsH100v5Family
 };
 
 const gridBody = document.querySelector('#capacityGrid tbody');
@@ -2800,11 +2821,25 @@ function recommendationAvailabilityWeight(value) {
   return 1;
 }
 
+function isAggregateSkuName(value) {
+  return /(?:^|[_-])aggregate$/i.test(String(value || '').trim()) || /family-aggregate$/i.test(String(value || '').trim());
+}
+
+function getRecommenderFamilySkuOptions(familyValue) {
+  const familyKey = String(familyValue || '').trim();
+  const preferred = RECOMMENDER_FAMILY_SKU_OPTIONS[familyKey];
+  if (Array.isArray(preferred) && preferred.length > 0) {
+    return preferred;
+  }
+  const mapped = FAMILY_EXTRA_SKU_MAP[familyKey];
+  return Array.isArray(mapped) ? mapped : [];
+}
+
 function defaultRecommendTargetSkuFromFilters() {
   const selectedType = resourceTypeFilter?.value || 'all';
   const selectedFamily = familyFilter?.value || 'all';
   const selectedAvailability = availabilityFilter?.value || 'all';
-  const familyPreferredSkus = RECOMMENDER_FAMILY_SKU_OPTIONS[selectedFamily];
+  const familyPreferredSkus = getRecommenderFamilySkuOptions(selectedFamily);
 
   if (Array.isArray(familyPreferredSkus) && familyPreferredSkus.length > 0) {
     return normalizeSkuName(familyPreferredSkus[0]);
@@ -2824,7 +2859,7 @@ function defaultRecommendTargetSkuFromFilters() {
   const bySku = new Map();
   scoped.forEach((row) => {
     const sku = normalizeSkuName(row?.sku);
-    if (!sku) {
+    if (!sku || isAggregateSkuName(sku)) {
       return;
     }
 
@@ -2888,12 +2923,12 @@ function recommendationSkuOptionsFromTopFilters() {
 
   scopedRows.forEach((row) => {
     const sku = normalizeSkuName(row?.sku);
-    if (sku) {
+    if (sku && !isAggregateSkuName(sku)) {
       options.add(sku);
     }
   });
 
-  const familyPreferredSkus = RECOMMENDER_FAMILY_SKU_OPTIONS[selectedFamily];
+  const familyPreferredSkus = getRecommenderFamilySkuOptions(selectedFamily);
   if (Array.isArray(familyPreferredSkus)) {
     familyPreferredSkus.forEach((sku) => {
       const normalizedSku = normalizeSkuName(sku);

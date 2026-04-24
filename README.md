@@ -341,6 +341,11 @@ Quota apply uses the vendored `tools/Get-AzVMAvailability` copy that ships with 
 
 ## Infrastructure deployment
 
+Terraform deployment note:
+
+- The script examples in this section use the Bicep path. If you are deploying with Terraform instead, use [infra/terraform/README.md](c:/repos/Capacity/dashboard/infra/terraform/README.md) for the standalone workflow and prerequisites.
+- Terraform is currently documented as a separate flow because it does not use `./scripts/deploy-infra.ps1`, does not publish the web package for you, and may target an existing resource group that needs to be imported into state before the first apply.
+
 Use script-based deployment with Central US default:
 
 ```powershell

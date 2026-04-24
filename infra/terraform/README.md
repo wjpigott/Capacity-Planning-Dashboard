@@ -45,6 +45,81 @@ infra/terraform/
 - Azure CLI authenticated (`az login`) with **Contributor** + **User Access Administrator** on the target subscription
 - State is stored locally in `terraform.tfstate` (update `backend.tf` to use a remote backend if needed)
 
+## Before first apply
+
+`terraform.tfvars` is gitignored by the repo (`*.tfvars` in the root `.gitignore`).
+Populate your local `infra/terraform/terraform.tfvars` before running Terraform if you want environment-specific values such as auth settings, secrets, and subscription RBAC lists.
+
+Have these values ready before you create `terraform.tfvars` or run `terraform apply`:
+
+- Azure subscription selected in Azure CLI with `az account set --subscription <subscription-id-or-name>`
+- Microsoft Entra user or group that will be the Azure SQL Entra admin
+    - `sql_entra_admin_login`
+    - `sql_entra_admin_object_id`
+- Shared secrets for the dashboard runtime
+    - `ingest_api_key`
+    - `session_secret`
+    - optional `worker_shared_secret`
+- Optional management-group default for quota workflows
+    - `quota_management_group_id`
+- Subscription lists for any cross-subscription access you want Terraform to assign
+    - `web_reader_subscription_ids`
+    - `web_quota_writer_subscription_ids`
+    - `worker_subscription_rbac_subscription_ids`
+
+If you want dashboard sign-in enabled, create the Microsoft Entra app registration first. Terraform does not create the app registration for you.
+
+Required app registration inputs when `auth_enabled = true`:
+
+- `entra_tenant_id`
+- `entra_client_id`
+- `entra_client_secret`
+- optional `admin_group_id`
+- optional `auth_redirect_uri`
+
+Optional app registration management:
+
+- Set `manage_entra_web_redirect_uri = true` if you want Terraform to append the generated dashboard callback URL to the existing app registration's web redirect URIs.
+- Terraform will look up the app registration by `entra_client_id` and preserve any existing web redirect URIs it can read.
+- The identity running Terraform must be allowed to read and update Entra applications. With a service principal, that means `Application.ReadWrite.OwnedBy` or `Application.ReadWrite.All`, plus ownership of the app when using `OwnedBy`.
+- If you need to preserve redirect URIs that Terraform cannot read yet or want to keep non-production callbacks explicit, add them to `extra_entra_web_redirect_uris`.
+
+Recommended app registration setup:
+
+- Redirect URI: `https://<web-app-name>.azurewebsites.net/auth/callback`
+- Add the admin security group up front if you plan to gate Admin routes with `admin_group_id`
+
+## Region and naming guidance
+
+- Default deployment region is `centralus`.
+- If you are deploying into an existing resource group in a different region, keep the resource group's actual region in `resource_group_location` and use `location` for the new resources.
+- Do not assume globally unique names such as the Function App host name or Key Vault name are available. If Azure reports that a name already exists, change `workload_suffix` and re-run the plan.
+- If only the Key Vault name is blocked by soft-delete retention, set `key_vault_name_override` to a different globally unique vault name instead of renaming the entire environment.
+- Azure SQL region availability is subscription-dependent. If Azure rejects SQL provisioning in one region, change `location` to a supported region and re-run `terraform plan` before `apply`.
+
+Example for an existing East US resource group with resources deployed in Central US:
+
+```hcl
+resource_group_name     = "CapacityPlanning"
+resource_group_location = "eastus"
+location                = "centralus"
+environment             = "dev"
+workload_suffix         = "cap003"
+```
+
+## Existing resource groups
+
+The Terraform configuration declares the resource group as a managed resource. That means:
+
+- If the resource group does not exist yet, Terraform can create it.
+- If the resource group already exists, import it before the first apply.
+
+Example import:
+
+```powershell
+terraform import -var-file="terraform.tfvars" azurerm_resource_group.rg "/subscriptions/<subscription-id>/resourceGroups/<resource-group-name>"
+```
+
 ## Quick start
 
 All variables have sensible defaults, so a minimal deploy requires no tfvars file:
@@ -61,22 +136,51 @@ To customize, copy and edit the example tfvars:
 Copy-Item terraform.tfvars.example terraform.tfvars
 ```
 
+If you use `./scripts/deploy-infra.ps1 -Provider Terraform`, Terraform still auto-loads `infra/terraform/terraform.tfvars` by default. Pass `-AuthEnabled`, `-EntraTenantId`, `-IngestApiKey`, `-SessionSecret`, or the other flags only when you intentionally want the wrapper command line to override what is already in `terraform.tfvars`.
+
+The script-based Terraform path also publishes both application packages after the infrastructure apply:
+
+- the dashboard web app package to the Web App
+- the worker Function App package to the Function App
+
 ```hcl
 # terraform.tfvars
+resource_group_name       = "CapacityDashboard-Dev"
+resource_group_location   = "centralus"
 location                  = "centralus"
 environment               = "dev"
 workload_suffix           = "cap002"
-resource_group_name       = "CapacityDashboard-Dev"
 sql_entra_admin_login     = "user@contoso.com"
 sql_entra_admin_object_id = "00000000-0000-0000-0000-000000000000"
 ingest_api_key            = "your-ingest-key"
 session_secret            = "your-session-secret"
+quota_management_group_id = "Demo-MG"
 ```
 
 Then apply:
 
 ```powershell
 terraform apply -var-file="terraform.tfvars"
+```
+
+## Post-deploy database initialization
+
+Treat database initialization as a separate explicit post-deploy step for customer environments. This is the same recommendation as the Bicep deployment path.
+
+- `deploy-infra.ps1 -Provider Terraform` does not automatically switch to local `sqlcmd` execution just because the operator machine can reach Azure SQL. Its built-in behavior still calls the deployed web app bootstrap endpoints unless you disable that step.
+- When the customer runbook requires a separate DBA or network-approved initialization step, pass `-ApplyDatabaseBootstrap $false` during infra/app deployment and then run `scripts/initialize-database.ps1` explicitly afterward.
+- Run `scripts/initialize-database.ps1` as the Azure SQL Entra admin after the infrastructure and app deploy complete.
+- If Azure SQL remains private-only, execute that script from an approved network path such as an ExpressRoute-connected admin workstation, a self-hosted deployment runner, or an Azure VM that can reach the SQL endpoint.
+- Do not assume a random operator laptop or hosted CI runner can reach the database just because the customer has ExpressRoute.
+- Keep the web app managed identity at runtime roles such as `db_datareader` and `db_datawriter` after initialization rather than relying on permanent DDL rights in the app.
+
+Example:
+
+```powershell
+./scripts/initialize-database.ps1 \
+    -SqlServer "sql-capdash-<environment>-<suffix>.database.windows.net" \
+    -SqlDatabase "sqldb-capdash-<environment>" \
+    -AppIdentityName "app-capdash-<environment>-<suffix>"
 ```
 
 ## Variables
@@ -86,8 +190,10 @@ All variables have defaults and can be overridden via tfvars or CLI flags.
 | Variable | Default | Description |
 |---|---|---|
 | `location` | `centralus` | Azure region for all resources |
+| `resource_group_location` | `""` | Optional resource group region override when the resource group already exists in a different region |
 | `environment` | `dev` | Environment token (`dev`, `test`, `prod`) |
 | `workload_suffix` | `cap002` | Unique suffix (3-12 chars) for resource naming |
+| `key_vault_name_override` | `""` | Optional explicit Key Vault name when the default `kv-capdash-<environment>-<suffix>` is unavailable |
 | `resource_group_name` | `CapacityDashboard-Dev` | Resource group name (created by Terraform) |
 | `sql_entra_admin_login` | *(set in defaults)* | Entra admin UPN for SQL Server |
 | `sql_entra_admin_object_id` | *(set in defaults)* | Entra admin object ID for SQL Server |
@@ -105,6 +211,8 @@ All variables have defaults and can be overridden via tfvars or CLI flags.
 | `entra_client_id` | `""` | Entra app client ID |
 | `entra_client_secret` | `""` | Entra app client secret (sensitive) |
 | `auth_redirect_uri` | `""` | Auth callback URI (auto-generated if empty) |
+| `manage_entra_web_redirect_uri` | `false` | Update the existing Entra app registration web redirect URIs |
+| `extra_entra_web_redirect_uris` | `[]` | Extra web redirect URIs to preserve when Terraform manages Entra redirects |
 | `admin_group_id` | `""` | Entra group for admin access |
 | `web_reader_subscription_ids` | `[]` | Subscriptions for web app Reader role |
 | `web_quota_writer_subscription_ids` | `[]` | Subscriptions for GroupQuota Request Operator |
@@ -113,6 +221,11 @@ All variables have defaults and can be overridden via tfvars or CLI flags.
 | `assign_worker_cost_management_reader_role` | `true` | Toggle Cost Management Reader |
 | `assign_worker_billing_reader_role` | `true` | Toggle Billing Reader |
 | `admin_ssh_public_key` | `""` | Unused – declared for backward compatibility |
+
+Quota management-group note:
+
+- Set `quota_management_group_id` when you expect the Admin quota experience to default to a known management group, or when tenant-wide management-group enumeration is restricted and the UI needs a fallback management group to return.
+- Without this value, `/api/quota/management-groups` depends entirely on the web app identity being able to enumerate management groups through `Microsoft.Management/managementGroups`.
 
 ## Outputs
 

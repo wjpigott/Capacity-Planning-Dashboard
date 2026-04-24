@@ -49,6 +49,12 @@ variable "resource_group_name" {
   default     = "CapacityDashboard-Dev"
 }
 
+variable "resource_group_location" {
+  type        = string
+  description = "Optional location for the resource group when it differs from the deployed resources"
+  default     = ""
+}
+
 variable "location" {
   type        = string
   description = "Location for all resources"
@@ -132,6 +138,12 @@ variable "key_vault_public_network_access" {
   }
 }
 
+variable "key_vault_name_override" {
+  type        = string
+  description = "Optional explicit Key Vault name override. Use this when the default name is blocked by Azure soft-delete retention."
+  default     = ""
+}
+
 # ──────────────────────────────────────────────
 # Web App (Dashboard)
 # ──────────────────────────────────────────────
@@ -187,6 +199,18 @@ variable "auth_redirect_uri" {
   type        = string
   description = "Optional redirect URI for the dashboard auth callback"
   default     = ""
+}
+
+variable "manage_entra_web_redirect_uri" {
+  type        = bool
+  description = "When true, Terraform updates the existing Entra app registration to include the generated dashboard callback URL"
+  default     = false
+}
+
+variable "extra_entra_web_redirect_uris" {
+  type        = list(string)
+  description = "Additional web redirect URIs to preserve on the existing Entra app registration when Terraform manages redirect URIs"
+  default     = []
 }
 
 variable "admin_group_id" {

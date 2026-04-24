@@ -23,8 +23,11 @@ IF OBJECT_ID('dbo.AIModelAvailability', 'U') IS NOT NULL
 AND NOT EXISTS (
     SELECT 1
     FROM sys.default_constraints
-    WHERE name = 'DF_AIModelAvailability_Provider'
-      AND parent_object_id = OBJECT_ID('dbo.AIModelAvailability')
+    INNER JOIN sys.columns
+        ON sys.columns.object_id = sys.default_constraints.parent_object_id
+       AND sys.columns.column_id = sys.default_constraints.parent_column_id
+    WHERE sys.default_constraints.parent_object_id = OBJECT_ID('dbo.AIModelAvailability')
+      AND sys.columns.name = 'provider'
 )
 BEGIN
     ALTER TABLE dbo.AIModelAvailability
@@ -60,8 +63,29 @@ GO
 
 IF OBJECT_ID('dbo.AIModelAvailability', 'U') IS NOT NULL
 BEGIN
-    CREATE OR ALTER VIEW dbo.AIModelAvailabilityLatest AS
-    WITH Ranked AS (
+    EXEC(N'
+        CREATE OR ALTER VIEW dbo.AIModelAvailabilityLatest AS
+        WITH Ranked AS (
+            SELECT
+                capturedAtUtc,
+                subscriptionId,
+                region,
+                provider,
+                modelName,
+                modelVersion,
+                deploymentTypes,
+                finetuneCapable,
+                deprecationDate,
+                skuName,
+                modelFormat,
+                isDefault,
+                capabilities,
+                ROW_NUMBER() OVER (
+                    PARTITION BY region, provider, modelName, modelVersion
+                    ORDER BY capturedAtUtc DESC
+                ) AS rn
+            FROM dbo.AIModelAvailability
+        )
         SELECT
             capturedAtUtc,
             subscriptionId,
@@ -75,28 +99,9 @@ BEGIN
             skuName,
             modelFormat,
             isDefault,
-            capabilities,
-            ROW_NUMBER() OVER (
-                PARTITION BY region, provider, modelName, modelVersion
-                ORDER BY capturedAtUtc DESC
-            ) AS rn
-        FROM dbo.AIModelAvailability
-    )
-    SELECT
-        capturedAtUtc,
-        subscriptionId,
-        region,
-        provider,
-        modelName,
-        modelVersion,
-        deploymentTypes,
-        finetuneCapable,
-        deprecationDate,
-        skuName,
-        modelFormat,
-        isDefault,
-        capabilities
-    FROM Ranked
-    WHERE rn = 1;
+            capabilities
+        FROM Ranked
+        WHERE rn = 1;
+    ');
 END;
 GO

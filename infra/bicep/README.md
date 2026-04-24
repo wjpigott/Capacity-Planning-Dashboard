@@ -60,6 +60,7 @@ This template provisions a native Azure baseline for the dashboard solution.
   -Environment test \
   -WorkloadSuffix "cap001" \
   -ParameterFile "./infra/bicep/test.bicepparam" \
+  -QuotaManagementGroupId "<management-group-id>" \
   -WebReaderSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
   -WebQuotaWriterSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
   -WorkerRbacSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
@@ -77,15 +78,30 @@ The script-based path is the recommended operator workflow because it now:
 
 - deploys the infrastructure from Bicep
 - deploys the dashboard web package, including `react/`, to the matching App Service name
-- keeps the repeatable SQL bootstrap path inside Azure instead of requiring local SQL connectivity
-- falls back to an admin-assisted Azure-side bootstrap when the web app identity cannot create schema objects itself
+- deploys the worker Function App package to the matching Function App name
+
+Customer deployment note:
+
+- Treat database initialization as a separate explicit post-deploy step for customer environments, even when you use `deploy-infra.ps1`.
+- This is the same recommendation for both Bicep and Terraform deployments.
+- `deploy-infra.ps1` does not automatically switch to local `sqlcmd` execution just because the operator machine has SQL connectivity. Its built-in path still calls the deployed web app bootstrap endpoints unless you disable that step.
+- When the customer runbook requires a separate DBA or network-approved initialization step, pass `-ApplyDatabaseBootstrap $false` during infra/app deployment and then run `scripts/initialize-database.ps1` explicitly afterward.
+- If Azure SQL stays private-only, run `scripts/initialize-database.ps1` from an approved network path such as an ExpressRoute-connected admin workstation, a self-hosted deployment runner, or an Azure VM that can reach the SQL endpoint.
+- Do not assume a random operator laptop or hosted CI runner can reach the SQL endpoint just because the customer has ExpressRoute.
+- Keep the web app managed identity at runtime roles such as `db_datareader` and `db_datawriter` after initialization rather than relying on permanent DDL rights in the app.
 
 Use `-DeployWebApp $false` only when you intentionally want an infra-only run.
+
+Quota management-group note:
+
+- Set `-QuotaManagementGroupId` when you expect the Admin quota experience to default to a known management group, or when tenant-wide management-group enumeration is restricted and the UI needs a fallback management group to return.
+- Without this setting, `/api/quota/management-groups` depends entirely on the web app identity being able to enumerate management groups through `Microsoft.Management/managementGroups`.
 
 Manual SQL tooling note:
 
 - `sqlcmd` is still a prerequisite for the standalone schema/migration/sample-data scripts under `scripts/`.
-- For private SQL environments, prefer the web app bootstrap path over manual `sqlcmd` execution from a workstation that may not have network access.
+- For customer or private SQL environments, prefer an explicit database initialization step from a known-good network path over relying on the web app to retain schema-creation rights.
+- If the customer uses ExpressRoute, that helps only when the machine or self-hosted runner executing `scripts/initialize-database.ps1` is actually on that ExpressRoute-connected path and Azure SQL allows that path.
 - If the customer DBA team owns a pre-created Entra-only SQL server, use `scripts/initialize-database.ps1` from an Azure-connected host with Entra SQL admin rights, or hand that script to the DBA team as the post-deploy runbook step.
 
 Raw Bicep deployment is also supported:
@@ -124,7 +140,7 @@ Example:
 
 ## Current gaps for blue-green style Bicep deployments
 
-- Raw template deployment still provisions infrastructure only. The script-based workflow now chains the dashboard web app publish, but Function zip deployment, SQL schema migration, and some post-deploy app settings remain separate runbook steps.
+- Raw template deployment still provisions infrastructure only. The script-based workflow now chains the dashboard web app publish and worker Function App zip deployment, but SQL schema migration and some post-deploy app settings remain separate runbook steps.
 - There is no traffic-routing layer in Bicep yet. `dev` and `test` can coexist, but cutover is manual because Front Door, Traffic Manager, or deployment slots are not modeled.
 - A React-only production packaging/deployment path is not modeled separately yet. The next production pass should decide whether the classic UI is omitted entirely or retained only as a compatibility fallback.
 - SQL database data-plane grants (for example `db_datareader` and `db_datawriter`) are not ARM resources and still require post-deploy SQL role configuration. The repo now includes `scripts/initialize-database.ps1` for that step when SQL is customer-managed.
@@ -136,6 +152,6 @@ Example:
 ## Next steps
 
 1. Deploy the `test` resource group with `infra/bicep/test.bicepparam`.
-2. Deploy the web app and worker packages to the new `test` app names.
-3. Apply schema and migrations to `sqldb-capdash-test`.
+2. Run `deploy-infra.ps1` to deploy the web app and worker packages to the new `test` app names. If the database must be initialized separately, include `-ApplyDatabaseBootstrap $false` on `deploy-infra.ps1`.
+3. Run `scripts/initialize-database.ps1` as the Azure SQL Entra admin from a network path that can reach the SQL endpoint, then verify the web app identity has only the intended runtime database roles.
 4. Add a traffic-routing layer or slots if you want true blue-green cutover instead of separate stable environments.

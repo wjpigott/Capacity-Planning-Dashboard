@@ -6,7 +6,7 @@ locals {
   function_storage_name              = "stcap${var.environment}${random_string.storage_suffix.result}"
   app_insights_name                  = "appi-capdash-${var.environment}-${var.workload_suffix}"
   log_analytics_name                 = "log-capdash-${var.environment}-${var.workload_suffix}"
-  key_vault_name                     = "kv-capdash-${var.environment}-${var.workload_suffix}"
+  key_vault_name                     = var.key_vault_name_override != "" ? var.key_vault_name_override : "kv-capdash-${var.environment}-${var.workload_suffix}"
   sql_server_name                    = "sql-capdash-${var.environment}-${var.workload_suffix}"
   sql_database_name                  = "sqldb-capdash-${var.environment}"
   vnet_name                          = "vnet-capdash-${var.environment}-${var.workload_suffix}"
@@ -19,6 +19,8 @@ locals {
   kv_private_dns_zone_name           = "privatelink.vaultcore.azure.net"
   kv_private_dns_zone_vnet_link      = "pdz-link-kv-capdash-${var.environment}-${var.workload_suffix}"
   effective_auth_redirect_uri        = var.auth_redirect_uri != "" ? var.auth_redirect_uri : "https://${local.web_app_name}.azurewebsites.net/auth/callback"
+  existing_entra_web_redirect_uris   = try(tolist(data.azuread_application.dashboard[0].web[0].redirect_uris), [])
+  managed_entra_web_redirect_uris    = distinct(concat(local.existing_entra_web_redirect_uris, var.extra_entra_web_redirect_uris, [local.effective_auth_redirect_uri]))
 }
 
 resource "random_string" "storage_suffix" {
@@ -29,10 +31,15 @@ resource "random_string" "storage_suffix" {
 
 resource "azurerm_resource_group" "rg" {
   name     = var.resource_group_name
-  location = var.location
+  location = var.resource_group_location != "" ? var.resource_group_location : var.location
 }
 
 data "azurerm_client_config" "current" {}
+
+data "azuread_application" "dashboard" {
+  count     = var.manage_entra_web_redirect_uri && var.auth_enabled && var.entra_client_id != "" ? 1 : 0
+  client_id = var.entra_client_id
+}
 
 # ──────────────────────────────────────────────
 # Virtual Network
@@ -165,6 +172,15 @@ resource "azurerm_windows_web_app" "web" {
     "SESSION_STORE_SQL_ENABLED"             = var.auth_enabled ? "true" : "false"
     "SCM_DO_BUILD_DURING_DEPLOYMENT"        = "true"
   }
+}
+
+resource "azuread_application_redirect_uris" "dashboard_web" {
+  count          = var.manage_entra_web_redirect_uri && var.auth_enabled && var.entra_client_id != "" ? 1 : 0
+  application_id = data.azuread_application.dashboard[0].id
+  type           = "Web"
+  redirect_uris  = local.managed_entra_web_redirect_uris
+
+  depends_on = [azurerm_windows_web_app.web]
 }
 
 # ──────────────────────────────────────────────

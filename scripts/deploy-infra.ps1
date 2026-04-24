@@ -11,11 +11,12 @@ param(
     [Parameter(Mandatory = $false)][string[]]$WebReaderSubscriptionIds = @(),
     [Parameter(Mandatory = $false)][string[]]$WebQuotaWriterSubscriptionIds = @(),
     [Parameter(Mandatory = $false)][string]$QuotaManagementGroupId,
+    [Parameter(Mandatory = $false)][string]$KeyVaultNameOverride,
     [Parameter(Mandatory = $false)][string[]]$WorkerRbacSubscriptionIds = @(),
     [Parameter(Mandatory = $false)][bool]$AssignWorkerComputeRecommendationsRole = $true,
     [Parameter(Mandatory = $false)][bool]$AssignWorkerCostManagementReaderRole = $true,
     [Parameter(Mandatory = $false)][bool]$AssignWorkerBillingReaderRole = $true,
-    [Parameter(Mandatory = $false)][bool]$AuthEnabled = $false,
+    [Parameter(Mandatory = $false)][AllowNull()][Nullable[bool]]$AuthEnabled = $null,
     [Parameter(Mandatory = $false)][string]$EntraTenantId,
     [Parameter(Mandatory = $false)][string]$EntraClientId,
     [Parameter(Mandatory = $false)][string]$EntraClientSecret,
@@ -23,6 +24,7 @@ param(
     [Parameter(Mandatory = $false)][string]$AdminGroupId,
     [Parameter(Mandatory = $false)][string]$SubscriptionId,
     [Parameter(Mandatory = $false)][bool]$DeployWebApp = $true,
+    [Parameter(Mandatory = $false)][bool]$DeployWorkerApp = $true,
     [Parameter(Mandatory = $false)][bool]$ApplyDatabaseBootstrap = $true,
     [Parameter(Mandatory = $false)][string]$IngestApiKey,
     [Parameter(Mandatory = $false)][string]$SessionSecret
@@ -31,7 +33,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $deployWebAppScript = Join-Path $repoRoot 'deploy-web-app.ps1'
+$deployWorkerScript = Join-Path $repoRoot 'scripts' 'deploy-worker.ps1'
 $webAppName = "app-capdash-$Environment-$WorkloadSuffix"
+$functionAppName = "func-capdash-$Environment-$WorkloadSuffix-appsvc"
 $sqlServerName = "sql-capdash-$Environment-$WorkloadSuffix.database.windows.net"
 $sqlDatabaseName = "sqldb-capdash-$Environment"
 
@@ -50,16 +54,54 @@ function Get-SqlAdminAccessToken() {
     return $token.Trim()
 }
 
+function Resolve-WebAppIngestApiKey([string]$ResourceGroupName, [string]$WebAppName, [string]$CurrentIngestApiKey) {
+    if (-not [string]::IsNullOrWhiteSpace($CurrentIngestApiKey)) {
+        return $CurrentIngestApiKey
+    }
+
+    $resolvedKey = az webapp config appsettings list --resource-group $ResourceGroupName --name $WebAppName --query "[?name=='INGEST_API_KEY'].value | [0]" --output tsv 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($resolvedKey)) {
+        throw 'Could not resolve INGEST_API_KEY from the deployed web app settings. Pass -IngestApiKey explicitly or verify the app setting exists.'
+    }
+
+    return $resolvedKey.Trim()
+}
+
+function Resolve-TerraformCommand() {
+    $terraform = Get-Command terraform -ErrorAction SilentlyContinue
+    if ($terraform) {
+        return $terraform.Source
+    }
+
+    $candidatePaths = @(
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages\Hashicorp.Terraform_Microsoft.Winget.Source_8wekyb3d8bbwe\terraform.exe')
+    )
+
+    foreach ($candidatePath in $candidatePaths) {
+        if ([string]::IsNullOrWhiteSpace($candidatePath)) {
+            continue
+        }
+
+        if (Test-Path $candidatePath) {
+            return $candidatePath
+        }
+    }
+
+    return $null
+}
+
 if ($SubscriptionId) {
     az account set --subscription $SubscriptionId | Out-Null
 }
 
-if ([string]::IsNullOrWhiteSpace($IngestApiKey)) {
-    $IngestApiKey = New-GeneratedSecret
-}
+if ($Provider -ne 'Terraform') {
+    if ([string]::IsNullOrWhiteSpace($IngestApiKey)) {
+        $IngestApiKey = New-GeneratedSecret
+    }
 
-if ([string]::IsNullOrWhiteSpace($SessionSecret)) {
-    $SessionSecret = New-GeneratedSecret
+    if ([string]::IsNullOrWhiteSpace($SessionSecret)) {
+        $SessionSecret = New-GeneratedSecret
+    }
 }
 
 if ($Provider -ne 'Terraform') {
@@ -73,15 +115,15 @@ function Deploy-Terraform {
         throw "Terraform files not found at $tfDir"
     }
 
-    $terraform = Get-Command terraform -ErrorAction SilentlyContinue
+    $terraform = Resolve-TerraformCommand
     if (-not $terraform) {
-        throw 'Terraform CLI is required for -Provider Terraform. Install from https://developer.hashicorp.com/terraform/downloads'
+        throw 'Terraform CLI is required for -Provider Terraform. Install it from https://developer.hashicorp.com/terraform/downloads or add the existing terraform.exe location to PATH.'
     }
 
     Push-Location $tfDir
     try {
         Write-Host "Running Terraform init..."
-        terraform init -input=false
+        & $terraform init -input=false
         if ($LASTEXITCODE -ne 0) { throw 'terraform init failed' }
 
         $tfVars = @(
@@ -90,13 +132,17 @@ function Deploy-Terraform {
             "-var=workload_suffix=$WorkloadSuffix",
             "-var=resource_group_name=$ResourceGroupName",
             "-var=sql_entra_admin_login=$SqlEntraAdminLogin",
-            "-var=sql_entra_admin_object_id=$SqlEntraAdminObjectId",
-            "-var=ingest_api_key=$IngestApiKey",
-            "-var=session_secret=$SessionSecret",
-            "-var=auth_enabled=$($AuthEnabled.ToString().ToLowerInvariant())"
+            "-var=sql_entra_admin_object_id=$SqlEntraAdminObjectId"
         )
 
+        if (-not [string]::IsNullOrWhiteSpace($IngestApiKey))        { $tfVars += "-var=ingest_api_key=$IngestApiKey" }
+        if (-not [string]::IsNullOrWhiteSpace($SessionSecret))       { $tfVars += "-var=session_secret=$SessionSecret" }
+        if ($PSBoundParameters.ContainsKey('AuthEnabled') -and $null -ne $AuthEnabled) {
+            $tfVars += "-var=auth_enabled=$($AuthEnabled.ToString().ToLowerInvariant())"
+        }
+
         if (-not [string]::IsNullOrWhiteSpace($WorkerSharedSecret))    { $tfVars += "-var=worker_shared_secret=$WorkerSharedSecret" }
+        if (-not [string]::IsNullOrWhiteSpace($KeyVaultNameOverride))  { $tfVars += "-var=key_vault_name_override=$KeyVaultNameOverride" }
         if (-not [string]::IsNullOrWhiteSpace($QuotaManagementGroupId)){ $tfVars += "-var=quota_management_group_id=$QuotaManagementGroupId" }
         if (-not [string]::IsNullOrWhiteSpace($EntraTenantId))         { $tfVars += "-var=entra_tenant_id=$EntraTenantId" }
         if (-not [string]::IsNullOrWhiteSpace($EntraClientId))         { $tfVars += "-var=entra_client_id=$EntraClientId" }
@@ -109,7 +155,7 @@ function Deploy-Terraform {
         }
 
         Write-Host "Running Terraform apply..."
-        terraform apply -auto-approve -input=false @tfVars
+    & $terraform apply -auto-approve -input=false @tfVars
         if ($LASTEXITCODE -ne 0) { throw 'terraform apply failed' }
 
         Write-Host "Terraform deployment succeeded." -ForegroundColor Green
@@ -151,7 +197,9 @@ if (-not [string]::IsNullOrWhiteSpace($QuotaManagementGroupId)) {
     $deploymentArgs += @('--parameters', "quotaManagementGroupId=$QuotaManagementGroupId")
 }
 
-$deploymentArgs += @('--parameters', "authEnabled=$($AuthEnabled.ToString().ToLowerInvariant())")
+if ($PSBoundParameters.ContainsKey('AuthEnabled') -and $null -ne $AuthEnabled) {
+    $deploymentArgs += @('--parameters', "authEnabled=$($AuthEnabled.ToString().ToLowerInvariant())")
+}
 
 if (-not [string]::IsNullOrWhiteSpace($EntraTenantId)) {
     $deploymentArgs += @('--parameters', "entraTenantId=$EntraTenantId")
@@ -263,6 +311,15 @@ try {
         & $deployWebAppScript -ResourceGroup $ResourceGroupName -AppName $webAppName -SourcePath $repoRoot
     }
 
+    if ($DeployWorkerApp) {
+        if (-not (Test-Path $deployWorkerScript)) {
+            throw "Worker deployment script not found: $deployWorkerScript"
+        }
+
+        Write-Host "Infrastructure deployment succeeded. Deploying worker package to $functionAppName..."
+        & $deployWorkerScript -ResourceGroupName $ResourceGroupName -FunctionAppName $functionAppName
+    }
+
     if ($ApplyDatabaseBootstrap) {
         if (-not $DeployWebApp) {
             Write-Warning 'Skipping database bootstrap because -DeployWebApp was set to $false and the bootstrap endpoint is provided by the deployed web app package.'
@@ -270,7 +327,8 @@ try {
         else {
             $bootstrapUri = "https://$webAppName.azurewebsites.net/internal/db/bootstrap"
             $adminBootstrapUri = "https://$webAppName.azurewebsites.net/internal/db/bootstrap-admin"
-            $headers = @{ 'x-ingest-key' = $IngestApiKey }
+            $resolvedBootstrapIngestApiKey = Resolve-WebAppIngestApiKey -ResourceGroupName $ResourceGroupName -WebAppName $webAppName -CurrentIngestApiKey $IngestApiKey
+            $headers = @{ 'x-ingest-key' = $resolvedBootstrapIngestApiKey }
             $bootstrapResult = $null
             $bootstrapError = $null
 
@@ -297,7 +355,7 @@ try {
                     Write-Host 'Attempting admin-assisted SQL bootstrap using the current Azure CLI login...'
                     $sqlAccessToken = Get-SqlAdminAccessToken
                     $adminHeaders = @{
-                        'x-ingest-key' = $IngestApiKey
+                        'x-ingest-key' = $resolvedBootstrapIngestApiKey
                         'Content-Type' = 'application/json'
                     }
                     $adminBootstrapBody = @{

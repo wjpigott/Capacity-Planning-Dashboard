@@ -37,6 +37,10 @@ function Invoke-SqlCmdFile([string]$InputFile) {
     }
 
     & $sqlcmd.Source @args
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "sqlcmd failed for '$InputFile' with exit code $LASTEXITCODE."
+    }
 }
 
 function Invoke-SqlCmdQuery([string]$QueryText) {
@@ -50,6 +54,45 @@ function Invoke-SqlCmdQuery([string]$QueryText) {
             Remove-Item $tempFile -Force
         }
     }
+}
+
+function Invoke-SqlCmdQueryCapture([string]$QueryText) {
+    $args = @(
+        '-S', $SqlServer,
+        '-d', $SqlDatabase,
+        '--authentication-method', $AuthenticationMethod,
+        '-C',
+        '-b',
+        '-h', '-1',
+        '-W',
+        '-Q', $QueryText
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($EntraUser)) {
+        $args += @('-U', $EntraUser)
+    }
+
+    $output = & $sqlcmd.Source @args
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "sqlcmd query failed with exit code $LASTEXITCODE."
+    }
+
+    return ($output | Out-String).Trim()
+}
+
+function Test-DatabaseTableExists([string]$SchemaName, [string]$TableName) {
+    $safeSchemaName = $SchemaName.Replace("'", "''")
+    $safeTableName = $TableName.Replace("'", "''")
+    $query = @"
+SET NOCOUNT ON;
+SELECT CASE
+    WHEN OBJECT_ID(N'$safeSchemaName.$safeTableName', 'U') IS NULL THEN 0
+    ELSE 1
+END;
+"@
+
+    return (Invoke-SqlCmdQueryCapture -QueryText $query) -eq '1'
 }
 
 $normalizedRoles = [System.Collections.Generic.List[string]]::new()
@@ -77,8 +120,13 @@ if ($GrantBootstrapRole -and -not $normalizedRoles.Contains('db_ddladmin')) {
     $normalizedRoles.Add('db_ddladmin')
 }
 
-Write-Host "Applying schema: $schemaFile"
-Invoke-SqlCmdFile -InputFile $schemaFile
+if (Test-DatabaseTableExists -SchemaName 'dbo' -TableName 'CapacitySnapshot') {
+    Write-Host 'Skipping base schema because dbo.CapacitySnapshot already exists.'
+}
+else {
+    Write-Host "Applying schema: $schemaFile"
+    Invoke-SqlCmdFile -InputFile $schemaFile
+}
 
 foreach ($migration in $migrationFiles) {
     Write-Host "Applying migration: $($migration.Name)"

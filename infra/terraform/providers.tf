@@ -2,6 +2,10 @@ terraform {
   required_version = ">= 1.6.0"
 
   required_providers {
+    azuread = {
+      source  = "hashicorp/azuread"
+      version = "~> 3.0"
+    }
     azurerm = {
       source  = "hashicorp/azurerm"
       version = "~> 3.0"
@@ -24,4 +28,8 @@ provider "azurerm" {
       prevent_deletion_if_contains_resources = false
     }
   }
+}
+
+provider "azuread" {
+  tenant_id = var.entra_tenant_id != "" ? var.entra_tenant_id : null
 }

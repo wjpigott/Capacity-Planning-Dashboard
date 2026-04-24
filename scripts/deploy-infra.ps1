@@ -38,6 +38,7 @@ $webAppName = "app-capdash-$Environment-$WorkloadSuffix"
 $functionAppName = "func-capdash-$Environment-$WorkloadSuffix-appsvc"
 $sqlServerName = "sql-capdash-$Environment-$WorkloadSuffix.database.windows.net"
 $sqlDatabaseName = "sqldb-capdash-$Environment"
+$manualDatabaseInitializeCommand = ".\scripts\initialize-database.ps1 -SqlServer `"$sqlServerName`" -SqlDatabase `"$sqlDatabaseName`" -AppIdentityName `"$webAppName`""
 
 function New-GeneratedSecret([int]$ByteCount = 32) {
     $bytes = New-Object byte[] $ByteCount
@@ -323,6 +324,8 @@ try {
     if ($ApplyDatabaseBootstrap) {
         if (-not $DeployWebApp) {
             Write-Warning 'Skipping database bootstrap because -DeployWebApp was set to $false and the bootstrap endpoint is provided by the deployed web app package.'
+            Write-Host 'Run this command from an Azure-connected host when you are ready to initialize the database:' -ForegroundColor Yellow
+            Write-Host $manualDatabaseInitializeCommand -ForegroundColor Yellow
         }
         else {
             $bootstrapUri = "https://$webAppName.azurewebsites.net/internal/db/bootstrap"
@@ -367,8 +370,7 @@ try {
                     $bootstrapResult = Invoke-RestMethod -Method Post -Uri $adminBootstrapUri -Headers $adminHeaders -Body $adminBootstrapBody -TimeoutSec 300
                 }
                 catch {
-                    $manualCommand = ".\scripts\initialize-database.ps1 -SqlServer `"$sqlServerName`" -SqlDatabase `"$sqlDatabaseName`" -AppIdentityName `"$webAppName`""
-                    throw "Database bootstrap failed. Managed-identity bootstrap error: $bootstrapError Admin-assisted bootstrap error: $($_.Exception.Message) If the SQL server is private or DBA-managed, run $manualCommand from an Azure-connected host using an Entra SQL admin login. If the customer pre-created SQL, substitute the actual server and database names."
+                    throw "Database bootstrap failed. Managed-identity bootstrap error: $bootstrapError Admin-assisted bootstrap error: $($_.Exception.Message) If the SQL server is private or DBA-managed, run $manualDatabaseInitializeCommand from an Azure-connected host using an Entra SQL admin login. If the customer pre-created SQL, substitute the actual server and database names."
                 }
             }
 
@@ -376,6 +378,10 @@ try {
                 Write-Host "Database bootstrap completed successfully."
             }
         }
+    }
+    else {
+        Write-Host 'Database bootstrap was skipped. Run this command from an Azure-connected host when you are ready to initialize the database:' -ForegroundColor Yellow
+        Write-Host $manualDatabaseInitializeCommand -ForegroundColor Yellow
     }
 }
 finally {

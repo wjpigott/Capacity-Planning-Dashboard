@@ -170,12 +170,20 @@ Optional worker-first settings:
 
 - `CAPACITY_WORKER_BASE_URL`
 - `CAPACITY_WORKER_SHARED_SECRET`
+- `CAPACITY_WORKER_TOKEN_AUDIENCE`
 - `CAPACITY_WORKER_TIMEOUT_MS`
 - `CAPACITY_RECOMMEND_WORKER_TIMEOUT_MS`
 - `CAPACITY_LIVE_REFRESH_MAX_CALLS`
 - `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK`
 
-When `CAPACITY_WORKER_BASE_URL` is set, live placement refresh calls the Azure Function worker first. If the worker is unavailable and `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK` is not `true`, the dashboard falls back to the in-process App Service path to preserve rollback safety.
+When `CAPACITY_WORKER_BASE_URL` is set, live placement refresh calls the Azure Function worker first. This branch contains a managed-identity bearer-token worker path, but the currently verified working Azure dev baseline uses a shared secret between the web app and the function app. If the worker is unavailable and `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK` is not `true`, the dashboard falls back to the in-process App Service path to preserve rollback safety.
+
+Deployment incident note, 2026-04-24:
+
+- `cap005` spent hours failing because it had drifted onto the newer managed-identity worker-auth deployment while the known-good `cap001` environment was still running the older shared-secret contract.
+- The successful recovery was to restore `cap005` to the same contract as `cap001`: set `CAPACITY_WORKER_SHARED_SECRET` on the web app, set `WORKER_SHARED_SECRET` on the function app, keep `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK=true`, and redeploy from `github/main`.
+- Validation after rollback: Capacity Score worked again, Capacity Recommender worked again, `/api/auth/me` returned the normal unauthenticated payload, and direct function `/api/recommendations` calls returned `ok: true` including pricing.
+- Until the managed-identity worker path is deliberately fixed and revalidated, do not redeploy the local managed-identity worker-auth variant to the dev environment expecting parity with the current working baseline.
 
 Current live placement refresh guardrails:
 
@@ -222,6 +230,26 @@ Examples:
 - `capacity.contoso.com` -> default styling unless you change the detection logic
 
 Use zip/web package deploy for the dashboard App Service.
+
+Safe deploy rule:
+
+- Do not deploy from an arbitrary local checkout when dev parity matters.
+- Use `scripts/invoke-from-clean-main.ps1` so packaging runs from a temporary detached worktree at `github/main`.
+- Longer term, replace this with CI-produced deployment artifacts pinned to a specific `main` commit.
+
+Examples:
+
+```powershell
+./scripts/invoke-from-clean-main.ps1 `
+	-ScriptRelativePath 'deploy-web-app.ps1' `
+	-ResourceGroup 'CapacityDashboard-Dev' `
+	-AppName 'app-capdash-dev-cap005'
+
+./scripts/invoke-from-clean-main.ps1 `
+	-ScriptRelativePath 'scripts/deploy-worker.ps1' `
+	-ResourceGroupName 'CapacityDashboard-Dev' `
+	-FunctionAppName 'func-capdash-dev-cap005-appsvc'
+```
 
 Deployment target values are environment-specific. Set them with variables or substitute your own names when you run the commands below.
 
@@ -404,8 +432,16 @@ Notes:
 - `-WebReaderSubscriptionIds` grants the dashboard web app `Reader` on the listed subscriptions so subscription discovery can see every target subscription.
 - `-WebReaderSubscriptionIds` is the only built-in path that grants the dashboard web app managed identity subscription `Reader` access during deployment. There is no management-group fallback for read access in the current template, so fresh deployments must provide the target subscription list explicitly.
 - `-QuotaManagementGroupId` sets the `QUOTA_MANAGEMENT_GROUP_ID` app setting during deployment. Use it whenever you expect live quota discovery or quota apply to target a specific management group such as `Demo-MG`.
-- `-WorkerRbacSubscriptionIds` triggers subscription-level RBAC assignment for the worker identity (`Compute Recommendations Role`, `Cost Management Reader`, `Billing Reader`) in the same deployment.
+- `-WorkerRbacSubscriptionIds` triggers subscription-level RBAC assignment for the worker identity (`Reader`, `Compute Recommendations Role`, `Cost Management Reader`, `Billing Reader`) in the same deployment.
 - `-AuthEnabled` plus `-EntraTenantId`, `-EntraClientId`, `-EntraClientSecret`, and optional `-AdminGroupId` configure the built-in Entra sign-in flow used by the dashboard API.
+
+Verified working RBAC baseline (`cap001`, captured 2026-04-24):
+
+- Dashboard web app (`app-capdash-dev-cap001`) currently has subscription `Reader`, subscription `Billing Reader`, subscription `GroupQuota Request Operator`, management-group `GroupQuota Request Operator`, and `Key Vault Secrets User` on the app Key Vault.
+- The earlier subscription `Reader` grant on the dashboard web app was part of the working deployment and should be treated as required for the current live discovery/ingestion surface.
+- Function App worker (`func-capdash-dev-cap001-appsvc`) currently has subscription `Compute Recommendations Role`, subscription `Billing Reader`, subscription `Cost Management Reader`, management-group `Compute Recommendations Role`, plus storage data-plane roles on its host storage account (`Storage Blob Data Owner`, `Storage Queue Data Contributor`, `Storage Table Data Contributor`).
+- The working Function App does not currently have plain subscription `Reader`, so `Reader` was not required for the working recommendation/live-placement path in that environment.
+- The working web app also has `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK=true`, so the web app itself does not need `Compute Recommendations Role` in that working set because the recommendation/live-placement path stays remote-first.
 
 Example with Entra sign-in enabled:
 
@@ -468,15 +504,17 @@ Package and deploy the worker host separately from the dashboard web app:
 After the worker is deployed, point the dashboard at it by setting:
 
 - `CAPACITY_WORKER_BASE_URL=https://<function-app-name>.azurewebsites.net`
-- `CAPACITY_WORKER_SHARED_SECRET=<same secret configured as WORKER_SHARED_SECRET on the function app>`
+- `CAPACITY_WORKER_TOKEN_AUDIENCE=https://management.azure.com/`
 
 Hosted worker guidance:
 
 - Configure `AzureWebJobsStorage` with managed identity, not a shared-key connection string.
 - Grant the worker identity storage data-plane access on the host storage account.
+- Dashboard-to-worker calls now use the dashboard web app managed identity and a bearer token for the Resource Manager audience.
+- The worker validates the caller token against the dashboard web app managed identity object ID that infra deployment stamps into the Function App settings.
 - The default infrastructure path uses a dedicated App Service plan for the worker instead of Flex Consumption.
 - Enable PowerShell managed dependencies in `host.json` so `requirements.psd1` can restore Az modules on the worker.
-- NOTE: when `-WorkerRbacSubscriptionIds` is provided during infra deployment, these worker subscription roles are assigned automatically. If omitted, assign them manually.
+- NOTE: when `-WorkerRbacSubscriptionIds` is provided during infra deployment, these worker subscription roles are assigned automatically, including plain subscription `Reader` for SKU and metadata reads. If omitted, assign them manually.
 - NOTE: some organizations require billing-account-scope assignments for billing APIs; those billing-scope assignments are outside this resource-group deployment and may still require manual/central platform automation.
 
 Current worker endpoints:
@@ -576,7 +614,7 @@ Required app settings:
 - `ADMIN_GROUP_ID` (Object ID of the Entra security group whose members can access Admin sections)
 - `QUOTA_MANAGEMENT_GROUP_ID` (required for live quota discovery)
 - `CAPACITY_WORKER_BASE_URL` (optional Function App base URL for worker-first live placement execution)
-- `CAPACITY_WORKER_SHARED_SECRET` (optional shared secret header value for worker calls)
+- `CAPACITY_WORKER_TOKEN_AUDIENCE` (optional bearer-token audience for worker calls; defaults to `https://management.azure.com/`)
 - `CAPACITY_WORKER_TIMEOUT_MS` (optional timeout for worker calls, default `60000`)
 - `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK` (`true` disables App Service fallback when the worker is configured but unavailable)
 - `GET_AZ_VM_AVAILABILITY_ROOT` (optional path to Get-AzVMAvailability repository; required in production if Capacity Recommender feature is used; default is relative path `../../Get-AzVMAvailability` from `tools/` folder)

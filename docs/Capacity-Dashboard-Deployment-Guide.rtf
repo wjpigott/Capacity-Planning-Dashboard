@@ -1,0 +1,301 @@
+{\rtf1\ansi\deff0
+{\fonttbl{\f0 Calibri;}{\f1 Consolas;}}
+\paperw12240\paperh15840\margl1440\margr1440\margt1440\margb1440
+\fs24
+\b Capacity Dashboard Deployment Guide\b0\par
+\i Word-friendly operator guide for Bicep and Terraform deployments\i0\par
+\par
+This guide is written for someone who is comfortable following a checklist, even if they do not work with Azure deployments every day. It explains the safest order to do the work:\par
+\par
+1. Install the tools and collect the required values.\par
+2. Deploy the Azure infrastructure and application.\par
+3. Run the database step second, after the web app exists.\par
+4. Verify sign-in, data access, and exports.\par
+\par
+\b 1. What This Deployment Creates\b0\par
+\par
+Both the Bicep and Terraform paths create the same main Azure resources:\par
+\par
+- Web App for the dashboard\par
+- Function App for the worker\par
+- Storage account for the worker\par
+- Azure SQL Server and Azure SQL Database\par
+- Key Vault\par
+- Virtual network, private endpoints, and DNS links\par
+- Application Insights and Log Analytics\par
+- Managed identities and the main RBAC assignments\par
+\par
+\b 2. Safest Deployment Order\b0\par
+\par
+Use this order unless your customer has a very specific runbook:\par
+\par
+1. Prepare access and collect values.\par
+2. Deploy infrastructure and application.\par
+3. Run the database initialization step.\par
+4. Test sign-in and the main dashboard pages.\par
+\par
+Do not try to start with the database scripts unless the web app and identities already exist. The current deployment flow expects the application and identities to be created first.\par
+\par
+\b 3. Before You Start\b0\par
+\par
+You will need these items before either deployment method:\par
+\par
+- An Azure subscription where you can create resources\par
+- Azure permissions: Contributor and User Access Administrator on the target scope\par
+- An Entra user or group that will be the Azure SQL Entra admin\par
+- The Azure subscription ID\par
+- A resource group name to use\par
+- An environment name such as dev or test\par
+- A workload suffix such as cap001\par
+- An ingest API key\par
+- A session secret\par
+- Optional worker shared secret\par
+- Optional Entra app registration values if sign-in should be enabled\par
+- Optional management group names if the tenant uses management groups\par
+\par
+\b 4. Install The Required Tools\b0\par
+\par
+Install these tools on the machine that will run the deployment:\par
+\par
+- Azure CLI\par
+- PowerShell 7\par
+- For Bicep: Azure CLI with Bicep support\par
+- For Terraform: Terraform 1.6 or newer\par
+- For manual database initialization: sqlcmd\par
+\par
+Recommended checks:\par
+\par
+- Open PowerShell and run \f1 az --version\f0\par
+- Run \f1 pwsh --version\f0\par
+- If using Terraform, run \f1 terraform version\f0\par
+- If using manual SQL initialization, run \f1 sqlcmd -?\f0\par
+\par
+\b 5. Decide Which Path To Use\b0\par
+\par
+\b Use Bicep when:\b0\par
+- You want the Azure-native path\par
+- You want the simplest script-driven operator flow\par
+- You do not need Terraform state management\par
+\par
+\b Use Terraform when:\b0\par
+- The customer standard is Terraform\par
+- You want Terraform state and plan/apply workflow\par
+- You may need to import an existing resource group before first apply\par
+\par
+\b 6. Gather The Values To Fill In\b0\par
+\par
+Replace the placeholders in the commands later in this document with your own values:\par
+\par
+- \f1 <subscription-id>\f0\par
+- \f1 <resource-group-name>\f0\par
+- \f1 <environment>\f0 such as \f1 dev\f0 or \f1 test\f0\par
+- \f1 <workload-suffix>\f0 such as \f1 cap001\f0\par
+- \f1 <entra-upn>\f0 for the Azure SQL Entra admin login\par
+- \f1 <entra-object-id>\f0 for the Azure SQL Entra admin object ID\par
+- \f1 <tenant-id>\f0 if dashboard sign-in is enabled\par
+- \f1 <client-id>\f0 if dashboard sign-in is enabled\par
+- \f1 <client-secret>\f0 if dashboard sign-in is enabled\par
+- \f1 <admin-group-object-id>\f0 if admin access is group-gated\par
+- \f1 <management-group-name>\f0 if management-group-based RBAC will be used\par
+\par
+\b 6A. What Those Secrets Actually Are\b0\par
+\par
+The guide mentions three application secrets. These are not Azure resources you need to discover in the portal. They are values you create and pass into the deployment.\par
+\par
+\b Ingest API key\b0\par
+- This is a shared secret used to protect the dashboard's internal ingestion and internal database/bootstrap endpoints.\par
+- The server checks it through the \f1 INGEST_API_KEY\f0 app setting.\par
+- You choose this value yourself. It should be a long random string.\par
+- Think of it as an internal service password, not as an Azure-generated key.\par
+\par
+\b Session secret\b0\par
+- This is the secret used by the web app's session cookie middleware.\par
+- The server reads it from \f1 SESSION_SECRET\f0.\par
+- You choose this value yourself. It should also be a long random string.\par
+- If sign-in is enabled, this value is important because it protects the signed session cookie state.\par
+- The helper script \f1 scripts/New-EntraApp.ps1\f0 already prints an example generated \f1 SESSION_SECRET\f0 for local setup.\par
+\par
+\b Optional worker shared secret\b0\par
+- This is a shared secret between the web app and the worker app.\par
+- The web app receives it as \f1 CAPACITY_WORKER_SHARED_SECRET\f0 and the worker app receives it as \f1 WORKER_SHARED_SECRET\f0.\par
+- You only need this when you are using the shared-secret web-to-worker contract.\par
+- You create this value yourself the same way: make it a long random string and pass the same value to both sides through deployment.\par
+- It does not come from Azure Key Vault automatically and it is not auto-generated by the deployment template.\par
+\par
+\b Simple rule:\b0\par
+- If you are doing a normal deployment, generate these values yourself and store them securely.\par
+- If you are redeploying an existing environment, reuse the same values from that environment unless you intentionally want to rotate them.\par
+\par
+\b Easy way to generate random values in PowerShell\b0\par
+\par
+\f1 [Convert]::ToBase64String([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32))\f0\par
+\par
+Use one generated value for \f1 INGEST_API_KEY\f0, a different one for \f1 SESSION_SECRET\f0, and optionally a third one for \f1 WORKER_SHARED_SECRET\f0. Do not reuse the same string for all three.\par
+\par
+\b 7. Important Rule About Existing Resources\b0\par
+\par
+This is the most important section for non-standard customer environments.\par
+\par
+\b Supported today:\b0\par
+- Existing resource group with Terraform, as long as you import it before first apply\par
+- Different resource group region with Terraform, using \f1 resource_group_location\f0\par
+- Key Vault naming conflict with Terraform, using \f1 key_vault_name_override\f0\par
+- Manual database initialization against customer-provided SQL names after the app is deployed\par
+\par
+\b Not a first-class reuse mode today:\b0\par
+- Reusing a pre-existing storage account instead of the worker storage account created by the templates\par
+- Reusing a pre-existing Key Vault as the deployed application vault\par
+- Reusing a pre-existing SQL server or SQL database directly through a dedicated Bicep or Terraform switch\par
+\par
+If the customer already has a database, storage account, or Key Vault and expects those exact resources to be reused, treat that as a custom onboarding case. The safest current approach is:\par
+\par
+1. Deploy the application and supporting resources first.\par
+2. Disable automatic database bootstrap if needed.\par
+3. Run the manual database initialization command against the customer's actual SQL server and database names.\par
+4. Document any extra secret, DNS, firewall, or RBAC mapping needed for that customer.\par
+\par
+\b 8. Bicep Runbook\b0\par
+\par
+\b Recommended Bicep command:\b0\par
+\par
+\f1 .\scripts\deploy-infra.ps1 `\par
+-ResourceGroupName "<resource-group-name>" `\par
+-Environment <environment> `\par
+-WorkloadSuffix "<workload-suffix>" `\par
+-ParameterFile "./infra/bicep/main.bicepparam" `\par
+-SqlEntraAdminLogin "<entra-upn>" `\par
+-SqlEntraAdminObjectId "<entra-object-id>" `\par
+-SubscriptionId "<subscription-id>"\f0\par
+\par
+\b Add these only when needed:\b0\par
+- \f1 -QuotaManagementGroupId "<management-group-id>"\f0\par
+- \f1 -WebReaderManagementGroupNames @("<management-group-name>")\f0\par
+- \f1 -WebQuotaWriterManagementGroupNames @("<management-group-name>")\f0\par
+- \f1 -WorkerRbacManagementGroupNames @("<management-group-name>")\f0\par
+- \f1 -UseAllAccessibleManagementGroups\f0 if the operator should use every non-root management group they can see\par
+- \f1 -AuthEnabled $true\f0 plus tenant, client, secret, and admin group values if sign-in should be enabled\par
+- \f1 -ApplyDatabaseBootstrap $false\f0 if the database must be initialized separately\par
+\par
+\b When to use test.bicepparam:\b0\par
+Use \f1 ./infra/bicep/test.bicepparam\f0 when you are building a stable demo or test environment instead of a change-heavy dev environment.\par
+\par
+\b 9. Terraform Runbook\b0\par
+\par
+\b Step 1: Create a local tfvars file\b0\par
+Copy \f1 infra/terraform/terraform.tfvars.example\f0 to \f1 infra/terraform/terraform.tfvars\f0 and fill in the real values.\par
+\par
+\b Step 2: If the resource group already exists, import it before first apply\b0\par
+\par
+\f1 terraform import -var-file="terraform.tfvars" azurerm_resource_group.rg "/subscriptions/<subscription-id>/resourceGroups/<resource-group-name>"\f0\par
+\par
+\b Step 3: Run Terraform from the wrapper script or directly\b0\par
+\par
+\f1 .\scripts\deploy-infra.ps1 `\par
+-Provider Terraform `\par
+-ResourceGroupName "<resource-group-name>" `\par
+-Environment <environment> `\par
+-WorkloadSuffix "<workload-suffix>" `\par
+-SqlEntraAdminLogin "<entra-upn>" `\par
+-SqlEntraAdminObjectId "<entra-object-id>" `\par
+-SubscriptionId "<subscription-id>"\f0\par
+\par
+Or use raw Terraform:\par
+\par
+\f1 cd infra/terraform\par
+terraform init\par
+terraform apply -var-file="terraform.tfvars"\f0\par
+\par
+\b Helpful Terraform-specific extras:\b0\par
+- \f1 resource_group_location\f0 if the existing resource group is in a different region\par
+- \f1 key_vault_name_override\f0 if the default Key Vault name cannot be used\par
+- \f1 manage_entra_web_redirect_uri = true\f0 if Terraform should add the generated callback URL to an existing Entra app registration\par
+\par
+\b 10. Database Step Second\b0\par
+\par
+The safest operator pattern is to do the database step after the deployment creates the app, identity, SQL server name, and database name.\par
+\par
+\b Default path:\b0\par
+The deployment script attempts dashboard bootstrap through the deployed web app.\par
+\par
+\b Separate DBA or customer-managed path:\b0\par
+Use \f1 -ApplyDatabaseBootstrap $false\f0 during deployment, then run the manual database command afterward.\par
+\par
+Standard example:\par
+\par
+\f1 .\scripts\initialize-database.ps1 -SqlServer "sql-capdash-<environment>-<workload-suffix>.database.windows.net" -SqlDatabase "sqldb-capdash-<environment>" -AppIdentityName "app-capdash-<environment>-<workload-suffix>"\f0\par
+\par
+If the customer pre-created SQL, substitute the actual server and database names.\par
+\par
+Run this from an approved network path when Azure SQL is private-only, such as:\par
+\par
+- An Azure VM with network access to the private endpoint\par
+- A self-hosted runner inside the approved network\par
+- An admin workstation that reaches Azure through the approved customer network path\par
+\par
+\b 11. When The Customer Already Has A Database\b0\par
+\par
+If the customer says, "We already have the SQL server and database," use this checklist:\par
+\par
+1. Confirm the real SQL server FQDN and database name.\par
+2. Confirm who is the Azure SQL Entra admin.\par
+3. Deploy the app and supporting Azure resources first.\par
+4. Skip automatic database bootstrap if the customer wants a separate DBA step.\par
+5. Run \f1 scripts/initialize-database.ps1\f0 with the customer SQL names.\par
+6. Confirm the app identity only keeps the intended runtime roles afterward.\par
+\par
+\b 12. When The Customer Already Has A Key Vault\b0\par
+\par
+The current templates do not provide a simple "use this existing Key Vault as-is" operator switch.\par
+\par
+What is supported today:\par
+\par
+- If Terraform only needs a different vault name because the default name is blocked, use \f1 key_vault_name_override\f0.\par
+\par
+What to do if the customer insists on using their own existing Key Vault:\par
+\par
+1. Treat it as a customer-specific design decision.\par
+2. Expect extra work for secret placement, RBAC, naming, and possibly private endpoint or DNS alignment.\par
+3. Do not assume the default deployment command alone is enough.\par
+\par
+\b 13. When The Customer Already Has A Storage Account\b0\par
+\par
+The current deployment creates a dedicated worker storage account. Reusing a customer-owned pre-existing storage account is not a simple operator parameter today. Treat that as a custom engineering follow-up, not a normal runbook step.\par
+\par
+\b 14. Basic Validation Checklist\b0\par
+\par
+After deployment and database initialization, check these items:\par
+\par
+- The web app is reachable in a browser\par
+- The sign-in page works if auth is enabled\par
+- The dashboard loads after sign-in\par
+- The main grid loads data\par
+- Exports work after sign-in\par
+- The worker app is deployed\par
+- The SQL database is initialized\par
+- Key Vault references resolve\par
+- Management-group or subscription RBAC is in place\par
+\par
+\b 15. Simple Decision Guide\b0\par
+\par
+If the person following this guide wants the least surprising path, tell them to do this:\par
+\par
+1. Choose Bicep unless the customer requires Terraform.\par
+2. Use the deployment script, not raw template commands.\par
+3. Treat the database step as second, not first.\par
+4. If the customer already owns SQL, Key Vault, or storage, stop and confirm whether this is a normal deployment or a custom onboarding case.\par
+\par
+\b 16. File References In This Repo\b0\par
+\par
+- Main deployment wrapper: \f1 scripts/deploy-infra.ps1\f0\par
+- Manual database initialization: \f1 scripts/initialize-database.ps1\f0\par
+- Web publish script: \f1 deploy-web-app.ps1\f0\par
+- Bicep overview: \f1 infra/bicep/README.md\f0\par
+- Terraform overview: \f1 infra/terraform/README.md\f0\par
+- Shared infrastructure overview: \f1 infra/README.md\f0\par
+\par
+\b 17. Suggested Handoff Note For Customer Teams\b0\par
+\par
+If you need to hand this to a customer or internal operator, use this short message:\par
+\par
+"First deploy the application and Azure resources. Second, complete the database initialization. If the customer wants to reuse an existing SQL server, Key Vault, or storage account, confirm that up front because only some of those cases are directly supported by the current deployment inputs."\par
+}

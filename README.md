@@ -10,6 +10,7 @@ This repository contains the initial platform scaffold for a native Azure capaci
 - SQL schema for snapshots and latest-capacity view
 - Azure infrastructure Bicep templates
 - Deployment and sample data scripts
+- Non-technical Word-friendly deployment guide in `docs/Capacity-Dashboard-Deployment-Guide.rtf`
 - Current-state architecture diagram source and rendered image in `docs/`
 
 ## Architecture
@@ -145,6 +146,7 @@ Quota move/apply operations require write RBAC in addition to the read access us
 - [ ] CI/CD pipeline for build/deploy/migrations
 - [ ] Scheduled ingestion monitoring/alerts
 - [ ] Deployment follow-up: investigate why `Compute Recommendations Role` assigned at the management-group scope did not satisfy `Microsoft.Compute/locations/placementScores/generate/action` for the worker managed identity, while the subscription-level assignment did
+- [ ] Deployment hardening follow-up: stop relying on placeholder/default `INGEST_API_KEY` and `SESSION_SECRET` values during Bicep/Terraform deploys; review with the team whether explicit generated secrets remain the right approach or whether there is a safe managed-identity-backed alternative for any of these paths
 - [ ] Release verification checklist + rollback playbook
 
 ## Local run
@@ -189,6 +191,7 @@ Deployment incident note, 2026-04-24:
 - The successful recovery was to restore `cap005` to the same contract as `cap001`: set `CAPACITY_WORKER_SHARED_SECRET` on the web app, set `WORKER_SHARED_SECRET` on the function app, keep `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK=true`, and redeploy from `github/main`.
 - Validation after rollback: Capacity Score worked again, Capacity Recommender worked again, `/api/auth/me` returned the normal unauthenticated payload, and direct function `/api/recommendations` calls returned `ok: true` including pricing.
 - Until the managed-identity worker path is deliberately fixed and revalidated, do not redeploy the local managed-identity worker-auth variant to the dev environment expecting parity with the current working baseline.
+- Future hardening note: discuss with the team whether the current shared-secret approach should stay in place for the worker/web contract and other internal app secrets, or whether there is a safe managed-identity path at all. We already know the earlier managed-identity worker-auth attempt broke the working dev baseline, so any revisit needs a deliberate design review and revalidation plan rather than another silent drift.
 
 Current live placement refresh guardrails:
 

@@ -76,18 +76,41 @@ body {
   transition: grid-template-columns 0.2s ease;
 }
 
+.rx-shell.is-sidebar-collapsed {
+  grid-template-columns: 0 minmax(0, 1fr) 360px;
+}
+
 .rx-shell.is-drawer-collapsed {
   grid-template-columns: 260px minmax(0, 1fr) 0;
+}
+
+.rx-shell.is-sidebar-collapsed.is-drawer-collapsed {
+  grid-template-columns: 0 minmax(0, 1fr) 0;
 }
 
 .rx-sidebar {
   position: sticky;
   top: 0;
+  min-width: 0;
   height: 100vh;
+  overflow: auto;
   padding: 24px 18px;
   border-right: 1px solid rgba(213, 224, 235, 0.9);
   background: var(--rx-sidebar-bg);
   backdrop-filter: blur(16px);
+  transform: translateX(0);
+  opacity: 1;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+.rx-shell.is-sidebar-collapsed .rx-sidebar {
+  padding-left: 0;
+  padding-right: 0;
+  border-right-color: transparent;
+  overflow: hidden;
+  pointer-events: none;
+  transform: translateX(-100%);
+  opacity: 0;
 }
 
 .rx-sidebar__header {
@@ -116,6 +139,33 @@ body {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.rx-export-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(213, 224, 235, 0.9);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.rx-export-box__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.rx-field--compact span {
+  margin-bottom: 6px;
+}
+
+.rx-button--compact {
+  min-height: 40px;
+  min-width: 72px;
+  padding: 0 14px;
 }
 
 .rx-nav-item {
@@ -1247,11 +1297,23 @@ body {
     grid-template-columns: 1fr;
   }
 
+  .rx-shell.is-sidebar-collapsed,
+  .rx-shell.is-drawer-collapsed,
+  .rx-shell.is-sidebar-collapsed.is-drawer-collapsed {
+    grid-template-columns: 1fr;
+  }
+
   .rx-sidebar {
     position: static;
     height: auto;
     border-right: none;
     border-bottom: 1px solid rgba(213, 224, 235, 0.9);
+    transform: none;
+    opacity: 1;
+  }
+
+  .rx-shell.is-sidebar-collapsed .rx-sidebar {
+    display: none;
   }
 
   .rx-main {
@@ -1260,6 +1322,11 @@ body {
 
   .rx-topbar__actions {
     width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .rx-export-box__actions {
     flex-direction: column;
     align-items: stretch;
   }

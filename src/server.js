@@ -719,6 +719,10 @@ function normalizeCapacityExportFormat(rawFormat) {
   return String(rawFormat || 'csv').trim().toLowerCase() === 'xlsx' ? 'xlsx' : 'csv';
 }
 
+function normalizeCapacityExportVariant(rawVariant) {
+  return String(rawVariant || 'grid').trim().toLowerCase() === 'report' ? 'report' : 'grid';
+}
+
 function buildCapacityExportRows(rows = []) {
   return rows.map((row) => {
     const quotaCurrent = Number(row.quotaCurrent || 0);
@@ -829,6 +833,132 @@ function styleWorksheetHeader(worksheet, lastColumn) {
 }
 
 async function buildCapacityWorkbook({ exportRows, filters }) {
+  return buildCapacityGridWorkbook({ exportRows, filters });
+}
+
+function applyWorksheetBorders(worksheet) {
+  if (!worksheet.rowCount || !worksheet.columnCount) {
+    return;
+  }
+
+  for (let rowNumber = 1; rowNumber <= worksheet.rowCount; rowNumber += 1) {
+    const row = worksheet.getRow(rowNumber);
+    row.eachCell((cell) => {
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FFD1D1D1' } },
+        left: { style: 'thin', color: { argb: 'FFD1D1D1' } },
+        bottom: { style: 'thin', color: { argb: 'FFD1D1D1' } },
+        right: { style: 'thin', color: { argb: 'FFD1D1D1' } }
+      };
+    });
+  }
+}
+
+function applyAlternatingWorksheetRows(worksheet, startRow = 2, endRow = worksheet.rowCount) {
+  for (let rowNumber = startRow; rowNumber <= endRow; rowNumber += 1) {
+    if (rowNumber % 2 !== 0) {
+      continue;
+    }
+    worksheet.getRow(rowNumber).eachCell((cell) => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFF8F9FB' }
+      };
+    });
+  }
+}
+
+function styleWorksheetTitle(worksheet, title, subtitle = '') {
+  worksheet.mergeCells('A1:H1');
+  worksheet.getCell('A1').value = title;
+  worksheet.getCell('A1').font = { bold: true, size: 16, color: { argb: 'FF0B1F33' } };
+  worksheet.getCell('A1').alignment = { vertical: 'middle' };
+
+  if (subtitle) {
+    worksheet.mergeCells('A2:H2');
+    worksheet.getCell('A2').value = subtitle;
+    worksheet.getCell('A2').font = { italic: true, color: { argb: 'FF5B6B7A' } };
+  }
+}
+
+function buildCapacityRegionSummaryRows(exportRows = []) {
+  const byRegion = new Map();
+  exportRows.forEach((row) => {
+    const region = row.region || 'n/a';
+    const current = byRegion.get(region) || {
+      region,
+      rows: 0,
+      families: new Set(),
+      subscriptions: new Set(),
+      quotaAvailable: 0,
+      limitedRows: 0,
+      constrainedRows: 0,
+      okRows: 0
+    };
+    current.rows += 1;
+    current.families.add(row.family || '');
+    current.subscriptions.add(row.subscriptionId || '');
+    current.quotaAvailable += Number(row.quotaAvailable || 0);
+    if (row.availability === 'OK') current.okRows += 1;
+    if (row.availability === 'LIMITED') current.limitedRows += 1;
+    if (row.availability === 'CONSTRAINED' || row.availability === 'RESTRICTED') current.constrainedRows += 1;
+    byRegion.set(region, current);
+  });
+
+  return [...byRegion.values()]
+    .map((entry) => ({
+      region: entry.region,
+      rows: entry.rows,
+      families: entry.families.size,
+      subscriptions: entry.subscriptions.size,
+      quotaAvailable: entry.quotaAvailable,
+      okRows: entry.okRows,
+      limitedRows: entry.limitedRows,
+      constrainedRows: entry.constrainedRows
+    }))
+    .sort((left, right) => left.region.localeCompare(right.region));
+}
+
+function buildCapacityFamilySummaryRows(exportRows = []) {
+  const byFamily = new Map();
+  exportRows.forEach((row) => {
+    const family = row.family || 'n/a';
+    const current = byFamily.get(family) || {
+      family,
+      rows: 0,
+      regions: new Set(),
+      skus: new Set(),
+      quotaAvailable: 0,
+      okRows: 0,
+      limitedRows: 0,
+      constrainedRows: 0
+    };
+    current.rows += 1;
+    current.regions.add(row.region || '');
+    current.skus.add(row.sku || '');
+    current.quotaAvailable += Number(row.quotaAvailable || 0);
+    if (row.availability === 'OK') current.okRows += 1;
+    if (row.availability === 'LIMITED') current.limitedRows += 1;
+    if (row.availability === 'CONSTRAINED' || row.availability === 'RESTRICTED') current.constrainedRows += 1;
+    byFamily.set(family, current);
+  });
+
+  return [...byFamily.values()]
+    .map((entry) => ({
+      family: entry.family,
+      rows: entry.rows,
+      regions: entry.regions.size,
+      skus: entry.skus.size,
+      quotaAvailable: entry.quotaAvailable,
+      okRows: entry.okRows,
+      limitedRows: entry.limitedRows,
+      constrainedRows: entry.constrainedRows
+    }))
+    .sort((left, right) => left.family.localeCompare(right.family));
+}
+
+async function buildCapacityGridWorkbook({ exportRows, filters }) {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Capacity Dashboard';
   workbook.created = new Date();
@@ -931,6 +1061,122 @@ async function buildCapacityWorkbook({ exportRows, filters }) {
       fgColor: { argb: statusMeta.fill }
     };
     statusCell.font = { bold: true, color: { argb: statusMeta.font } };
+  });
+
+  return workbook.xlsx.writeBuffer();
+}
+
+async function buildCapacityReportWorkbook({ exportRows, filters }) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Capacity Dashboard';
+  workbook.created = new Date();
+  workbook.modified = new Date();
+
+  const summaryRows = buildCapacityExportSummary(exportRows, filters);
+  const regionSummaryRows = buildCapacityRegionSummaryRows(exportRows);
+  const familySummaryRows = buildCapacityFamilySummaryRows(exportRows);
+
+  const summarySheet = workbook.addWorksheet('Report Summary', { views: [{ state: 'frozen', ySplit: 6 }] });
+  styleWorksheetTitle(summarySheet, 'Capacity Dashboard Report', 'This workbook reflects the current sidebar filter scope from the Capacity Grid export action.');
+
+  summarySheet.columns = [
+    { header: 'Metric', key: 'metric', width: 32 },
+    { header: 'Value', key: 'value', width: 48 }
+  ];
+
+  const filterText = [
+    `Region preset: ${filters.regionPreset || 'all'}`,
+    `Region: ${filters.region || 'all'}`,
+    `Resource type: ${filters.resourceType || 'all'}`,
+    `Family base: ${filters.familyBase || 'all'}`,
+    `Family: ${filters.family || 'all'}`,
+    `Availability: ${filters.availability || 'all'}`
+  ].join(' | ');
+  summarySheet.getCell('A4').value = 'Active filter scope';
+  summarySheet.getCell('A4').font = { bold: true, color: { argb: 'FF0B1F33' } };
+  summarySheet.getCell('B4').value = filterText;
+
+  summarySheet.getRow(6).values = ['Metric', 'Value'];
+  styleWorksheetHeader(summarySheet, 2);
+  summaryRows.forEach((row) => summarySheet.addRow(row));
+  applyAlternatingWorksheetRows(summarySheet, 7, 6 + summaryRows.length);
+  applyWorksheetBorders(summarySheet);
+
+  const legendStartRow = summarySheet.rowCount + 3;
+  summarySheet.getCell(`A${legendStartRow}`).value = 'Status Legend';
+  summarySheet.getCell(`A${legendStartRow}`).font = { bold: true, color: { argb: 'FF0B1F33' } };
+  const legendRows = Object.entries(CAPACITY_EXPORT_STATUS_META)
+    .filter(([status]) => status !== 'DEFAULT')
+    .map(([status, meta]) => ({ status, meaning: meta.description }));
+  summarySheet.getRow(legendStartRow + 1).values = ['Status', 'Meaning'];
+  styleWorksheetHeader(summarySheet, 2);
+  legendRows.forEach((row) => summarySheet.addRow(row));
+  for (let rowNumber = legendStartRow + 2; rowNumber <= legendStartRow + 1 + legendRows.length; rowNumber += 1) {
+    const statusCell = summarySheet.getCell(`A${rowNumber}`);
+    const meta = CAPACITY_EXPORT_STATUS_META[String(statusCell.value || '').toUpperCase()] || CAPACITY_EXPORT_STATUS_META.DEFAULT;
+    statusCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: meta.fill } };
+    statusCell.font = { bold: true, color: { argb: meta.font } };
+  }
+
+  const regionSheet = workbook.addWorksheet('Regional Summary', { views: [{ state: 'frozen', ySplit: 1 }] });
+  regionSheet.columns = [
+    { header: 'Region', key: 'region', width: 18 },
+    { header: 'Rows', key: 'rows', width: 12 },
+    { header: 'Families', key: 'families', width: 12 },
+    { header: 'Subscriptions', key: 'subscriptions', width: 14 },
+    { header: 'Quota Available', key: 'quotaAvailable', width: 16 },
+    { header: 'OK', key: 'okRows', width: 10 },
+    { header: 'Limited', key: 'limitedRows', width: 10 },
+    { header: 'Constrained', key: 'constrainedRows', width: 14 }
+  ];
+  regionSummaryRows.forEach((row) => regionSheet.addRow(row));
+  styleWorksheetHeader(regionSheet, regionSheet.columns.length);
+  applyAlternatingWorksheetRows(regionSheet);
+  applyWorksheetBorders(regionSheet);
+
+  const familySheet = workbook.addWorksheet('Family Summary', { views: [{ state: 'frozen', ySplit: 1 }] });
+  familySheet.columns = [
+    { header: 'Family', key: 'family', width: 22 },
+    { header: 'Rows', key: 'rows', width: 12 },
+    { header: 'Regions', key: 'regions', width: 12 },
+    { header: 'SKUs', key: 'skus', width: 12 },
+    { header: 'Quota Available', key: 'quotaAvailable', width: 16 },
+    { header: 'OK', key: 'okRows', width: 10 },
+    { header: 'Limited', key: 'limitedRows', width: 10 },
+    { header: 'Constrained', key: 'constrainedRows', width: 14 }
+  ];
+  familySummaryRows.forEach((row) => familySheet.addRow(row));
+  styleWorksheetHeader(familySheet, familySheet.columns.length);
+  applyAlternatingWorksheetRows(familySheet);
+  applyWorksheetBorders(familySheet);
+
+  const detailSheet = workbook.addWorksheet('Capacity Details', { views: [{ state: 'frozen', ySplit: 1 }] });
+  detailSheet.columns = [
+    { header: 'Captured At (UTC)', key: 'capturedAtUtc', width: 24 },
+    { header: 'Subscription Name', key: 'subscriptionName', width: 28 },
+    { header: 'Region', key: 'region', width: 18 },
+    { header: 'SKU', key: 'sku', width: 24 },
+    { header: 'Family', key: 'family', width: 18 },
+    { header: 'Availability', key: 'availability', width: 16 },
+    { header: 'Quota Available', key: 'quotaAvailable', width: 16 },
+    { header: 'vCPU', key: 'vCpu', width: 10 },
+    { header: 'Memory GB', key: 'memoryGB', width: 12 },
+    { header: 'Monthly Cost', key: 'monthlyCost', width: 14 },
+    { header: 'Zones', key: 'zonesCsv', width: 18 }
+  ];
+  exportRows.forEach((row) => detailSheet.addRow(row));
+  styleWorksheetHeader(detailSheet, detailSheet.columns.length);
+  applyAlternatingWorksheetRows(detailSheet);
+  applyWorksheetBorders(detailSheet);
+  detailSheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) {
+      return;
+    }
+    const availabilityCell = row.getCell('availability');
+    const statusMeta = CAPACITY_EXPORT_STATUS_META[String(availabilityCell.value || '').toUpperCase()] || CAPACITY_EXPORT_STATUS_META.DEFAULT;
+    availabilityCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: statusMeta.fill } };
+    availabilityCell.font = { bold: true, color: { argb: statusMeta.font } };
+    availabilityCell.alignment = { horizontal: 'center' };
   });
 
   return workbook.xlsx.writeBuffer();
@@ -1669,13 +1915,17 @@ app.get('/api/capacity/export', async (req, res) => {
   try {
     const filters = getCapacityFiltersFromQuery(req.query);
     const format = normalizeCapacityExportFormat(req.query.format);
+    const variant = normalizeCapacityExportVariant(req.query.variant);
     const rows = await getCapacityRows(filters);
     const exportRows = buildCapacityExportRows(rows);
     const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
 
     if (format === 'xlsx') {
-      const workbookBuffer = await buildCapacityWorkbook({ exportRows, filters });
-      res.setHeader('Content-Disposition', `attachment; filename="capacity-dashboard-${timestamp}.xlsx"`);
+      const workbookBuffer = variant === 'report'
+        ? await buildCapacityReportWorkbook({ exportRows, filters })
+        : await buildCapacityWorkbook({ exportRows, filters });
+      const filenamePrefix = variant === 'report' ? 'capacity-dashboard-report' : 'capacity-dashboard';
+      res.setHeader('Content-Disposition', `attachment; filename="${filenamePrefix}-${timestamp}.xlsx"`);
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       return res.send(Buffer.from(workbookBuffer));
     }

@@ -2613,6 +2613,7 @@ function App() {
   const [authResolved, setAuthResolved] = useState(false);
   const [appStatus, setAppStatus] = useState({ tone: 'info', message: 'Loading React experience...' });
   const [activeView, setActiveView] = useState('capacity-grid');
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [subscriptionSearch, setSubscriptionSearch] = useState('');
   const [subscriptionOptions, setSubscriptionOptions] = useState([]);
@@ -2622,6 +2623,7 @@ function App() {
   const [filters, setFilters] = useState({ regionPreset: 'USMajor', region: 'all', familyBase: 'all', family: 'all', availability: 'all', resourceType: 'all', provider: 'all' });
   const [capacityData, setCapacityData] = useState({ rows: [], summary: null, facets: { regions: [], families: [] }, pagination: { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false } });
   const [allFamilyFacetOptions, setAllFamilyFacetOptions] = useState([]);
+  const [computeFamilyCatalogOptions, setComputeFamilyCatalogOptions] = useState([]);
   const [capacityAnalytics, setCapacityAnalytics] = useState({ regionHealth: [], topSkus: [], matrix: { regions: [], rows: [] }, recommendedTargetSku: '', aiQuotaProviderOptions: [] });
   const [trendRows, setTrendRows] = useState([]);
   const [familyRows, setFamilyRows] = useState([]);
@@ -2636,6 +2638,7 @@ function App() {
   const [showSqlPreview, setShowSqlPreview] = useState(false);
   const [sqlPreviewState, setSqlPreviewState] = useState({ loading: false, error: '', rows: [] });
   const [uiSettingsBusy, setUiSettingsBusy] = useState(false);
+  const [selectedCapacityExport, setSelectedCapacityExport] = useState('xlsx:report');
 
   const queryFilters = useMemo(() => {
     const next = {
@@ -2652,12 +2655,40 @@ function App() {
     }
     return next;
   }, [filters, selectedSubscriptionIds]);
+  const familyCatalogQueryFilters = useMemo(() => {
+    const next = {
+      regionPreset: filters.regionPreset,
+      region: 'all',
+      familyBase: 'all',
+      family: 'all',
+      availability: filters.availability,
+      resourceType: filters.resourceType,
+      subscriptionIds: selectedSubscriptionIds.join(',')
+    };
+    if (filters.resourceType === 'AI' && filters.provider && filters.provider !== 'all') {
+      next.provider = filters.provider;
+    }
+    return next;
+  }, [filters.availability, filters.provider, filters.regionPreset, filters.resourceType, selectedSubscriptionIds]);
+  const computeFamilyCatalogQueryFilters = useMemo(() => ({
+    regionPreset: 'all',
+    region: 'all',
+    family: 'all',
+    familyBase: 'all',
+    availability: filters.availability,
+    subscriptionIds: selectedSubscriptionIds.join(',')
+  }), [filters.availability, selectedSubscriptionIds]);
   const fullFamilyOptions = useMemo(() => {
+    if (filters.resourceType === 'Compute') {
+      if (Array.isArray(computeFamilyCatalogOptions) && computeFamilyCatalogOptions.length > 0) {
+        return buildFamilyOptions(computeFamilyCatalogOptions).map((option) => option.value);
+      }
+    }
     const source = Array.isArray(allFamilyFacetOptions) && allFamilyFacetOptions.length > 0
       ? allFamilyFacetOptions
       : capacityData.facets.families;
     return buildFamilyOptions(source).map((option) => option.value);
-  }, [allFamilyFacetOptions, capacityData.facets.families]);
+  }, [allFamilyFacetOptions, capacityData.facets.families, computeFamilyCatalogOptions, filters.resourceType]);
   const familyBaseOptions = useMemo(() => buildFamilyBaseOptions(fullFamilyOptions), [fullFamilyOptions]);
   const filteredFamilyOptions = useMemo(() => {
     if (!filters.familyBase || filters.familyBase === 'all') {
@@ -2711,11 +2742,9 @@ function App() {
       : (Array.isArray(capacityData.facets.regions) ? capacityData.facets.regions : []);
     const presetRegions = regionPresets[filters.regionPreset] || [];
     if (presetRegions.length > 0) {
-      const presetSet = new Set(presetRegions.map((region) => String(region || '').trim().toLowerCase()));
-      const intersected = baseOptions.filter((region) => presetSet.has(String(region || '').trim().toLowerCase()));
-      return intersected.length > 0 ? intersected : presetRegions;
+      return [...new Set(presetRegions.map((region) => String(region || '').trim().toLowerCase()).filter(Boolean))];
     }
-    return baseOptions;
+    return [...new Set(baseOptions.map((region) => String(region || '').trim().toLowerCase()).filter(Boolean))];
   }, [activeView, aiModelState.regions, filters.regionPreset, capacityData.facets.regions]);
   const regionHealth = useMemo(() => (Array.isArray(capacityAnalytics.regionHealth) ? capacityAnalytics.regionHealth : []), [capacityAnalytics.regionHealth]);
   const topSkus = useMemo(() => (Array.isArray(capacityAnalytics.topSkus) ? capacityAnalytics.topSkus : []), [capacityAnalytics.topSkus]);
@@ -2855,6 +2884,16 @@ function App() {
     }
     setFilters((current) => ({ ...current, family: 'all' }));
   }, [filteredFamilyOptions, filters.family]);
+
+  useEffect(() => {
+    if (!filters.familyBase || filters.familyBase === 'all') {
+      return;
+    }
+    if (familyBaseOptions.some((option) => option.value === filters.familyBase)) {
+      return;
+    }
+    setFilters((current) => ({ ...current, familyBase: 'all', family: 'all' }));
+  }, [familyBaseOptions, filters.familyBase]);
 
   useEffect(() => {
     if (!recommendedTargetSku) {
@@ -3058,9 +3097,6 @@ function App() {
         const sanitizedRegions = (Array.isArray(payload.facets && payload.facets.regions) ? payload.facets.regions : []).filter(isDisplayableRegion);
         const sanitizedFamilies = (Array.isArray(payload.facets && payload.facets.families) ? payload.facets.families : []).filter(isDisplayableFamily);
         const canonicalFamilies = buildFamilyOptions(sanitizedFamilies).map((option) => option.value);
-        if (!filters.familyBase || filters.familyBase === 'all') {
-          setAllFamilyFacetOptions(canonicalFamilies);
-        }
         setCapacityData({
           rows: Array.isArray(payload.data) ? payload.data.map((row) => ({ ...row, sku: normalizeSkuName(row.sku) })) : [],
           summary: payload.summary || null,
@@ -3077,6 +3113,69 @@ function App() {
     }
     loadCapacityGrid();
   }, [activeView, queryFilters, capacityData.pagination.pageNumber, capacityData.pagination.pageSize]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadFamilyCatalog() {
+      try {
+        const query = new URLSearchParams({ ...familyCatalogQueryFilters, pageNumber: '1', pageSize: '500' });
+        const payload = await fetchJson(`/api/capacity/paged?${query.toString()}`);
+        if (cancelled) {
+          return;
+        }
+        const sanitizedFamilies = (Array.isArray(payload.facets && payload.facets.families) ? payload.facets.families : []).filter(isDisplayableFamily);
+        const canonicalFamilies = buildFamilyOptions(sanitizedFamilies).map((option) => option.value);
+        setAllFamilyFacetOptions(canonicalFamilies);
+      } catch {
+        if (cancelled) {
+          return;
+        }
+        setAllFamilyFacetOptions([]);
+      }
+    }
+
+    loadFamilyCatalog();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [familyCatalogQueryFilters]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadComputeFamilyCatalog() {
+      if (filters.resourceType !== 'Compute') {
+        setComputeFamilyCatalogOptions([]);
+        return;
+      }
+
+      try {
+        const query = new URLSearchParams({ ...computeFamilyCatalogQueryFilters, resourceType: 'Compute', pageNumber: '1', pageSize: '500' });
+        const payload = await fetchJson(`/api/capacity/paged?${query.toString()}`);
+        if (cancelled) {
+          return;
+        }
+        const rawFamilies = (Array.isArray(payload.facets && payload.facets.families) ? payload.facets.families : [])
+          .map((family) => String(family || '').trim())
+          .filter(isDisplayableFamily);
+        const canonicalFamilies = buildFamilyOptions(rawFamilies).map((option) => option.value);
+        setComputeFamilyCatalogOptions(canonicalFamilies);
+      } catch {
+        if (cancelled) {
+          return;
+        }
+        setComputeFamilyCatalogOptions([]);
+      }
+    }
+
+    loadComputeFamilyCatalog();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [computeFamilyCatalogQueryFilters, filters.resourceType]);
 
   useEffect(() => {
     // Server paging must restart at page 1 when the sidebar query scope changes,
@@ -3372,10 +3471,13 @@ function App() {
   function updateFilter(name, value) {
     setFilters((current) => {
       if (name === 'regionPreset') {
-        return { ...current, regionPreset: value, region: 'all' };
+        return { ...current, regionPreset: value, region: 'all', familyBase: 'all', family: 'all' };
+      }
+      if (name === 'region') {
+        return { ...current, region: value, familyBase: 'all', family: 'all' };
       }
       if (name === 'resourceType') {
-        return { ...current, resourceType: value, provider: value === 'AI' ? current.provider : 'all' };
+        return { ...current, resourceType: value, provider: value === 'AI' ? current.provider : 'all', familyBase: 'all', family: 'all' };
       }
       if (name === 'familyBase') {
         return { ...current, familyBase: value, family: 'all' };
@@ -3396,11 +3498,13 @@ function App() {
     setSelectedSubscriptionIds([]);
   }
 
-  async function downloadCapacityExport(format) {
+  async function downloadCapacityExport(format, variant = 'grid') {
     const normalizedFormat = String(format || 'csv').toLowerCase() === 'xlsx' ? 'xlsx' : 'csv';
-    setExportBusyFormat(normalizedFormat);
+    const normalizedVariant = String(variant || 'grid').toLowerCase() === 'report' ? 'report' : 'grid';
+    const busyKey = `${normalizedFormat}:${normalizedVariant}`;
+    setExportBusyFormat(busyKey);
     try {
-      const query = new URLSearchParams({ ...queryFilters, format: normalizedFormat });
+      const query = new URLSearchParams({ ...queryFilters, format: normalizedFormat, variant: normalizedVariant });
       const response = await fetch(`/api/capacity/export?${query.toString()}`, {
         credentials: 'same-origin'
       });
@@ -3435,6 +3539,11 @@ function App() {
     } finally {
       setExportBusyFormat('');
     }
+  }
+
+  function runSelectedCapacityExport() {
+    const [format, variant] = String(selectedCapacityExport || 'xlsx:report').split(':');
+    downloadCapacityExport(format || 'xlsx', variant || 'report');
   }
 
   async function runRecommendation() {
@@ -3933,7 +4042,7 @@ function App() {
   })();
 
   return (
-    <div className={classNames('rx-shell', !drawerOpen && 'is-drawer-collapsed')}>
+    <div className={classNames('rx-shell', !sidebarOpen && 'is-sidebar-collapsed', !drawerOpen && 'is-drawer-collapsed')}>
       <aside className="rx-sidebar">
         <div className="rx-sidebar__header">
           <div>
@@ -3948,6 +4057,7 @@ function App() {
             <button key={view.key} className={classNames('rx-nav-item', activeView === view.key && 'is-active')} type="button" onClick={() => setActiveView(view.key)}>{view.label}</button>
           ))}
         </nav>
+        {activeView === 'capacity-grid' ? <><div className="rx-nav-group">Exports</div><div className="rx-export-box"><label className="rx-field rx-field--compact"><span>Export option</span><select value={selectedCapacityExport} onChange={(event) => setSelectedCapacityExport(event.target.value)} disabled={Boolean(exportBusyFormat)}><option value="csv:grid">CSV Export</option><option value="xlsx:grid">Grid XLSX</option><option value="xlsx:report">Report XLSX</option></select></label><div className="rx-export-box__actions"><span className="rx-selected-count">Uses the current sidebar filter scope.</span><button className="rx-button rx-button--secondary rx-button--compact" type="button" disabled={Boolean(exportBusyFormat)} onClick={runSelectedCapacityExport}>{exportBusyFormat ? 'Running...' : 'Run'}</button></div></div></> : null}
         {auth && auth.canAccessAdmin ? <><div className="rx-nav-group">Admin</div><nav className="rx-nav-list">{adminViews.map((view) => <button key={view.key} className={classNames('rx-nav-item', activeView === view.key && 'is-active')} type="button" onClick={() => setActiveView(view.key)}>{view.label}</button>)}</nav></> : null}
       </aside>
 
@@ -3959,16 +4069,13 @@ function App() {
             <p>Right-side flyout keeps high-cardinality filters like subscriptions out of the main content flow.</p>
           </div>
           <div className="rx-topbar__actions">
-            {activeView === 'capacity-grid' ? <>
-              <button className="rx-button rx-button--secondary" type="button" disabled={Boolean(exportBusyFormat)} onClick={() => downloadCapacityExport('csv')}>{exportBusyFormat === 'csv' ? 'Exporting CSV...' : 'Export CSV'}</button>
-              <button className="rx-button rx-button--secondary" type="button" disabled={Boolean(exportBusyFormat)} onClick={() => downloadCapacityExport('xlsx')}>{exportBusyFormat === 'xlsx' ? 'Exporting Excel...' : 'Export Excel'}</button>
-            </> : null}
             {isAdminView ? <label className="rx-check rx-check--sql-toggle"><input type="checkbox" checked={showSqlPreview} disabled={uiSettingsBusy} onChange={(event) => handleShowSqlPreviewChange(event.target.checked)} />Show SQL</label> : null}
             <div className="rx-user-chip">
               <strong>{auth?.name || 'Loading user...'}</strong>
               <small>{auth?.username || 'No Entra context yet'}</small>
             </div>
             {auth?.authEnabled && auth?.isAuthenticated ? <a className="rx-link-button rx-link-button--muted" href="/auth/logout">Logout</a> : null}
+            <button className="rx-button rx-button--secondary" type="button" onClick={() => setSidebarOpen((current) => !current)}>{sidebarOpen ? 'Hide Reports' : 'Show Reports'}</button>
             <button className="rx-button rx-button--secondary" type="button" onClick={() => setDrawerOpen((current) => !current)}>{drawerOpen ? 'Hide Filters' : 'Show Filters'}</button>
           </div>
         </header>

@@ -81,7 +81,7 @@ CREATE TABLE dbo.AIModelAvailability (
     capturedAtUtc DATETIME2 NOT NULL,
     subscriptionId NVARCHAR(64) NOT NULL,
     region NVARCHAR(64) NOT NULL,
-    provider NVARCHAR(128) NOT NULL DEFAULT 'Unknown',
+    provider NVARCHAR(128) NOT NULL CONSTRAINT DF_AIModelAvailability_Provider DEFAULT 'Unknown',
     modelName NVARCHAR(128) NOT NULL,
     modelVersion NVARCHAR(64) NULL,
     deploymentTypes NVARCHAR(512) NULL,

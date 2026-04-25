@@ -61,9 +61,9 @@ This template provisions a native Azure baseline for the dashboard solution.
   -WorkloadSuffix "cap001" \
   -ParameterFile "./infra/bicep/test.bicepparam" \
   -QuotaManagementGroupId "<management-group-id>" \
-  -WebReaderSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
-  -WebQuotaWriterSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
-  -WorkerRbacSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
+  -WebReaderManagementGroupNames @("<management-group-name-1>","<management-group-name-2>") \
+  -WebQuotaWriterManagementGroupNames @("<management-group-name-1>","<management-group-name-2>") \
+  -WorkerRbacManagementGroupNames @("<management-group-name-1>","<management-group-name-2>") \
   -AuthEnabled $true \
   -EntraTenantId "<tenant-id>" \
   -EntraClientId "<app-registration-client-id>" \
@@ -116,9 +116,13 @@ az deployment group create \
 
 ## RBAC At Scale
 
-Use `webQuotaWriterSubscriptionIds` in Bicep when you have a small, curated list of participating subscriptions.
+Use `webQuotaWriterManagementGroupNames` when the customer uses management groups and quota-write access should inherit from one or more named management groups.
 
-Use `webReaderSubscriptionIds` when you need the dashboard web app managed identity to enumerate subscriptions and run read-only ARM queries. This is a direct subscription-scoped role assignment path; the template does not infer or inherit Reader from a management group.
+Use `webReaderManagementGroupNames` and `workerRbacManagementGroupNames` as the preferred operator inputs for larger estates. They accept management group names, not full ARM IDs, and support multiple management groups in a CAF-style layout.
+
+If the deploying operator already has access to the full set of non-root management groups, `scripts/deploy-infra.ps1 -UseAllAccessibleManagementGroups` can populate the three management-group arrays automatically. The helper intentionally skips the tenant root group; use the explicit arrays instead when you need a narrower or custom scope.
+
+Keep `webReaderSubscriptionIds`, `webQuotaWriterSubscriptionIds`, and `workerSubscriptionRbacSubscriptionIds` for small customers that do not use management groups or that want a tightly curated subscription-scoped fallback.
 
 For customers with hundreds or thousands of subscriptions, do not maintain a large subscription array in the resource-group deployment. Use `scripts/grant-quota-rbac.ps1` to assign `GroupQuota Request Operator` from a management-group-derived subscription list or from a maintained subscription inventory file.
 

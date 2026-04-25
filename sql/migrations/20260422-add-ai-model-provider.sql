@@ -2,7 +2,9 @@ IF OBJECT_ID('dbo.AIModelAvailability', 'U') IS NOT NULL
 BEGIN
     IF COL_LENGTH('dbo.AIModelAvailability', 'provider') IS NULL
     BEGIN
-        ALTER TABLE dbo.AIModelAvailability ADD provider NVARCHAR(128) NULL;
+        ALTER TABLE dbo.AIModelAvailability
+            ADD provider NVARCHAR(128) NOT NULL
+                CONSTRAINT DF_AIModelAvailability_Provider DEFAULT ('Unknown') WITH VALUES;
     END;
 END;
 GO
@@ -16,22 +18,6 @@ BEGIN
         ELSE LTRIM(RTRIM(modelFormat))
     END
     WHERE provider IS NULL OR LTRIM(RTRIM(provider)) = '';
-END;
-GO
-
-IF OBJECT_ID('dbo.AIModelAvailability', 'U') IS NOT NULL
-AND NOT EXISTS (
-    SELECT 1
-    FROM sys.default_constraints
-    INNER JOIN sys.columns
-        ON sys.columns.object_id = sys.default_constraints.parent_object_id
-       AND sys.columns.column_id = sys.default_constraints.parent_column_id
-    WHERE sys.default_constraints.parent_object_id = OBJECT_ID('dbo.AIModelAvailability')
-      AND sys.columns.name = 'provider'
-)
-BEGIN
-    ALTER TABLE dbo.AIModelAvailability
-        ADD CONSTRAINT DF_AIModelAvailability_Provider DEFAULT ('Unknown') FOR provider;
 END;
 GO
 

@@ -7,9 +7,21 @@ variable "web_reader_subscription_ids" {
   default     = []
 }
 
+variable "web_reader_management_group_names" {
+  type        = list(string)
+  description = "Management group names where the web app managed identity should receive Reader access"
+  default     = []
+}
+
 variable "web_quota_writer_subscription_ids" {
   type        = list(string)
   description = "Subscription IDs where the web app managed identity should receive GroupQuota Request Operator"
+  default     = []
+}
+
+variable "web_quota_writer_management_group_names" {
+  type        = list(string)
+  description = "Management group names where the web app managed identity should receive GroupQuota Request Operator"
   default     = []
 }
 
@@ -19,6 +31,12 @@ variable "web_quota_writer_subscription_ids" {
 variable "worker_subscription_rbac_subscription_ids" {
   type        = list(string)
   description = "Subscription IDs where the worker managed identity should receive RBAC roles"
+  default     = []
+}
+
+variable "worker_rbac_management_group_names" {
+  type        = list(string)
+  description = "Management group names where the worker managed identity should receive RBAC roles"
   default     = []
 }
 

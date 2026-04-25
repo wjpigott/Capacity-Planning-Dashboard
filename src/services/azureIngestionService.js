@@ -16,6 +16,7 @@ const {
 
 const ARM_SCOPE = 'https://management.azure.com/.default';
 const ARM_BASE = 'https://management.azure.com';
+const MANAGEMENT_API_VERSION = '2020-05-01';
 const RETAIL_PRICING_BASE = 'https://prices.azure.com/api/retail/prices';
 const DEFAULT_ARM_MAX_RETRIES = 3;
 const DEFAULT_REGION_CONCURRENCY = 4;
@@ -76,6 +77,24 @@ function getCredential() {
   return new DefaultAzureCredential({ managedIdentityClientId });
 }
 
+function parseCsvList(value) {
+  if (!value) {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .flatMap((entry) => String(entry || '').split(','))
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+
+  return String(value)
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
 function getSubscriptionKey(subscriptionId) {
   const salt = process.env.INGEST_SUBSCRIPTION_HASH_SALT || '';
   const digest = crypto
@@ -104,17 +123,54 @@ async function armGetAll(url, token) {
   return all;
 }
 
-async function listSubscriptions(token, explicitSubscriptions) {
-  const configured = (process.env.INGEST_SUBSCRIPTION_IDS || '')
-    .split(',')
-    .map((v) => v.trim())
-    .filter(Boolean);
+async function listManagementGroupSubscriptions(token, managementGroupName) {
+  const url = `${ARM_BASE}/providers/Microsoft.Management/managementGroups/${encodeURIComponent(managementGroupName)}/descendants?api-version=${MANAGEMENT_API_VERSION}`;
+  const descendants = await armGetAll(url, token);
 
-  const requested = (explicitSubscriptions && explicitSubscriptions.length > 0)
-    ? explicitSubscriptions
-    : configured;
+  return descendants
+    .filter((entry) => {
+      const type = String(entry?.type || '').toLowerCase();
+      const id = String(entry?.id || '').toLowerCase();
+      return type.includes('subscriptions') || id.startsWith('/subscriptions/');
+    })
+    .map((entry) => ({
+      subscriptionId: entry?.name || String(entry?.id || '').split('/').filter(Boolean).pop() || null,
+      displayName: entry?.properties?.displayName || 'Management group subscription',
+      managementGroupName
+    }))
+    .filter((entry) => Boolean(entry.subscriptionId));
+}
 
-  const requestedSet = new Set(requested.map((subId) => subId.toLowerCase()));
+async function listSubscriptions(token, explicitSubscriptions, explicitManagementGroupNames) {
+  const configuredSubscriptions = parseCsvList(process.env.INGEST_SUBSCRIPTION_IDS);
+  const configuredManagementGroupNames = parseCsvList(process.env.INGEST_MANAGEMENT_GROUP_NAMES);
+  const requestedSubscriptions = parseCsvList(explicitSubscriptions);
+  const requestedManagementGroupNames = parseCsvList(explicitManagementGroupNames);
+  const effectiveSubscriptionIds = requestedSubscriptions.length > 0
+    ? requestedSubscriptions
+    : configuredSubscriptions;
+  const effectiveManagementGroupNames = requestedManagementGroupNames.length > 0
+    ? requestedManagementGroupNames
+    : configuredManagementGroupNames;
+
+  const requestedSet = new Set(effectiveSubscriptionIds.map((subId) => subId.toLowerCase()));
+  const requestedDisplayNames = new Map(
+    effectiveSubscriptionIds.map((subscriptionId) => [subscriptionId.toLowerCase(), 'Configured subscription'])
+  );
+
+  if (effectiveManagementGroupNames.length > 0) {
+    const managementGroupResults = await Promise.all(
+      [...new Set(effectiveManagementGroupNames.map((name) => name.toLowerCase()))].map(async (normalizedName) => {
+        const originalName = effectiveManagementGroupNames.find((entry) => entry.toLowerCase() === normalizedName) || normalizedName;
+        return listManagementGroupSubscriptions(token, originalName);
+      })
+    );
+
+    managementGroupResults.flat().forEach((subscription) => {
+      requestedSet.add(subscription.subscriptionId.toLowerCase());
+      requestedDisplayNames.set(subscription.subscriptionId.toLowerCase(), subscription.displayName || 'Management group subscription');
+    });
+  }
 
   const url = `${ARM_BASE}/subscriptions?api-version=2020-01-01`;
   const subscriptions = await armGetAll(url, token);
@@ -131,12 +187,13 @@ async function listSubscriptions(token, explicitSubscriptions) {
   }
 
   const matchedSubscriptions = enabledSubscriptions.filter((s) => requestedSet.has(s.subscriptionId.toLowerCase()));
+  const matchedSet = new Set(matchedSubscriptions.map((entry) => entry.subscriptionId.toLowerCase()));
 
-  const missingSubscriptions = requested
-    .filter((subId) => !matchedSubscriptions.some((entry) => entry.subscriptionId.toLowerCase() === subId.toLowerCase()))
+  const missingSubscriptions = [...requestedSet]
+    .filter((subId) => !matchedSet.has(subId))
     .map((subId) => ({
       subscriptionId: subId,
-      displayName: 'Configured subscription'
+      displayName: requestedDisplayNames.get(subId) || 'Configured subscription'
     }));
 
   return [...matchedSubscriptions, ...missingSubscriptions];
@@ -451,7 +508,7 @@ async function runCapacityIngestion(options = {}) {
   try {
     const credential = getCredential();
     const token = (await credential.getToken(ARM_SCOPE)).token;
-    const subscriptions = await listSubscriptions(token, options.subscriptionIds);
+    const subscriptions = await listSubscriptions(token, options.subscriptionIds, options.managementGroupNames);
     const regions = getRegions(options.regionPreset, options.regions);
     const regionConcurrency = Math.max(
       Number(process.env.INGEST_REGION_CONCURRENCY || DEFAULT_REGION_CONCURRENCY),
@@ -692,7 +749,7 @@ function getIngestionSchedulerConfig() {
 async function refreshModelCatalog(options = {}) {
   const credential = getCredential();
   const token = (await credential.getToken(ARM_SCOPE)).token;
-  const subscriptions = await listSubscriptions(token, options.subscriptionIds);
+  const subscriptions = await listSubscriptions(token, options.subscriptionIds, options.managementGroupNames);
   if (subscriptions.length === 0) {
     return { ok: true, insertedAIModelRows: 0, message: 'No subscriptions available.' };
   }

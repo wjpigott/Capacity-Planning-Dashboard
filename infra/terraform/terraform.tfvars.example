@@ -1,8 +1,11 @@
 # ── Cross-subscription RBAC – Web App ────────
+# web_reader_management_group_names       = ["Demo-MG", "LandingZones-MG"]
 # web_reader_subscription_ids       = ["00000000-0000-0000-0000-000000000000"]
+# web_quota_writer_management_group_names = ["Demo-MG", "LandingZones-MG"]
 # web_quota_writer_subscription_ids = ["00000000-0000-0000-0000-000000000000"]
 
 # ── Cross-subscription RBAC – Worker ─────────
+# worker_rbac_management_group_names      = ["Demo-MG", "LandingZones-MG"]
 # worker_subscription_rbac_subscription_ids  = ["00000000-0000-0000-0000-000000000000"]
 # assign_worker_compute_recommendations_role = true
 # assign_worker_cost_management_reader_role  = true

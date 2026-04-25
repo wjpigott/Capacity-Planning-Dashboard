@@ -176,6 +176,11 @@ Optional worker-first settings:
 - `CAPACITY_LIVE_REFRESH_MAX_CALLS`
 - `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK`
 
+Optional ingestion scope settings:
+
+- `INGEST_MANAGEMENT_GROUP_NAMES` - comma-separated management group names; when set, capacity ingestion targets descendant subscriptions from those groups instead of relying only on `INGEST_SUBSCRIPTION_IDS`
+- `INGEST_SUBSCRIPTION_IDS` - comma-separated fallback list for smaller estates without management groups
+
 When `CAPACITY_WORKER_BASE_URL` is set, live placement refresh calls the Azure Function worker first. This branch contains a managed-identity bearer-token worker path, but the currently verified working Azure dev baseline uses a shared secret between the web app and the function app. If the worker is unavailable and `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK` is not `true`, the dashboard falls back to the in-process App Service path to preserve rollback safety.
 
 Deployment incident note, 2026-04-24:
@@ -371,8 +376,10 @@ Quota apply uses the vendored `tools/Get-AzVMAvailability` copy that ships with 
 
 Terraform deployment note:
 
-- The script examples in this section use the Bicep path. If you are deploying with Terraform instead, use [infra/terraform/README.md](c:/repos/Capacity/dashboard/infra/terraform/README.md) for the standalone workflow and prerequisites.
-- Terraform is currently documented as a separate flow because it does not use `./scripts/deploy-infra.ps1`, does not publish the web package for you, and may target an existing resource group that needs to be imported into state before the first apply.
+- The script examples in this section use the Bicep path. If you are deploying with Terraform instead, use [infra/terraform/README.md](c:/repos/Capacity/dashboard/infra/terraform/README.md) for the Terraform-specific workflow and prerequisites.
+- Terraform now supports the same management-group-first RBAC model as Bicep: use management-group name arrays as the preferred path for larger estates, and keep subscription arrays only as the fallback for smaller customers.
+- `./scripts/deploy-infra.ps1 -Provider Terraform` now passes the same management-group and subscription RBAC inputs through to Terraform and still publishes the dashboard web app and worker packages after a successful apply.
+- Terraform may still target an existing resource group that needs to be imported into state before the first apply.
 
 Use script-based deployment with Central US default:
 
@@ -382,8 +389,8 @@ Use script-based deployment with Central US default:
 	-Environment dev \
 	-WorkloadSuffix "cap001" \
 	-QuotaManagementGroupId "<management-group-id>" \
-	-WebReaderSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
-	-WorkerRbacSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
+	-WebReaderManagementGroupNames @("<management-group-name-1>","<management-group-name-2>") \
+	-WorkerRbacManagementGroupNames @("<management-group-name-1>","<management-group-name-2>") \
 	-SqlEntraAdminLogin "<entra-upn>" \
 	-SqlEntraAdminObjectId "<entra-object-id>" \
 	-SubscriptionId "<subscription-id>"
@@ -411,8 +418,8 @@ Example:
 	-WorkloadSuffix "cap001" \
 	-ParameterFile "./infra/bicep/test.bicepparam" \
 	-QuotaManagementGroupId "Demo-MG" \
-	-WebReaderSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
-	-WorkerRbacSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
+	-WebReaderManagementGroupNames @("Demo-MG","LandingZones-MG") \
+	-WorkerRbacManagementGroupNames @("Demo-MG","LandingZones-MG") \
 	-SqlEntraAdminLogin "<entra-upn>" \
 	-SqlEntraAdminObjectId "<entra-object-id>" \
 	-SubscriptionId "<subscription-id>"
@@ -429,10 +436,13 @@ Notes:
 - The likely production target is React-only. Keep `/react/` as the primary deployed experience and treat the classic root UI as legacy unless a specific environment still requires it.
 - Raw `az deployment group create` with the Bicep template still provisions infrastructure only; it does not upload the local dashboard or `react/` files.
 - `-ParameterFile` lets you keep environment defaults in a `.bicepparam` file while still overriding secure/runtime values from the command line.
-- `-WebReaderSubscriptionIds` grants the dashboard web app `Reader` on the listed subscriptions so subscription discovery can see every target subscription.
-- `-WebReaderSubscriptionIds` is the only built-in path that grants the dashboard web app managed identity subscription `Reader` access during deployment. There is no management-group fallback for read access in the current template, so fresh deployments must provide the target subscription list explicitly.
+- `-WebReaderManagementGroupNames` grants the dashboard web app `Reader` at the named management groups. This is the preferred path for larger estates and supports multiple management groups in CAF-style layouts.
+- `-WebReaderSubscriptionIds` remains available as a fallback for small customers that do not use management groups or that want a tightly curated subscription list.
+- `-UseAllAccessibleManagementGroups` auto-discovers every non-root management group visible to the current Azure CLI login and uses those names for `-WebReaderManagementGroupNames`, `-WebQuotaWriterManagementGroupNames`, and `-WorkerRbacManagementGroupNames` unless you pass one of those arrays explicitly.
 - `-QuotaManagementGroupId` sets the `QUOTA_MANAGEMENT_GROUP_ID` app setting during deployment. Use it whenever you expect live quota discovery or quota apply to target a specific management group such as `Demo-MG`.
-- `-WorkerRbacSubscriptionIds` triggers subscription-level RBAC assignment for the worker identity (`Reader`, `Compute Recommendations Role`, `Cost Management Reader`, `Billing Reader`) in the same deployment.
+- `-WebQuotaWriterManagementGroupNames` grants `GroupQuota Request Operator` at the named management groups for quota-apply workflows. Keep `-WebQuotaWriterSubscriptionIds` as the fallback for customers without management groups.
+- `-WorkerRbacManagementGroupNames` triggers management-group-scoped RBAC assignment for the worker identity (`Compute Recommendations Role`, `Cost Management Reader`, `Billing Reader`) and is the preferred path for larger estates.
+- `-WorkerRbacSubscriptionIds` remains available as a fallback for small customers without management groups.
 - `-AuthEnabled` plus `-EntraTenantId`, `-EntraClientId`, `-EntraClientSecret`, and optional `-AdminGroupId` configure the built-in Entra sign-in flow used by the dashboard API.
 
 Verified working RBAC baseline (`cap001`, captured 2026-04-24):
@@ -451,8 +461,7 @@ Example with Entra sign-in enabled:
 	-Environment test \
 	-WorkloadSuffix "cap001" \
 	-ParameterFile "./infra/bicep/test.bicepparam" \
-	-WebReaderSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
-	-WorkerRbacSubscriptionIds @("<subscription-id-1>","<subscription-id-2>") \
+	-UseAllAccessibleManagementGroups \
 	-AuthEnabled $true \
 	-EntraTenantId "<tenant-id>" \
 	-EntraClientId "<app-registration-client-id>" \
@@ -467,7 +476,9 @@ Full example with the most commonly needed inputs:
 
 - Use this when you want one copy/paste example that shows the full parameter shape for a real environment.
 - Keep the environment and parameter file aligned. For example, use a production parameter file for `prod`, or omit `-ParameterFile` if you are not using one.
-- `-WebQuotaWriterSubscriptionIds` is only needed when the dashboard web app should perform quota write operations.
+- `-WebQuotaWriterManagementGroupNames` is the preferred quota-write RBAC path when the customer uses management groups.
+- `-WebQuotaWriterSubscriptionIds` remains available when the dashboard web app should perform quota write operations for a small curated subscription set.
+- `-UseAllAccessibleManagementGroups` skips the tenant root group automatically. If you need a tighter scope, pass the three management-group arrays explicitly instead of using discovery.
 
 ```powershell
 ./scripts/deploy-infra.ps1 `
@@ -479,9 +490,9 @@ Full example with the most commonly needed inputs:
 	-SqlEntraAdminObjectId "<entra-object-id>" `
 	-SubscriptionId "<subscription-id>" `
 	-QuotaManagementGroupId "<management-group-id>" `
-	-WebReaderSubscriptionIds @("<sub-1>","<sub-2>") `
-	-WebQuotaWriterSubscriptionIds @("<sub-1>","<sub-2>") `
-	-WorkerRbacSubscriptionIds @("<sub-1>","<sub-2>") `
+	-WebReaderManagementGroupNames @("<mg-1>","<mg-2>") `
+	-WebQuotaWriterManagementGroupNames @("<mg-1>","<mg-2>") `
+	-WorkerRbacManagementGroupNames @("<mg-1>","<mg-2>") `
 	-AuthEnabled $true `
 	-EntraTenantId "<tenant-id>" `
 	-EntraClientId "<app-registration-client-id>" `
@@ -514,7 +525,7 @@ Hosted worker guidance:
 - The worker validates the caller token against the dashboard web app managed identity object ID that infra deployment stamps into the Function App settings.
 - The default infrastructure path uses a dedicated App Service plan for the worker instead of Flex Consumption.
 - Enable PowerShell managed dependencies in `host.json` so `requirements.psd1` can restore Az modules on the worker.
-- NOTE: when `-WorkerRbacSubscriptionIds` is provided during infra deployment, these worker subscription roles are assigned automatically, including plain subscription `Reader` for SKU and metadata reads. If omitted, assign them manually.
+- NOTE: when `-WorkerRbacManagementGroupNames` is provided during infra deployment, the worker RBAC roles are assigned at those management group scopes. Use `-WorkerRbacSubscriptionIds` only when you need the small-customer subscription fallback.
 - NOTE: some organizations require billing-account-scope assignments for billing APIs; those billing-scope assignments are outside this resource-group deployment and may still require manual/central platform automation.
 
 Current worker endpoints:

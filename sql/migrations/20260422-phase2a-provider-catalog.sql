@@ -34,24 +34,13 @@ GO
 
 IF COL_LENGTH('dbo.AIModelAvailability', 'provider') IS NULL
 BEGIN
-    ALTER TABLE dbo.AIModelAvailability ADD provider NVARCHAR(128) NULL;
+    ALTER TABLE dbo.AIModelAvailability
+        ADD provider NVARCHAR(128) NOT NULL
+            CONSTRAINT DF_AIModelAvailability_Provider DEFAULT ('Unknown') WITH VALUES;
 
     UPDATE dbo.AIModelAvailability
     SET provider = COALESCE(NULLIF(provider, ''), NULLIF(modelFormat, ''), 'OpenAI')
     WHERE provider IS NULL OR LTRIM(RTRIM(provider)) = '';
-
-    IF NOT EXISTS (
-        SELECT 1
-        FROM sys.default_constraints
-        WHERE name = 'DF_AIModelAvailability_Provider'
-          AND parent_object_id = OBJECT_ID('dbo.AIModelAvailability')
-    )
-    BEGIN
-        ALTER TABLE dbo.AIModelAvailability
-            ADD CONSTRAINT DF_AIModelAvailability_Provider DEFAULT ('Unknown') FOR provider;
-    END;
-
-    ALTER TABLE dbo.AIModelAvailability ALTER COLUMN provider NVARCHAR(128) NOT NULL;
 END;
 GO
 

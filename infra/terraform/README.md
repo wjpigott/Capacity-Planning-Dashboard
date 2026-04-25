@@ -20,7 +20,7 @@ Terraform equivalent of the Bicep templates in this folder. Provisions the full 
 | SQL Private Endpoint + DNS zone + VNet link | `azurerm_private_endpoint.sql`, `azurerm_private_dns_zone.sql`, `azurerm_private_dns_zone_virtual_network_link.sql` |
 | Key Vault Private Endpoint + DNS zone + VNet link | `azurerm_private_endpoint.kv`, `azurerm_private_dns_zone.kv`, `azurerm_private_dns_zone_virtual_network_link.kv` |
 | Role Assignments (5) | KV Secrets User (×2), Storage Blob/Queue/Table (×3) |
-| Cross-subscription RBAC (modules) | `worker-subscription-rbac`, `web-subscription-reader`, `web-subscription-quota-writer` |
+| Cross-scope RBAC (modules) | `worker-subscription-rbac`, `worker-management-group-rbac`, `web-subscription-reader`, `web-management-group-reader`, `web-subscription-quota-writer`, `web-management-group-quota-writer` |
 
 ## File layout
 
@@ -34,9 +34,12 @@ infra/terraform/
 ├── terraform.tfvars.example    # Example variable overrides
 ├── README.md                   # This file
 └── modules/
-    ├── worker-subscription-rbac/       # Compute Recommendations, Cost Mgmt Reader, Billing Reader
-    ├── web-subscription-reader/        # Subscription-level Reader for web app
-    └── web-subscription-quota-writer/  # GroupQuota Request Operator for web app
+    ├── worker-subscription-rbac/             # Subscription-scope worker RBAC
+    ├── worker-management-group-rbac/         # Management-group-scope worker RBAC
+    ├── web-subscription-reader/              # Subscription-level Reader for web app
+    ├── web-management-group-reader/          # Management-group-level Reader for web app
+    ├── web-subscription-quota-writer/        # Subscription-level GroupQuota Request Operator
+    └── web-management-group-quota-writer/    # Management-group-level GroupQuota Request Operator
 ```
 
 ## Prerequisites
@@ -62,7 +65,11 @@ Have these values ready before you create `terraform.tfvars` or run `terraform a
     - optional `worker_shared_secret`
 - Optional management-group default for quota workflows
     - `quota_management_group_id`
-- Subscription lists for any cross-subscription access you want Terraform to assign
+- Management-group names for the preferred cross-scope RBAC path in larger estates
+    - `web_reader_management_group_names`
+    - `web_quota_writer_management_group_names`
+    - `worker_rbac_management_group_names`
+- Subscription lists for the fallback cross-subscription access path
     - `web_reader_subscription_ids`
     - `web_quota_writer_subscription_ids`
     - `worker_subscription_rbac_subscription_ids`
@@ -155,6 +162,9 @@ sql_entra_admin_object_id = "00000000-0000-0000-0000-000000000000"
 ingest_api_key            = "your-ingest-key"
 session_secret            = "your-session-secret"
 quota_management_group_id = "Demo-MG"
+# web_reader_management_group_names       = ["Demo-MG", "LandingZones-MG"]
+# web_quota_writer_management_group_names = ["Demo-MG", "LandingZones-MG"]
+# worker_rbac_management_group_names      = ["Demo-MG", "LandingZones-MG"]
 ```
 
 Then apply:
@@ -214,9 +224,12 @@ All variables have defaults and can be overridden via tfvars or CLI flags.
 | `manage_entra_web_redirect_uri` | `false` | Update the existing Entra app registration web redirect URIs |
 | `extra_entra_web_redirect_uris` | `[]` | Extra web redirect URIs to preserve when Terraform manages Entra redirects |
 | `admin_group_id` | `""` | Entra group for admin access |
-| `web_reader_subscription_ids` | `[]` | Subscriptions for web app Reader role |
-| `web_quota_writer_subscription_ids` | `[]` | Subscriptions for GroupQuota Request Operator |
-| `worker_subscription_rbac_subscription_ids` | `[]` | Subscriptions for worker RBAC roles |
+| `web_reader_management_group_names` | `[]` | Management groups for web app Reader role |
+| `web_quota_writer_management_group_names` | `[]` | Management groups for GroupQuota Request Operator |
+| `worker_rbac_management_group_names` | `[]` | Management groups for worker RBAC roles |
+| `web_reader_subscription_ids` | `[]` | Subscription fallback for web app Reader role |
+| `web_quota_writer_subscription_ids` | `[]` | Subscription fallback for GroupQuota Request Operator |
+| `worker_subscription_rbac_subscription_ids` | `[]` | Subscription fallback for worker RBAC roles |
 | `assign_worker_compute_recommendations_role` | `true` | Toggle Compute Recommendations Role |
 | `assign_worker_cost_management_reader_role` | `true` | Toggle Cost Management Reader |
 | `assign_worker_billing_reader_role` | `true` | Toggle Billing Reader |
@@ -226,6 +239,12 @@ Quota management-group note:
 
 - Set `quota_management_group_id` when you expect the Admin quota experience to default to a known management group, or when tenant-wide management-group enumeration is restricted and the UI needs a fallback management group to return.
 - Without this value, `/api/quota/management-groups` depends entirely on the web app identity being able to enumerate management groups through `Microsoft.Management/managementGroups`.
+
+Management-group RBAC note:
+
+- Prefer `*_management_group_names` for larger estates so the web app and worker inherit access across descendant subscriptions without maintaining long subscription lists.
+- Keep the `*_subscription_ids` variables only as the fallback for smaller customers or tightly curated subscription scopes.
+- When `web_reader_management_group_names` is populated, Terraform also sets the `INGEST_MANAGEMENT_GROUP_NAMES` app setting on the dashboard web app so runtime ingestion expands those management groups into descendant subscriptions.
 
 ## Outputs
 

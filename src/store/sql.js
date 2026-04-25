@@ -1749,8 +1749,21 @@ async function ensurePhase3SchemaForPool(pool) {
       IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_AIModelAvailability_Provider_Region_Model' AND object_id = OBJECT_ID('dbo.AIModelAvailability'))
         DROP INDEX IX_AIModelAvailability_Provider_Region_Model ON dbo.AIModelAvailability;
 
-      IF EXISTS (SELECT 1 FROM sys.default_constraints WHERE name = 'DF_AIModelAvailability_Provider' AND parent_object_id = OBJECT_ID('dbo.AIModelAvailability'))
-        ALTER TABLE dbo.AIModelAvailability DROP CONSTRAINT DF_AIModelAvailability_Provider;
+      DECLARE @providerDefaultConstraintName SYSNAME;
+      SELECT @providerDefaultConstraintName = sys.default_constraints.name
+      FROM sys.default_constraints
+      INNER JOIN sys.columns
+        ON sys.columns.object_id = sys.default_constraints.parent_object_id
+       AND sys.columns.column_id = sys.default_constraints.parent_column_id
+      WHERE sys.default_constraints.parent_object_id = OBJECT_ID('dbo.AIModelAvailability')
+        AND sys.columns.name = 'provider';
+
+      IF @providerDefaultConstraintName IS NOT NULL
+      BEGIN
+        DECLARE @dropProviderDefaultSql NVARCHAR(4000) =
+          N'ALTER TABLE dbo.AIModelAvailability DROP CONSTRAINT ' + QUOTENAME(@providerDefaultConstraintName) + N';';
+        EXEC sp_executesql @dropProviderDefaultSql;
+      END
 
       ALTER TABLE dbo.AIModelAvailability ALTER COLUMN provider NVARCHAR(128) NOT NULL;
 
@@ -1762,7 +1775,15 @@ async function ensurePhase3SchemaForPool(pool) {
     END
     ELSE
     BEGIN
-      IF NOT EXISTS (SELECT 1 FROM sys.default_constraints WHERE name = 'DF_AIModelAvailability_Provider' AND parent_object_id = OBJECT_ID('dbo.AIModelAvailability'))
+      IF NOT EXISTS (
+        SELECT 1
+        FROM sys.default_constraints
+        INNER JOIN sys.columns
+          ON sys.columns.object_id = sys.default_constraints.parent_object_id
+         AND sys.columns.column_id = sys.default_constraints.parent_column_id
+        WHERE sys.default_constraints.parent_object_id = OBJECT_ID('dbo.AIModelAvailability')
+          AND sys.columns.name = 'provider'
+      )
         ALTER TABLE dbo.AIModelAvailability ADD CONSTRAINT DF_AIModelAvailability_Provider DEFAULT ('Unknown') FOR provider;
 
       IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_AIModelAvailability_Provider_Region_Model' AND object_id = OBJECT_ID('dbo.AIModelAvailability'))

@@ -9,10 +9,13 @@ param(
     [Parameter(Mandatory = $true)][string]$SqlEntraAdminObjectId,
     [Parameter(Mandatory = $false)][string]$WorkerSharedSecret,
     [Parameter(Mandatory = $false)][string[]]$WebReaderSubscriptionIds = @(),
+    [Parameter(Mandatory = $false)][string[]]$WebReaderManagementGroupNames = @(),
     [Parameter(Mandatory = $false)][string[]]$WebQuotaWriterSubscriptionIds = @(),
+    [Parameter(Mandatory = $false)][string[]]$WebQuotaWriterManagementGroupNames = @(),
     [Parameter(Mandatory = $false)][string]$QuotaManagementGroupId,
     [Parameter(Mandatory = $false)][string]$KeyVaultNameOverride,
     [Parameter(Mandatory = $false)][string[]]$WorkerRbacSubscriptionIds = @(),
+    [Parameter(Mandatory = $false)][string[]]$WorkerRbacManagementGroupNames = @(),
     [Parameter(Mandatory = $false)][bool]$AssignWorkerComputeRecommendationsRole = $true,
     [Parameter(Mandatory = $false)][bool]$AssignWorkerCostManagementReaderRole = $true,
     [Parameter(Mandatory = $false)][bool]$AssignWorkerBillingReaderRole = $true,
@@ -23,6 +26,7 @@ param(
     [Parameter(Mandatory = $false)][string]$AuthRedirectUri,
     [Parameter(Mandatory = $false)][string]$AdminGroupId,
     [Parameter(Mandatory = $false)][string]$SubscriptionId,
+    [Parameter(Mandatory = $false)][switch]$UseAllAccessibleManagementGroups,
     [Parameter(Mandatory = $false)][bool]$DeployWebApp = $true,
     [Parameter(Mandatory = $false)][bool]$DeployWorkerApp = $true,
     [Parameter(Mandatory = $false)][bool]$ApplyDatabaseBootstrap = $true,
@@ -91,8 +95,73 @@ function Resolve-TerraformCommand() {
     return $null
 }
 
+function ConvertTo-TerraformLiteral([object]$Value) {
+    if ($null -eq $Value) {
+        return 'null'
+    }
+
+    if ($Value -is [bool]) {
+        return $Value.ToString().ToLowerInvariant()
+    }
+
+    if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
+        $items = @($Value | ForEach-Object { ConvertTo-TerraformLiteral $_ })
+        return "[$($items -join ',')]"
+    }
+
+    $stringValue = [string]$Value
+    $escapedValue = $stringValue.Replace('\', '\\').Replace('"', '\"')
+    return '"' + $escapedValue + '"'
+}
+
+function Get-AccessibleManagementGroupNames() {
+    $responseJson = az rest --method get --url 'https://management.azure.com/providers/Microsoft.Management/managementGroups?api-version=2023-04-01' --output json 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($responseJson)) {
+        throw 'Could not enumerate accessible management groups from the current Azure CLI login.'
+    }
+
+    $response = $responseJson | ConvertFrom-Json -Depth 20
+    if (-not $response -or -not $response.value) {
+        return @()
+    }
+
+    return @(
+        $response.value |
+            Where-Object {
+                -not [string]::IsNullOrWhiteSpace($_.name) -and
+                $_.name -ne $_.properties.tenantId
+            } |
+            Select-Object -ExpandProperty name -Unique
+    )
+}
+
 if ($SubscriptionId) {
     az account set --subscription $SubscriptionId | Out-Null
+}
+
+if ($UseAllAccessibleManagementGroups) {
+    $accessibleManagementGroupNames = @(Get-AccessibleManagementGroupNames)
+    if ($accessibleManagementGroupNames.Count -eq 0) {
+        throw 'UseAllAccessibleManagementGroups was specified, but no non-root accessible management groups were found for the current Azure CLI login.'
+    }
+
+    if ($WebReaderManagementGroupNames.Count -eq 0) {
+        $WebReaderManagementGroupNames = $accessibleManagementGroupNames
+    }
+
+    if ($WebQuotaWriterManagementGroupNames.Count -eq 0) {
+        $WebQuotaWriterManagementGroupNames = $accessibleManagementGroupNames
+    }
+
+    if ($WorkerRbacManagementGroupNames.Count -eq 0) {
+        $WorkerRbacManagementGroupNames = $accessibleManagementGroupNames
+    }
+
+    if ([string]::IsNullOrWhiteSpace($QuotaManagementGroupId) -and $accessibleManagementGroupNames.Count -eq 1) {
+        $QuotaManagementGroupId = $accessibleManagementGroupNames[0]
+    }
+
+    Write-Host "Using accessible management groups for deployment: $($accessibleManagementGroupNames -join ', ')"
 }
 
 if ($Provider -ne 'Terraform') {
@@ -133,7 +202,10 @@ function Deploy-Terraform {
             "-var=workload_suffix=$WorkloadSuffix",
             "-var=resource_group_name=$ResourceGroupName",
             "-var=sql_entra_admin_login=$SqlEntraAdminLogin",
-            "-var=sql_entra_admin_object_id=$SqlEntraAdminObjectId"
+            "-var=sql_entra_admin_object_id=$SqlEntraAdminObjectId",
+            "-var=assign_worker_compute_recommendations_role=$($AssignWorkerComputeRecommendationsRole.ToString().ToLowerInvariant())",
+            "-var=assign_worker_cost_management_reader_role=$($AssignWorkerCostManagementReaderRole.ToString().ToLowerInvariant())",
+            "-var=assign_worker_billing_reader_role=$($AssignWorkerBillingReaderRole.ToString().ToLowerInvariant())"
         )
 
         if (-not [string]::IsNullOrWhiteSpace($IngestApiKey))        { $tfVars += "-var=ingest_api_key=$IngestApiKey" }
@@ -150,6 +222,12 @@ function Deploy-Terraform {
         if (-not [string]::IsNullOrWhiteSpace($EntraClientSecret))     { $tfVars += "-var=entra_client_secret=$EntraClientSecret" }
         if (-not [string]::IsNullOrWhiteSpace($AuthRedirectUri))       { $tfVars += "-var=auth_redirect_uri=$AuthRedirectUri" }
         if (-not [string]::IsNullOrWhiteSpace($AdminGroupId))          { $tfVars += "-var=admin_group_id=$AdminGroupId" }
+        $tfVars += "-var=web_reader_subscription_ids=$(ConvertTo-TerraformLiteral $WebReaderSubscriptionIds)"
+        $tfVars += "-var=web_reader_management_group_names=$(ConvertTo-TerraformLiteral $WebReaderManagementGroupNames)"
+        $tfVars += "-var=web_quota_writer_subscription_ids=$(ConvertTo-TerraformLiteral $WebQuotaWriterSubscriptionIds)"
+        $tfVars += "-var=web_quota_writer_management_group_names=$(ConvertTo-TerraformLiteral $WebQuotaWriterManagementGroupNames)"
+        $tfVars += "-var=worker_subscription_rbac_subscription_ids=$(ConvertTo-TerraformLiteral $WorkerRbacSubscriptionIds)"
+        $tfVars += "-var=worker_rbac_management_group_names=$(ConvertTo-TerraformLiteral $WorkerRbacManagementGroupNames)"
 
         if ($ParameterFile -and (Test-Path $ParameterFile)) {
             $tfVars += "-var-file=$((Resolve-Path $ParameterFile).Path)"
@@ -231,20 +309,29 @@ if ($resolvedParameterFile -and [System.IO.Path]::GetExtension($resolvedParamete
         "param sessionSecret = '$SessionSecret'"
     )
 
-    if ($WorkerRbacSubscriptionIds.Count -gt 0 -or $WebReaderSubscriptionIds.Count -gt 0 -or $WebQuotaWriterSubscriptionIds.Count -gt 0) {
+    if ($WorkerRbacSubscriptionIds.Count -gt 0 -or $WorkerRbacManagementGroupNames.Count -gt 0 -or $WebReaderSubscriptionIds.Count -gt 0 -or $WebReaderManagementGroupNames.Count -gt 0 -or $WebQuotaWriterSubscriptionIds.Count -gt 0 -or $WebQuotaWriterManagementGroupNames.Count -gt 0) {
         $webSubscriptionParamLines = $WebReaderSubscriptionIds | ForEach-Object { "  '$_'" }
         $webSubscriptionParamBlock = "[" + [Environment]::NewLine + ($webSubscriptionParamLines -join ([Environment]::NewLine)) + [Environment]::NewLine + "]"
+        $webManagementGroupParamLines = $WebReaderManagementGroupNames | ForEach-Object { "  '$_'" }
+        $webManagementGroupParamBlock = "[" + [Environment]::NewLine + ($webManagementGroupParamLines -join ([Environment]::NewLine)) + [Environment]::NewLine + "]"
         $webQuotaWriterSubscriptionParamLines = $WebQuotaWriterSubscriptionIds | ForEach-Object { "  '$_'" }
         $webQuotaWriterSubscriptionParamBlock = "[" + [Environment]::NewLine + ($webQuotaWriterSubscriptionParamLines -join ([Environment]::NewLine)) + [Environment]::NewLine + "]"
+        $webQuotaWriterManagementGroupParamLines = $WebQuotaWriterManagementGroupNames | ForEach-Object { "  '$_'" }
+        $webQuotaWriterManagementGroupParamBlock = "[" + [Environment]::NewLine + ($webQuotaWriterManagementGroupParamLines -join ([Environment]::NewLine)) + [Environment]::NewLine + "]"
         $workerSubscriptionParamLines = $WorkerRbacSubscriptionIds | ForEach-Object { "  '$_'" }
         $workerSubscriptionParamBlock = "[" + [Environment]::NewLine + ($workerSubscriptionParamLines -join ([Environment]::NewLine)) + [Environment]::NewLine + "]"
+        $workerManagementGroupParamLines = $WorkerRbacManagementGroupNames | ForEach-Object { "  '$_'" }
+        $workerManagementGroupParamBlock = "[" + [Environment]::NewLine + ($workerManagementGroupParamLines -join ([Environment]::NewLine)) + [Environment]::NewLine + "]"
         $assignWorkerComputeRecommendationsRoleBicep = $AssignWorkerComputeRecommendationsRole.ToString().ToLowerInvariant()
         $assignWorkerCostManagementReaderRoleBicep = $AssignWorkerCostManagementReaderRole.ToString().ToLowerInvariant()
         $assignWorkerBillingReaderRoleBicep = $AssignWorkerBillingReaderRole.ToString().ToLowerInvariant()
         $temporaryBicepParamLines += @(
             "param webReaderSubscriptionIds = $webSubscriptionParamBlock",
+            "param webReaderManagementGroupNames = $webManagementGroupParamBlock",
             "param webQuotaWriterSubscriptionIds = $webQuotaWriterSubscriptionParamBlock",
+            "param webQuotaWriterManagementGroupNames = $webQuotaWriterManagementGroupParamBlock",
             "param workerSubscriptionRbacSubscriptionIds = $workerSubscriptionParamBlock",
+            "param workerRbacManagementGroupNames = $workerManagementGroupParamBlock",
             "param assignWorkerComputeRecommendationsRole = $assignWorkerComputeRecommendationsRoleBicep",
             "param assignWorkerCostManagementReaderRole = $assignWorkerCostManagementReaderRoleBicep",
             "param assignWorkerBillingReaderRole = $assignWorkerBillingReaderRoleBicep"
@@ -255,7 +342,7 @@ if ($resolvedParameterFile -and [System.IO.Path]::GetExtension($resolvedParamete
     Set-Content -Path $temporaryParameterFile -Value $temporaryBicepParamContent -Encoding utf8
     $resolvedParameterFile = $temporaryParameterFile
 }
-elseif ($WorkerRbacSubscriptionIds.Count -gt 0 -or $WebReaderSubscriptionIds.Count -gt 0 -or $WebQuotaWriterSubscriptionIds.Count -gt 0) {
+elseif ($WorkerRbacSubscriptionIds.Count -gt 0 -or $WorkerRbacManagementGroupNames.Count -gt 0 -or $WebReaderSubscriptionIds.Count -gt 0 -or $WebReaderManagementGroupNames.Count -gt 0 -or $WebQuotaWriterSubscriptionIds.Count -gt 0 -or $WebQuotaWriterManagementGroupNames.Count -gt 0) {
         $temporaryParameterFile = Join-Path $env:TEMP ("capdash-rbac-{0}.json" -f ([guid]::NewGuid().ToString('N')))
         @{
             '$schema' = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#'
@@ -264,11 +351,20 @@ elseif ($WorkerRbacSubscriptionIds.Count -gt 0 -or $WebReaderSubscriptionIds.Cou
                 webReaderSubscriptionIds = @{
                     value = $WebReaderSubscriptionIds
                 }
+                webReaderManagementGroupNames = @{
+                    value = $WebReaderManagementGroupNames
+                }
                 webQuotaWriterSubscriptionIds = @{
                     value = $WebQuotaWriterSubscriptionIds
                 }
+                webQuotaWriterManagementGroupNames = @{
+                    value = $WebQuotaWriterManagementGroupNames
+                }
                 workerSubscriptionRbacSubscriptionIds = @{
                     value = $WorkerRbacSubscriptionIds
+                }
+                workerRbacManagementGroupNames = @{
+                    value = $WorkerRbacManagementGroupNames
                 }
                 assignWorkerComputeRecommendationsRole = @{
                     value = $AssignWorkerComputeRecommendationsRole
@@ -291,7 +387,7 @@ if ($resolvedParameterFile) {
     $deploymentArgs += @('--parameters', $parameterFileArgument)
 }
 
-if (($WorkerRbacSubscriptionIds.Count -gt 0 -or $WebReaderSubscriptionIds.Count -gt 0 -or $WebQuotaWriterSubscriptionIds.Count -gt 0) -and $temporaryParameterFile -and [System.IO.Path]::GetExtension($temporaryParameterFile).Equals('.json', [System.StringComparison]::OrdinalIgnoreCase)) {
+if (($WorkerRbacSubscriptionIds.Count -gt 0 -or $WorkerRbacManagementGroupNames.Count -gt 0 -or $WebReaderSubscriptionIds.Count -gt 0 -or $WebReaderManagementGroupNames.Count -gt 0 -or $WebQuotaWriterSubscriptionIds.Count -gt 0 -or $WebQuotaWriterManagementGroupNames.Count -gt 0) -and $temporaryParameterFile -and [System.IO.Path]::GetExtension($temporaryParameterFile).Equals('.json', [System.StringComparison]::OrdinalIgnoreCase)) {
     $deploymentArgs += @('--parameters', ('@' + $temporaryParameterFile))
 }
 
@@ -301,6 +397,9 @@ try {
     }
     else {
         az @deploymentArgs
+        if ($LASTEXITCODE -ne 0) {
+            throw 'az deployment group create failed'
+        }
     }
 
     if ($DeployWebApp) {

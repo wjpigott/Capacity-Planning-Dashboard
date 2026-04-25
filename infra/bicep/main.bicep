@@ -60,14 +60,23 @@ param sessionSecret string
 @description('Optional subscription IDs where the dashboard web app managed identity should receive Reader access for subscription discovery and read-only ARM queries.')
 param webReaderSubscriptionIds array = []
 
+@description('Optional management group names where the dashboard web app managed identity should receive Reader access for subscription discovery and read-only ARM queries. Preferred for larger estates; keep subscription IDs for customers without management groups.')
+param webReaderManagementGroupNames array = []
+
 @description('Optional subscription IDs where the dashboard web app managed identity should receive GroupQuota Request Operator for quota apply writes. Include every subscription that can participate in quota moves.')
 param webQuotaWriterSubscriptionIds array = []
+
+@description('Optional management group names where the dashboard web app managed identity should receive GroupQuota Request Operator for quota apply writes. Preferred for larger estates; keep subscription IDs for customers without management groups.')
+param webQuotaWriterManagementGroupNames array = []
 
 @description('Optional management group ID used by the dashboard quota discovery UI when tenant-wide management group enumeration is not permitted.')
 param quotaManagementGroupId string = ''
 
 @description('Optional subscription IDs where the worker managed identity should receive subscription-level RBAC roles for live placement and pricing lookups.')
 param workerSubscriptionRbacSubscriptionIds array = []
+
+@description('Optional management group names where the worker managed identity should receive RBAC roles for live placement and pricing lookups. Preferred for larger estates; keep subscription IDs for customers without management groups.')
+param workerRbacManagementGroupNames array = []
 
 @description('Assign Compute Recommendations Role on each subscription listed in workerSubscriptionRbacSubscriptionIds.')
 param assignWorkerComputeRecommendationsRole bool = true
@@ -288,6 +297,10 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'QUOTA_MANAGEMENT_GROUP_ID'
           value: quotaManagementGroupId
+        }
+        {
+          name: 'INGEST_MANAGEMENT_GROUP_NAMES'
+          value: join(webReaderManagementGroupNames, ',')
         }
         {
           name: 'NODE_ENV'
@@ -633,6 +646,18 @@ module workerSubscriptionRbacAssignments './modules/worker-subscription-rbac.bic
   }
 }]
 
+module workerManagementGroupRbacAssignments './modules/worker-management-group-rbac.bicep' = [for targetManagementGroupName in workerRbacManagementGroupNames: {
+  name: 'worker-mg-rbac-${uniqueString(targetManagementGroupName, functionApp.id)}'
+  scope: tenant()
+  params: {
+    managementGroupName: targetManagementGroupName
+    principalId: functionApp.identity.principalId
+    assignComputeRecommendationsRole: assignWorkerComputeRecommendationsRole
+    assignCostManagementReaderRole: assignWorkerCostManagementReaderRole
+    assignBillingReaderRole: assignWorkerBillingReaderRole
+  }
+}]
+
 module webSubscriptionReaderAssignments './modules/webSubscriptionReader.bicep' = [for targetSubscriptionId in webReaderSubscriptionIds: {
   name: 'web-sub-reader-${uniqueString(targetSubscriptionId, webApp.id)}'
   scope: subscription(targetSubscriptionId)
@@ -641,10 +666,28 @@ module webSubscriptionReaderAssignments './modules/webSubscriptionReader.bicep' 
   }
 }]
 
+module webManagementGroupReaderAssignments './modules/web-management-group-reader.bicep' = [for targetManagementGroupName in webReaderManagementGroupNames: {
+  name: 'web-mg-reader-${uniqueString(targetManagementGroupName, webApp.id)}'
+  scope: tenant()
+  params: {
+    managementGroupName: targetManagementGroupName
+    principalId: webApp.identity.principalId
+  }
+}]
+
 module webSubscriptionQuotaWriterAssignments './modules/webSubscriptionQuotaWriter.bicep' = [for targetSubscriptionId in webQuotaWriterSubscriptionIds: {
   name: 'web-sub-quota-writer-${uniqueString(targetSubscriptionId, webApp.id)}'
   scope: subscription(targetSubscriptionId)
   params: {
+    principalId: webApp.identity.principalId
+  }
+}]
+
+module webManagementGroupQuotaWriterAssignments './modules/web-management-group-quota-writer.bicep' = [for targetManagementGroupName in webQuotaWriterManagementGroupNames: {
+  name: 'web-mg-quota-writer-${uniqueString(targetManagementGroupName, webApp.id)}'
+  scope: tenant()
+  params: {
+    managementGroupName: targetManagementGroupName
     principalId: webApp.identity.principalId
   }
 }]

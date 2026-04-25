@@ -119,6 +119,90 @@ function normalizeBoolean(value, fallback = false) {
   return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on';
 }
 
+function normalizeSqlIdentifierSegment(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+    return trimmed.slice(1, -1).replace(/]]/g, ']');
+  }
+
+  return trimmed;
+}
+
+function getQuotedQualifiedSqlName(objectName, defaultSchema = 'dbo') {
+  const parts = String(objectName || '')
+    .split('.')
+    .map((part) => normalizeSqlIdentifierSegment(part))
+    .filter(Boolean);
+
+  if (parts.length === 1) {
+    const objectPart = parts[0];
+    return `[${defaultSchema.replace(/]/g, ']]')}].[${objectPart.replace(/]/g, ']]')}]`;
+  }
+
+  if (parts.length === 2) {
+    return `[${parts[0].replace(/]/g, ']]')}].[${parts[1].replace(/]/g, ']]')}]`;
+  }
+
+  return null;
+}
+
+function isSqlObjectMissingError(err) {
+  const errorNumber = Number(err?.number);
+  const message = String(err?.message || '').toLowerCase();
+  return errorNumber === 208 || message.includes('invalid object name');
+}
+
+function isSqlSelectPermissionError(err) {
+  const errorNumber = Number(err?.number);
+  const message = String(err?.message || '').toLowerCase();
+  return errorNumber === 229
+    || message.includes('the select permission was denied')
+    || message.includes('permission denied in database');
+}
+
+function isSqlSchemaPermissionError(err) {
+  const errorNumber = Number(err?.number);
+  const message = String(err?.message || '').toLowerCase();
+  return errorNumber === 229
+    || message.includes('create table permission denied')
+    || message.includes('alter table permission denied')
+    || message.includes('create index permission denied')
+    || message.includes('cannot alter the view')
+    || message.includes('permission denied in database');
+}
+
+async function sqlTableExistsForBootstrap(pool, objectName) {
+  const qualifiedName = getQuotedQualifiedSqlName(objectName);
+  if (!qualifiedName) {
+    const result = await pool.request()
+      .input('objectName', sql.NVarChar(256), objectName)
+      .query(`
+        SELECT CASE WHEN OBJECT_ID(@objectName, 'U') IS NULL THEN 0 ELSE 1 END AS existsFlag
+      `);
+
+    return Boolean(result.recordset?.[0]?.existsFlag);
+  }
+
+  try {
+    await pool.request().query(`SELECT TOP (0) 1 AS bootstrapProbe FROM ${qualifiedName};`);
+    return true;
+  } catch (err) {
+    if (isSqlObjectMissingError(err)) {
+      return false;
+    }
+
+    if (isSqlSelectPermissionError(err)) {
+      return true;
+    }
+
+    throw err;
+  }
+}
+
 async function sqlObjectExists(pool, objectName, objectTypes = ['U']) {
   const checks = objectTypes
     .map((objectType) => `OBJECT_ID(@objectName, '${String(objectType).replace(/'/g, "''")}') IS NOT NULL`)
@@ -175,7 +259,6 @@ async function getAIModelAvailabilitySource(pool) {
       hasProviderColumn: await sqlColumnExists(pool, latestViewName, 'provider')
     };
   }
-
   const tableName = 'dbo.AIModelAvailability';
   if (await sqlObjectExists(pool, tableName, ['U'])) {
     return {
@@ -389,6 +472,7 @@ function buildCapacityIngestionOptions(body = {}) {
     regionPreset: body.regionPreset,
     regions: body.regions,
     subscriptionIds: body.subscriptionIds,
+    managementGroupNames: body.managementGroupNames,
     familyFilters: body.familyFilters
   };
 }
@@ -1217,7 +1301,16 @@ async function executeSqlScriptFile(pool, filePath) {
     try {
       await pool.request().batch(batches[index]);
     } catch (err) {
-      throw new Error(`Failed applying ${path.basename(filePath)} batch ${index + 1}: ${err.message}`);
+      const batchPreview = batches[index]
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .slice(0, 3)
+        .join(' ');
+
+      throw new Error(
+        `Failed applying ${path.basename(filePath)} batch ${index + 1}: ${err.message}. Batch preview: ${batchPreview}`
+      );
     }
   }
 
@@ -1228,8 +1321,64 @@ async function runDatabaseBootstrap() {
   return runDatabaseBootstrapWithPool();
 }
 
+async function ensureSchemaMigrationHistoryTable(pool) {
+  await pool.request().batch(`
+    IF OBJECT_ID('dbo.SchemaMigrationHistory', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.SchemaMigrationHistory (
+        migrationName NVARCHAR(255) NOT NULL PRIMARY KEY,
+        appliedAtUtc DATETIME2(7) NOT NULL CONSTRAINT DF_SchemaMigrationHistory_AppliedAtUtc DEFAULT SYSUTCDATETIME()
+      );
+    END;
+  `);
+}
+
+async function getAppliedSchemaMigrations(pool) {
+  const hasSchemaMigrationHistory = await sqlTableExistsForBootstrap(pool, 'dbo.SchemaMigrationHistory');
+  if (!hasSchemaMigrationHistory) {
+    return null;
+  }
+
+  let appliedMigrationsResult;
+  try {
+    appliedMigrationsResult = await pool.request().query(`
+      SELECT migrationName
+      FROM dbo.SchemaMigrationHistory
+    `);
+  } catch (err) {
+    if (isSqlSelectPermissionError(err)) {
+      return null;
+    }
+
+    throw err;
+  }
+
+  return new Set(
+    (appliedMigrationsResult.recordset || [])
+      .map((row) => String(row.migrationName || '').trim())
+      .filter(Boolean)
+  );
+}
+
+async function recordAppliedSchemaMigration(pool, migrationName) {
+  await pool.request()
+    .input('migrationName', sql.NVarChar(255), migrationName)
+    .query(`
+      IF NOT EXISTS (
+        SELECT 1
+        FROM dbo.SchemaMigrationHistory
+        WHERE migrationName = @migrationName
+      )
+      BEGIN
+        INSERT INTO dbo.SchemaMigrationHistory (migrationName)
+        VALUES (@migrationName);
+      END;
+    `);
+}
+
 async function runDatabaseBootstrapWithPool(poolOverride = null) {
   const pool = poolOverride || await getSqlPool();
+  const isRuntimePool = !poolOverride;
   if (!pool) {
     throw new Error('SQL connection is not configured.');
   }
@@ -1240,28 +1389,64 @@ async function runDatabaseBootstrapWithPool(poolOverride = null) {
     .filter((fileName) => fileName.toLowerCase().endsWith('.sql'))
     .sort((left, right) => left.localeCompare(right));
 
-  const existsResult = await pool.request().query(`
-    SELECT CASE WHEN OBJECT_ID('dbo.CapacitySnapshot', 'U') IS NULL THEN 0 ELSE 1 END AS hasCapacitySnapshot
-  `);
-  const hasCapacitySnapshot = Boolean(existsResult.recordset?.[0]?.hasCapacitySnapshot);
+  const hasCapacitySnapshot = await sqlTableExistsForBootstrap(pool, 'dbo.CapacitySnapshot');
   let appliedSchema = false;
+  let skippedLegacyMigrations = false;
 
   if (!hasCapacitySnapshot) {
     await executeSqlScriptFile(pool, schemaPath);
     appliedSchema = true;
+    await ensureSchemaMigrationHistoryTable(pool);
   }
 
-  for (const migrationFile of migrationFiles) {
-    await executeSqlScriptFile(pool, path.resolve(migrationsDir, migrationFile));
+  let appliedMigrations = await getAppliedSchemaMigrations(pool);
+  if (appliedMigrations === null && hasCapacitySnapshot) {
+    // Older databases may be fully provisioned but lack migration history.
+    // Treat them as steady-state to avoid rerunning DDL under the app identity.
+    skippedLegacyMigrations = true;
   }
 
-  await ensurePhase3SchemaForPool(pool);
+  if (appliedMigrations === null && !skippedLegacyMigrations) {
+    await ensureSchemaMigrationHistoryTable(pool);
+    appliedMigrations = new Set();
+  }
+
+  const migrationsApplied = [];
+  if (!skippedLegacyMigrations) {
+    for (const migrationFile of migrationFiles) {
+      if (appliedMigrations?.has(migrationFile)) {
+        continue;
+      }
+
+      await executeSqlScriptFile(pool, path.resolve(migrationsDir, migrationFile));
+      migrationsApplied.push(migrationFile);
+      if (appliedMigrations) {
+        await recordAppliedSchemaMigration(pool, migrationFile);
+        appliedMigrations.add(migrationFile);
+      }
+    }
+  }
+
+  let phase3Ensured = false;
+  let skippedPhase3SchemaDueToPermissions = false;
+  try {
+    await ensurePhase3SchemaForPool(pool);
+    phase3Ensured = true;
+  } catch (err) {
+    if (isRuntimePool && hasCapacitySnapshot && isSqlSchemaPermissionError(err)) {
+      skippedPhase3SchemaDueToPermissions = true;
+    } else {
+      throw err;
+    }
+  }
 
   return {
     ok: true,
     appliedSchema,
-    migrationsApplied: migrationFiles,
-    phase3Ensured: true
+    migrationsApplied,
+    skippedLegacyMigrations,
+    phase3Ensured,
+    skippedPhase3SchemaDueToPermissions
   };
 }
 
@@ -2344,6 +2529,7 @@ app.post('/internal/ingest/capacity', requireIngestKey, async (req, res) => {
       regionPreset: req.body?.regionPreset,
       regions: req.body?.regions,
       subscriptionIds: req.body?.subscriptionIds,
+      managementGroupNames: req.body?.managementGroupNames,
       familyFilters: req.body?.familyFilters
     });
     res.json({ ok: true, result });

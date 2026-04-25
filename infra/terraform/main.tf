@@ -161,8 +161,10 @@ resource "azurerm_windows_web_app" "web" {
     "INGEST_API_KEY"                        = var.ingest_api_key
     "SESSION_SECRET"                        = var.session_secret
     "QUOTA_MANAGEMENT_GROUP_ID"             = var.quota_management_group_id
+    "INGEST_MANAGEMENT_GROUP_NAMES"         = join(",", var.web_reader_management_group_names)
     "NODE_ENV"                              = "production"
     "WEBSITE_NODE_DEFAULT_VERSION"          = "~20"
+    "WEBSITE_DNS_SERVER"                    = "168.63.129.16"
     "AUTH_ENABLED"                          = tostring(var.auth_enabled)
     "ENTRA_TENANT_ID"                       = var.entra_tenant_id
     "ENTRA_CLIENT_ID"                       = var.entra_client_id
@@ -216,6 +218,7 @@ resource "azurerm_windows_function_app" "worker" {
     "FUNCTIONS_EXTENSION_VERSION"           = "~4"
     "FUNCTIONS_WORKER_RUNTIME"             = "powershell"
     "WEBSITE_RUN_FROM_PACKAGE"             = "1"
+    "WEBSITE_DNS_SERVER"                   = "168.63.129.16"
     "WORKER_SHARED_SECRET"                 = var.worker_shared_secret
   }
 }
@@ -386,6 +389,17 @@ module "worker_subscription_rbac" {
   assign_billing_reader_role          = var.assign_worker_billing_reader_role
 }
 
+module "worker_management_group_rbac" {
+  source   = "./modules/worker-management-group-rbac"
+  for_each = toset(var.worker_rbac_management_group_names)
+
+  management_group_name               = each.value
+  principal_id                        = azurerm_windows_function_app.worker.identity[0].principal_id
+  assign_compute_recommendations_role = var.assign_worker_compute_recommendations_role
+  assign_cost_management_reader_role  = var.assign_worker_cost_management_reader_role
+  assign_billing_reader_role          = var.assign_worker_billing_reader_role
+}
+
 module "web_subscription_reader" {
   source   = "./modules/web-subscription-reader"
   for_each = toset(var.web_reader_subscription_ids)
@@ -394,10 +408,26 @@ module "web_subscription_reader" {
   principal_id    = azurerm_windows_web_app.web.identity[0].principal_id
 }
 
+module "web_management_group_reader" {
+  source   = "./modules/web-management-group-reader"
+  for_each = toset(var.web_reader_management_group_names)
+
+  management_group_name = each.value
+  principal_id          = azurerm_windows_web_app.web.identity[0].principal_id
+}
+
 module "web_subscription_quota_writer" {
   source   = "./modules/web-subscription-quota-writer"
   for_each = toset(var.web_quota_writer_subscription_ids)
 
   subscription_id = each.value
   principal_id    = azurerm_windows_web_app.web.identity[0].principal_id
+}
+
+module "web_management_group_quota_writer" {
+  source   = "./modules/web-management-group-quota-writer"
+  for_each = toset(var.web_quota_writer_management_group_names)
+
+  management_group_name = each.value
+  principal_id          = azurerm_windows_web_app.web.identity[0].principal_id
 }

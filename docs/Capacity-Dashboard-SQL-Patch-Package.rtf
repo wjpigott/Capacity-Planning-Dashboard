@@ -1,0 +1,73 @@
+{\rtf1\ansi\deff0
+{\fonttbl
+{\f0\fswiss Arial;}
+{\f1\fmodern Consolas;}
+}
+\viewkind4\uc1
+\pard\sa200\sl276\slmult1\b\f0\fs32 Capacity Dashboard SQL Patch Package Guide\b0\fs24\par
+\pard\sa160\sl276\slmult1\f0 This document is intended for operators who already have a deployed Capacity Dashboard environment and need to update the Azure SQL database to the current schema.\par
+
+\pard\sa200\sl276\slmult1\b Purpose\b0\par
+\pard\sa160\sl276\slmult1\f0 Use this package when an existing environment is missing current AI model availability objects, PaaS availability objects, quota candidate columns, current views, or current dashboard settings.\par
+
+\pard\sa200\sl276\slmult1\b Files In The Package\b0\par
+\pard\sa120\sl276\slmult1\f0\bullet\tab \f1 sql\\test-repair-manual.sql\f0  - manual repair for drifted legacy databases.\par
+\pard\sa120\sl276\slmult1\f0\bullet\tab \f1 sql\\migrations\\20260427-add-paas-availability-and-ui-settings.sql\f0  - standard upgrade for already-deployed databases that are still on the normal migration path.\par
+\pard\sa120\sl276\slmult1\f0\bullet\tab \f1 scripts\\apply-database-upgrade.ps1\f0  - wrapper that runs either SQL file through \f1 sqlcmd\f0 .\par
+\pard\sa120\sl276\slmult1\f0\bullet\tab \f1 sql\\schema-diff-inventory-chunks.sql\f0  - validation queries that can be run one section at a time.\par
+\pard\sa120\sl276\slmult1\f0\bullet\tab \f1 sql\\schema-diff-inventory.sql\f0  - same validation inventory in one larger script.\par
+
+\pard\sa200\sl276\slmult1\b Which File Should I Run\b0\par
+\pard\sa120\sl276\slmult1\f0\bullet\tab Use \f1 sql\\migrations\\20260427-add-paas-availability-and-ui-settings.sql\f0  if the environment is a normal deployed system and you only need to add the newer schema objects and settings.\par
+\pard\sa120\sl276\slmult1\f0\bullet\tab Use \f1 sql\\test-repair-manual.sql\f0  if the environment has drifted, if prior deployment history is unreliable, or if Query 4 in the inventory says \f1 dbo.SchemaMigrationHistory does not exist\f0 .\par
+\pard\sa120\sl276\slmult1\f0\bullet\tab If Query 4 reports that \f1 dbo.SchemaMigrationHistory does not exist\f0  after the manual repair, that is acceptable. The manual repair intentionally does not invent migration history rows.\par
+
+\pard\sa200\sl276\slmult1\b Recommended Execution Paths\b0\par
+\pard\sa160\sl276\slmult1\f0 Simplest path for legacy repair:\par
+\pard\sa120\sl276\slmult1\f0\bullet\tab Open SSMS or the Azure Portal query window against the target Azure SQL database.\par
+\pard\sa120\sl276\slmult1\f0\bullet\tab Run \f1 sql\\test-repair-manual.sql\f0  as an Entra SQL admin or equivalent database admin.\par
+
+\pard\sa160\sl276\slmult1\f0 Wrapper path with \f1 sqlcmd\f0 :\par
+\pard\sa120\sl276\slmult1\f0\bullet\tab Use \f1 scripts\\apply-database-upgrade.ps1\f0  when you want a repeatable command-line path.\par
+\pard\sa120\sl276\slmult1\f0\bullet\tab If Azure CLI authentication is unreliable on the operator machine, prefer \f1 -AuthenticationMethod ActiveDirectoryInteractive\f0  or \f1 ActiveDirectoryDeviceCode\f0 .\par
+
+\pard\sa200\sl276\slmult1\b Prerequisites\b0\par
+\pard\sa120\sl276\slmult1\f0\bullet\tab The operator must have permission to connect and execute DDL against the target Azure SQL database.\par
+\pard\sa120\sl276\slmult1\f0\bullet\tab If using the PowerShell wrapper, \f1 sqlcmd\f0  must be installed on the operator machine.\par
+\pard\sa120\sl276\slmult1\f0\bullet\tab Know the target server name and database name before running anything.\par
+\pard\sa120\sl276\slmult1\f0\bullet\tab Take the normal backup/change-control steps required by your environment.\par
+
+\pard\sa200\sl276\slmult1\b Manual Repair Notes\b0\par
+\pard\sa120\sl276\slmult1\f0\bullet\tab The manual repair script supports an optional \f1 __APP_IDENTITY_NAME__\f0  placeholder. Replace it only when you also need the script to create and grant the dashboard application's managed identity in the database.\par
+\pard\sa120\sl276\slmult1\f0\bullet\tab If you do not need identity setup, leave the placeholder unchanged and the script will skip that part.\par
+\pard\sa120\sl276\slmult1\f0\bullet\tab The manual repair is designed for repaired legacy systems, not for reconstructing missing migration history.\par
+
+\pard\sa200\sl276\slmult1\b Example Commands\b0\par
+\pard\sa160\sl276\slmult1\f0 Standard upgrade through the wrapper:\par
+\pard\li360\sa120\sl276\slmult1\f1 pwsh .\\scripts\\apply-database-upgrade.ps1\line
+-SqlServer 'your-server.database.windows.net'\line
+-SqlDatabase 'your-database'\par
+
+\pard\sa160\sl276\slmult1\f0 Legacy repair through the wrapper with managed identity setup:\par
+\pard\li360\sa120\sl276\slmult1\f1 pwsh .\\scripts\\apply-database-upgrade.ps1\line
+-SqlServer 'your-server.database.windows.net'\line
+-SqlDatabase 'your-database'\line
+-SqlFile 'sql/test-repair-manual.sql'\line
+-AuthenticationMethod ActiveDirectoryInteractive\line
+-AppIdentityName 'app-capdash-test-cap42a'\par
+
+\pard\sa200\sl276\slmult1\b Validation After The Update\b0\par
+\pard\sa120\sl276\slmult1\f0 Run \f1 sql\\schema-diff-inventory-chunks.sql\f0  or \f1 sql\\schema-diff-inventory.sql\f0  against the target database.\par
+\pard\sa120\sl276\slmult1\f0 Confirm the following:\par
+\pard\sa120\sl276\slmult1\f0\bullet\tab Query 1 shows \f1 AIModelAvailability\f0 , \f1 PaaSAvailabilitySnapshot\f0 , and \f1 QuotaCandidateSnapshot\f0  with the expected current column counts.\par
+\pard\sa120\sl276\slmult1\f0\bullet\tab Query 2 shows expected indexes, including the PaaS snapshot index and current quota-related indexes.\par
+\pard\sa120\sl276\slmult1\f0\bullet\tab Query 3 shows the current views, including \f1 CapacityLatest\f0  and \f1 AIModelAvailabilityLatest\f0 .\par
+\pard\sa120\sl276\slmult1\f0\bullet\tab Query 5 shows expected dashboard settings such as \f1 ui.showSqlPreview\f0  and the AI/OpenAI settings.\par
+\pard\sa120\sl276\slmult1\f0\bullet\tab Query 4 may still report \f1 dbo.SchemaMigrationHistory does not exist\f0  for legacy repaired systems. That alone does not mean the repair failed.\par
+
+\pard\sa200\sl276\slmult1\b Expected Outcome\b0\par
+\pard\sa160\sl276\slmult1\f0 After the update, the target database should be functionally aligned for the current dashboard features even if it remains a repaired legacy environment without historical migration tracking.\par
+
+\pard\sa200\sl276\slmult1\b Repo Reference\b0\par
+\pard\sa160\sl276\slmult1\f0 This package is included in the Capacity Dashboard repository on \f1 main\f0 . Pull the latest version of the repo before sending these files to another operator.\par
+}

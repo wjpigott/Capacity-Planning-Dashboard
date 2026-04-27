@@ -522,12 +522,8 @@ function queueCapacityIngestionJob(options) {
     createdAtUtc,
     startedAtUtc: null,
     completedAtUtc: null,
-    sendErrorResponse(res, {
-      clientMessage: 'Failed to retrieve paginated capacity data.',
-      err,
-      scope: 'api/capacity/paged',
-      exposeMessage: process.env.NODE_ENV !== 'production'
-    });
+    options,
+    result: null,
     error: null
   };
 
@@ -536,11 +532,13 @@ function queueCapacityIngestionJob(options) {
   setImmediate(async () => {
     const startedAt = Date.now();
     job.status = 'running';
-    sendErrorResponse(res, {
-      clientMessage: 'Failed to retrieve capacity analytics summary.',
-      err,
-      scope: 'api/capacity/analytics',
-      exposeMessage: process.env.NODE_ENV !== 'production'
+    job.startedAtUtc = new Date(startedAt).toISOString();
+
+    try {
+      const result = await runCapacityIngestion(options);
+      job.status = 'completed';
+      job.completedAtUtc = new Date().toISOString();
+      job.result = result;
 
       await logDashboardOperation({
         type: 'capacity-ingest',

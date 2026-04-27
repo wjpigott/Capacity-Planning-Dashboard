@@ -239,6 +239,47 @@ Examples:
 
 Use zip/web package deploy for the dashboard App Service.
 
+## Legacy database patch package
+
+Use these files when an existing environment is missing the current AI/PaaS tables, views, or dashboard settings.
+
+- `sql/test-repair-manual.sql`
+	- Use this for drifted legacy databases that never had reliable `dbo.SchemaMigrationHistory` tracking.
+	- Run it directly in SSMS or the Azure Portal query window as an Entra SQL admin.
+	- If you also need to create/grant the web app managed identity, replace `__APP_IDENTITY_NAME__` before running.
+- `sql/migrations/20260427-add-paas-availability-and-ui-settings.sql`
+	- Use this for already-deployed environments that are on the normal migration path and only need the missing schema objects/settings added.
+- `scripts/apply-database-upgrade.ps1`
+	- Wrapper for running either SQL file with `sqlcmd` against Azure SQL.
+	- Example standard upgrade:
+
+```powershell
+pwsh ./scripts/apply-database-upgrade.ps1 `
+	-SqlServer 'your-server.database.windows.net' `
+	-SqlDatabase 'your-database'
+```
+
+	- Example legacy repair with managed identity setup:
+
+```powershell
+pwsh ./scripts/apply-database-upgrade.ps1 `
+	-SqlServer 'your-server.database.windows.net' `
+	-SqlDatabase 'your-database' `
+	-SqlFile 'sql/test-repair-manual.sql' `
+	-AuthenticationMethod ActiveDirectoryInteractive `
+	-AppIdentityName 'app-capdash-test-cap42a'
+```
+
+Validation helpers:
+
+- `sql/schema-diff-inventory-chunks.sql` lets an operator run the table/index/view/settings checks in small chunks.
+- `sql/schema-diff-inventory.sql` runs the same inventory in one pass when the query tool can handle larger result sets.
+
+Important:
+
+- The manual repair intentionally does not invent `dbo.SchemaMigrationHistory` rows for legacy systems.
+- For repaired legacy databases, trust the resulting schema state and validation queries rather than assuming historical migrations were applied.
+
 Safe deploy rule:
 
 - Do not deploy from an arbitrary local checkout when dev parity matters.

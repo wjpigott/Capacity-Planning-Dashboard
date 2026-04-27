@@ -29,6 +29,8 @@ CREATE TABLE dbo.QuotaCandidateSnapshot (
     subscriptionName NVARCHAR(256) NOT NULL,
     region NVARCHAR(64) NOT NULL,
     quotaName NVARCHAR(128) NOT NULL,
+    skuList NVARCHAR(MAX) NULL,
+    skuCount INT NULL,
     availabilityState NVARCHAR(32) NOT NULL,
     quotaCurrent INT NOT NULL,
     quotaLimit INT NOT NULL,
@@ -94,6 +96,34 @@ CREATE TABLE dbo.AIModelAvailability (
 );
 GO
 
+CREATE TABLE dbo.PaaSAvailabilitySnapshot (
+    paasAvailabilitySnapshotId BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    runId UNIQUEIDENTIFIER NOT NULL,
+    capturedAtUtc DATETIME2 NOT NULL,
+    requestedService NVARCHAR(64) NOT NULL,
+    requestedRegionPreset NVARCHAR(64) NULL,
+    requestedRegionsJson NVARCHAR(MAX) NULL,
+    metadataJson NVARCHAR(MAX) NULL,
+    category NVARCHAR(64) NOT NULL,
+    service NVARCHAR(64) NOT NULL,
+    region NVARCHAR(64) NOT NULL,
+    resourceType NVARCHAR(64) NULL,
+    name NVARCHAR(256) NOT NULL,
+    displayName NVARCHAR(256) NULL,
+    edition NVARCHAR(128) NULL,
+    tier NVARCHAR(256) NULL,
+    family NVARCHAR(128) NULL,
+    status NVARCHAR(64) NULL,
+    available BIT NULL,
+    zoneRedundant BIT NULL,
+    quotaCurrent INT NULL,
+    quotaLimit INT NULL,
+    metricPrimary NVARCHAR(256) NULL,
+    metricSecondary NVARCHAR(256) NULL,
+    detailsJson NVARCHAR(MAX) NULL
+);
+GO
+
 CREATE NONCLUSTERED INDEX IX_AIModelAvailability_Region_Model
     ON dbo.AIModelAvailability(region, modelName, capturedAtUtc DESC);
 GO
@@ -104,6 +134,10 @@ GO
 
 CREATE NONCLUSTERED INDEX IX_AIModelAvailability_CapturedAt
     ON dbo.AIModelAvailability(capturedAtUtc DESC);
+GO
+
+CREATE INDEX IX_PaaSAvailabilitySnapshot_ServiceCaptured
+    ON dbo.PaaSAvailabilitySnapshot (requestedService, capturedAtUtc DESC, service, region);
 GO
 
 CREATE OR ALTER VIEW dbo.CapacityLatest AS

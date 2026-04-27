@@ -100,6 +100,7 @@ function normalizeRecommendationContract(contract) {
   };
 }
 
+
 function parseExtraSkus(rawValue) {
   if (!rawValue) {
     return [];
@@ -175,17 +176,7 @@ function resolveRecommendationWorkerTimeoutMs(regionCount = 1) {
   const configuredTimeoutMs = Number(
     process.env.CAPACITY_RECOMMEND_WORKER_TIMEOUT_MS
     || process.env.CAPACITY_WORKER_TIMEOUT_MS
-    || 0
-  );
-
-  if (Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0) {
-    return Math.max(configuredTimeoutMs, 1000);
-  }
-
-  const count = Math.max(1, Number(regionCount) || 1);
-  const dynamicTimeoutMs = DEFAULT_RECOMMENDATION_WORKER_TIMEOUT_MS + ((count - 1) * 15000);
-  return Math.min(Math.max(dynamicTimeoutMs, 1000), 600000);
-}
+    throw error;
 
 function useWorkerFirstMode() {
   return Boolean(resolveWorkerBaseUrl());
@@ -1277,7 +1268,7 @@ async function getCapacityRecommendations(options = {}) {
             }
       };
       fallbackApplied = true;
-      } else {
+    } else {
       const errorText = String(error?.message || '').toLowerCase();
       const isNoOutputFailure = errorText.includes('returned no json output') || errorText.includes('no output was returned by the recommendation wrapper');
 
@@ -1300,7 +1291,8 @@ async function getCapacityRecommendations(options = {}) {
   if (fallbackApplied) {
     const warnings = Array.isArray(contract?.warnings) ? contract.warnings : [];
     const executionMode = String(contract?.diagnostics?.executionMode || '').toLowerCase();
-    if (!warnings.some((warning) => /fallback/i.test(String(warning || '')))) {
+    const alreadyHasDegradedWarning = warnings.some((warning) => /recommendation lookup failed/i.test(String(warning || '')));
+    if (!alreadyHasDegradedWarning && !warnings.some((warning) => /fallback/i.test(String(warning || '')))) {
       warnings.push(
         executionMode === 'function-app-spot-disabled' || executionMode === 'local-spot-disabled'
           ? 'Spot pricing could not be retrieved, so recommendations were retried with Show Spot disabled.'

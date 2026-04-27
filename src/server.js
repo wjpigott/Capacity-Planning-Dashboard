@@ -447,6 +447,7 @@ function getCapacityFiltersFromQuery(query = {}) {
   };
 }
 
+
 function cleanupQuotaApplyJobs() {
   const expiresBefore = Date.now() - QUOTA_APPLY_JOB_TTL_MS;
   for (const [jobId, job] of quotaApplyJobs.entries()) {
@@ -521,8 +522,12 @@ function queueCapacityIngestionJob(options) {
     createdAtUtc,
     startedAtUtc: null,
     completedAtUtc: null,
-    options,
-    result: null,
+    sendErrorResponse(res, {
+      clientMessage: 'Failed to retrieve paginated capacity data.',
+      err,
+      scope: 'api/capacity/paged',
+      exposeMessage: process.env.NODE_ENV !== 'production'
+    });
     error: null
   };
 
@@ -531,13 +536,11 @@ function queueCapacityIngestionJob(options) {
   setImmediate(async () => {
     const startedAt = Date.now();
     job.status = 'running';
-    job.startedAtUtc = new Date(startedAt).toISOString();
-
-    try {
-      const result = await runCapacityIngestion(options);
-      job.status = 'completed';
-      job.completedAtUtc = new Date().toISOString();
-      job.result = result;
+    sendErrorResponse(res, {
+      clientMessage: 'Failed to retrieve capacity analytics summary.',
+      err,
+      scope: 'api/capacity/analytics',
+      exposeMessage: process.env.NODE_ENV !== 'production'
 
       await logDashboardOperation({
         type: 'capacity-ingest',
@@ -1441,7 +1444,27 @@ async function ensureSessionStoreSchema() {
 
 let activeSessionMiddleware = createSessionMiddleware(false);
 
-app.use((req, res, next) => activeSessionMiddleware(req, res, next));
+function isSqlSessionStoreRuntimeError(err) {
+  const message = String(err?.message || '').toLowerCase();
+  return message.includes("invalid object name 'sessions'")
+    || message.includes('connection is closed')
+    || message.includes('failed to lookup session')
+    || message.includes('session') && message.includes('mssql');
+}
+
+app.use((req, res, next) => activeSessionMiddleware(req, res, (err) => {
+  if (!err) {
+    return next();
+  }
+
+  if (isSqlSessionStoreRuntimeError(err)) {
+    console.warn('[session] SQL session store request failed, falling back to MemoryStore:', err.message);
+    activeSessionMiddleware = createSessionMiddleware(false);
+    return activeSessionMiddleware(req, res, next);
+  }
+
+  return next(err);
+}));
 
 // Auth routes (/auth/login, /auth/callback, /auth/logout) — always accessible
 app.use('/auth', buildAuthRouter());
@@ -1964,11 +1987,13 @@ app.get('/api/capacity/analytics', async (req, res) => {
     const result = await getCapacityAnalyticsSummary(getCapacityFiltersFromQuery(req.query));
     res.json(result);
   } catch (err) {
-    sendErrorResponse(res, {
-      clientMessage: 'Failed to retrieve capacity analytics summary.',
-      err,
-      scope: 'api/capacity/analytics',
-      exposeMessage: process.env.NODE_ENV !== 'production'
+    console.error('[api/capacity/analytics] Falling back to default analytics payload after route error:', err);
+    res.json({
+      regionHealth: [],
+      topSkus: [],
+      matrix: { regions: [], rows: [] },
+      recommendedTargetSku: '',
+      aiQuotaProviderOptions: []
     });
   }
 });

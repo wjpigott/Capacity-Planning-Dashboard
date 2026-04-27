@@ -281,19 +281,6 @@ function buildCapacityAnalyticsSqlFilters(filters, request) {
   return where;
 }
 
-function getCapacityAnalyticsDefaults() {
-  return {
-    regionHealth: [],
-    topSkus: [],
-    matrix: {
-      regions: [],
-      rows: []
-    },
-    recommendedTargetSku: '',
-    aiQuotaProviderOptions: []
-  };
-}
-
 function sortCapacityAnalyticsSkuRows(rows = []) {
   return [...rows].sort((left, right) => {
     if (Number(right.recommendationWeight || 0) !== Number(left.recommendationWeight || 0)) {
@@ -1068,6 +1055,7 @@ async function getCapacityAnalyticsSummary(filters = {}) {
     const familyCounts = constrainedByRegion.get(region);
     familyCounts.set(family, (familyCounts.get(family) || 0) + 1);
   });
+
   const regionHealth = deriveCapacityAnalyticsRegionHealth(rows, constrainedByRegion);
   const topSkuRows = topCapacityAnalyticsSkuRows(rows);
   return {

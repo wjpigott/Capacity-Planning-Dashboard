@@ -62,7 +62,7 @@ const {
   updateIngestionScheduler,
   getIngestionSchedulerConfig
 } = require('./services/azureIngestionService');
-const { listManagementGroups, listQuotaGroups } = require('./services/quotaDiscoveryService');
+const { listManagementGroups, listQuotaGroups, listQuotaGroupShareableQuota } = require('./services/quotaDiscoveryService');
 const {
   getSqlPool,
   createSqlPoolWithAccessToken,
@@ -2003,6 +2003,32 @@ app.get('/api/quota/groups', requireAdmin, async (_, res) => {
   } catch (err) {
     const status = err.message.includes('QUOTA_MANAGEMENT_GROUP_ID') ? 503 : 500;
     sendErrorResponse(res, { status, clientMessage: 'Failed to discover quota groups.', err, scope: 'api/quota/groups', extra: { groups: [] } });
+  }
+});
+
+app.get('/api/quota/shareable-report', requireAdmin, async (req, res) => {
+  try {
+    const result = await listQuotaGroupShareableQuota(req.query.managementGroupId, req.query.groupQuotaName);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    const status = err.message.includes('required') ? 400 : (err.message.includes('QUOTA_MANAGEMENT_GROUP_ID') ? 503 : 500);
+    sendErrorResponse(res, {
+      status,
+      clientMessage: status === 400 ? 'Quota shareable report request is invalid.' : 'Failed to load the shareable quota report.',
+      err,
+      scope: 'api/quota/shareable-report',
+      exposeMessage: status === 400,
+      extra: {
+        rows: [],
+        summary: {
+          rowCount: 0,
+          subscriptionCount: 0,
+          regionCount: 0,
+          skuCount: 0,
+          totalShareableQuota: 0
+        }
+      }
+    });
   }
 });
 

@@ -10,6 +10,19 @@ Run all automated tests with:
 npm test
 ```
 
+Automation status:
+
+- GitHub Actions runs `npm test` on pushes to `main` and `uat-testing`, and on pull requests targeting `main`.
+- `deploy-web-app.ps1` runs `npm test` before deployment by default.
+- Use `./deploy-web-app.ps1 -SkipTests` only when you intentionally need to bypass the local test gate.
+
+Environment expectation:
+
+- The current `npm test` suite does not require on-prem SQL connectivity.
+- The current `npm test` suite does not call Azure APIs.
+- The current `npm test` suite does not require a full local app startup.
+- These tests are safe to run in CI even when local end-to-end testing is not practical.
+
 Current files:
 
 - `test/capacityService.test.js`
@@ -30,6 +43,7 @@ Covered behavior:
 
 Not covered:
 
+- No on-prem SQL dependency.
 - No SQL writes.
 - No Azure API calls.
 - No quota movement.
@@ -48,6 +62,7 @@ Covered behavior:
 
 Not covered:
 
+- No on-prem SQL dependency.
 - No recommendation job execution against Azure.
 - No quota group updates.
 - No writeback to SQL.

@@ -115,7 +115,6 @@ These are still missing and should be tackled next.
 
 - No browser automation yet for the React experience
 - No API integration tests around Express routes
-- No CI wiring for automatic test execution on push or PR
 - React logic still contains behavior that is hard to test because utility logic is embedded in `react/main.js`
 
 ## Recommended Next Steps
@@ -123,7 +122,14 @@ These are still missing and should be tackled next.
 1. Extract React-only normalization and filter helpers from `react/main.js` into testable modules.
 2. Add API-level tests for `/api/capacity/scores/live` and `/api/capacity/recommendations`.
 3. Add Playwright for browser smoke coverage once the current helper logic is extracted enough to reduce brittleness.
-4. Add CI to run `npm test` automatically on branch updates and pull requests.
+4. Decide whether CI should expand beyond `npm test` to include route-level tests and a smoke-test lane.
+
+## Automation Status
+
+- GitHub Actions now runs `npm test` automatically on pushes to `main` and `uat-testing`, and on pull requests targeting `main`.
+- `deploy-web-app.ps1` now runs `npm test` before packaging and publishing unless `-SkipTests` is provided.
+- The current automated test suite is logic-only and does not depend on on-prem SQL connectivity or Azure API access.
+- Manual UI smoke testing is still required for Capacity Score, Capacity Recommender, and quota workbench changes.
 
 ## Branch Note
 

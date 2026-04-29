@@ -66,6 +66,16 @@ function normalizeSkuName(value) {
   return trimmed;
 }
 
+function normalizeSkuFilter(value) {
+  const rawValue = String(value || '').trim().toLowerCase();
+  if (!rawValue || rawValue === 'all') {
+    return '';
+  }
+
+  const normalized = normalizeSkuName(value);
+  return normalized || '';
+}
+
 function normalizeCapacityRow(row) {
   const normalized = {
     ...row,
@@ -163,18 +173,20 @@ function normalizeFamilyBaseFilter(value) {
   return String(value || '').trim().toUpperCase();
 }
 
-function applyFilters(rows, { region, family, familyBase, availability, resourceType, provider }) {
+function applyFilters(rows, { region, family, familyBase, sku, availability, resourceType, provider }) {
   const providerFilter = String(provider || '').trim();
   const normalizedFamilyBase = normalizeFamilyBaseFilter(familyBase);
+  const normalizedSku = normalizeSkuFilter(sku);
   return rows.filter((r) => {
     const byRegion = !region || region === 'all' || r.region === region;
     const byFamily = !family || family === 'all' || r.family === family;
     const byFamilyBase = !normalizedFamilyBase || normalizedFamilyBase === 'ALL' || canonicalComputeFamilyLabel(r.family, r.sku) === normalizedFamilyBase;
+    const bySku = !normalizedSku || r.sku === normalizedSku;
     const byAvailability = !availability || availability === 'all' || r.availability === availability;
     const byType = !resourceType || resourceType === 'all' || getRowResourceType(r) === resourceType;
     const byProvider = !providerFilter || providerFilter === 'all'
       || (getRowResourceType(r) === 'AI' && String(resolveAIQuotaProvider(r) || '').trim() === providerFilter);
-    return byRegion && byFamily && byFamilyBase && byAvailability && byType && byProvider;
+    return byRegion && byFamily && byFamilyBase && bySku && byAvailability && byType && byProvider;
   });
 }
 
@@ -428,6 +440,7 @@ function buildCapacitySnapshotHistorySelect(columns) {
 
   return [
     'CONVERT(varchar(10), CAST(capturedAtUtc AS date), 23) AS [day]',
+    'capturedAtUtc',
     hasColumn('sourceType') ? 'sourceType' : 'CAST(NULL AS NVARCHAR(50)) AS sourceType',
     'skuFamily',
     'skuName',
@@ -450,6 +463,10 @@ function appendCommonSqlFilters(filters, request, options = {}) {
   if (filters.family && filters.family !== 'all') {
     where += ' AND skuFamily = @family';
     request.input('family', normalizeFamilyName(filters.family));
+  }
+  if (filters.sku && filters.sku !== 'all') {
+    where += ' AND skuName = @sku';
+    request.input('sku', normalizeSkuFilter(filters.sku));
   }
   if (filters.availability && filters.availability !== 'all') {
     where += ' AND availabilityState = @availability';
@@ -541,7 +558,8 @@ async function getCapacityRowsPaginated(filters) {
     const pagedRows = allRows.slice(offset, offset + pageSize);
     const facets = {
       regions: [...new Set(allRows.map((row) => row.region).filter(Boolean))].sort(),
-      families: [...new Set(allRows.map((row) => row.family).filter(Boolean))].sort()
+      families: [...new Set(allRows.map((row) => row.family).filter(Boolean))].sort(),
+      skus: [...new Set(allRows.map((row) => row.sku).filter(Boolean))].sort()
     };
     const summary = {
       constrainedRows: allRows.filter((row) => isBlockedAvailability(row.availability)).length,
@@ -603,7 +621,8 @@ async function getCapacityRowsPaginated(filters) {
   
   const facets = {
     regions: [...new Set(filteredRows.map((row) => row.region).filter(Boolean))].sort(),
-    families: [...new Set(filteredRows.map((row) => row.family).filter(Boolean))].sort()
+    families: [...new Set(filteredRows.map((row) => row.family).filter(Boolean))].sort(),
+    skus: [...new Set(filteredRows.map((row) => row.sku).filter(Boolean))].sort()
   };
   const summary = {
     constrainedRows: filteredRows.filter((row) => isBlockedAvailability(row.availability)).length,
@@ -699,100 +718,139 @@ async function getCapacityTrends(filters) {
   const pool = await getSqlPool();
 
   if (!pool) {
-    const today = new Date().toISOString().slice(0, 10);
-    const scoped = applyFilters(applyRegionPreset(mockRows, filters.regionPreset), filters);
-    return [
-      {
-        day: today,
-        totalRows: scoped.length,
-        constrainedRows: scoped.filter((r) => isBlockedAvailability(r.availability)).length,
-        totalQuotaAvailable: scoped.reduce((acc, r) => acc + (r.quotaLimit - r.quotaCurrent), 0)
-      }
-    ];
+    const scoped = applyFilters(applyRegionPreset(mockRows.map(normalizeCapacityRow), filters.regionPreset), filters).map((row) => ({
+      ...row,
+      capturedAtUtc: row.capturedAtUtc || new Date().toISOString()
+    }));
+    return deriveCapacityTrendRows(scoped);
   }
 
-  if (filters.resourceType && filters.resourceType !== 'all') {
-    const capacitySnapshotColumns = await getCapacitySnapshotColumnSet(pool);
+  const hasScopedFamilyBase = Boolean(filters.familyBase && String(filters.familyBase).trim().toLowerCase() !== 'all');
+  if (!hasScopedFamilyBase) {
     const request = pool.request();
     request.input('daysBack', days);
 
     let query = `
+      WITH Daily AS (
         SELECT
-          ${buildCapacitySnapshotHistorySelect(capacitySnapshotColumns)}
-      FROM dbo.CapacitySnapshot
-      WHERE capturedAtUtc >= DATEADD(day, -@daysBack, SYSUTCDATETIME())
+          CONVERT(varchar(10), CAST(capturedAtUtc AS date), 23) AS [day],
+          COUNT(1) AS totalRows,
+          SUM(CASE WHEN availabilityState IN ('CONSTRAINED', 'RESTRICTED') THEN 1 ELSE 0 END) AS constrainedRows,
+          SUM(quotaLimit - quotaCurrent) AS totalQuotaAvailable,
+          MAX(CASE
+            WHEN quotaLimit > 0 THEN CAST(ROUND((CAST(quotaCurrent AS float) / NULLIF(CAST(quotaLimit AS float), 0)) * 100.0, 0) AS int)
+            ELSE 0
+          END) AS peakUtilizationPct
+        FROM dbo.CapacitySnapshot
+        WHERE capturedAtUtc >= DATEADD(day, -@daysBack, SYSUTCDATETIME())
     `;
 
-    query += appendCommonSqlFilters(filters, request, { hasSubscriptionId: capacitySnapshotColumns.has('subscriptionId') });
+    query += buildCapacityAnalyticsSqlFilters(filters, request);
     query += `
+        GROUP BY CAST(capturedAtUtc AS date)
+      )
+      SELECT
+        [day],
+        totalRows,
+        constrainedRows,
+        totalQuotaAvailable,
+        peakUtilizationPct,
+        MAX(peakUtilizationPct) OVER (ORDER BY [day] ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS rolling7DayPeakUtilizationPct,
+        MAX(peakUtilizationPct) OVER (ORDER BY [day] ROWS BETWEEN 13 PRECEDING AND CURRENT ROW) AS rolling14DayPeakUtilizationPct
+      FROM Daily
       ORDER BY [day] ASC
     `;
 
     const result = await request.query(query);
-    const grouped = new Map();
-
-    result.recordset.forEach((record) => {
-        const normalizedRow = normalizeCapacityRow({
-          day: record.day,
-          sourceType: record.sourceType,
-          family: record.skuFamily,
-          sku: record.skuName,
-          availability: record.availabilityState,
-        quotaLimit: Number(record.quotaLimit || 0),
-        quotaCurrent: Number(record.quotaCurrent || 0),
-        region: record.region,
-        subscriptionId: record.subscriptionId
-      });
-
-      if (!applyFilters([normalizedRow], filters).length) {
-        return;
-      }
-
-      const current = grouped.get(record.day) || {
-        day: record.day,
-        totalRows: 0,
-        constrainedRows: 0,
-        totalQuotaAvailable: 0
-      };
-
-      current.totalRows += 1;
-      if (isBlockedAvailability(normalizedRow.availability)) {
-        current.constrainedRows += 1;
-      }
-      current.totalQuotaAvailable += normalizedRow.quotaLimit - normalizedRow.quotaCurrent;
-      grouped.set(record.day, current);
-    });
-
-    return [...grouped.values()].sort((left, right) => String(left.day).localeCompare(String(right.day)));
+    return result.recordset.map((row) => ({
+      day: row.day,
+      totalRows: Number(row.totalRows || 0),
+      constrainedRows: Number(row.constrainedRows || 0),
+      totalQuotaAvailable: Number(row.totalQuotaAvailable || 0),
+      peakUtilizationPct: Number(row.peakUtilizationPct || 0),
+      rolling7DayPeakUtilizationPct: Number(row.rolling7DayPeakUtilizationPct || 0),
+      rolling14DayPeakUtilizationPct: Number(row.rolling14DayPeakUtilizationPct || 0)
+    }));
   }
 
   const request = pool.request();
   request.input('daysBack', days);
-
+  const capacitySnapshotColumns = await getCapacitySnapshotColumnSet(pool);
   let query = `
     SELECT
-      CONVERT(varchar(10), CAST(capturedAtUtc AS date), 23) AS [day],
-      COUNT(1) AS totalRows,
-      SUM(CASE WHEN availabilityState IN ('CONSTRAINED', 'RESTRICTED') THEN 1 ELSE 0 END) AS constrainedRows,
-      SUM(quotaLimit - quotaCurrent) AS totalQuotaAvailable
+      ${buildCapacitySnapshotHistorySelect(capacitySnapshotColumns)}
     FROM dbo.CapacitySnapshot
     WHERE capturedAtUtc >= DATEADD(day, -@daysBack, SYSUTCDATETIME())
   `;
 
-  const capacitySnapshotColumns = await getCapacitySnapshotColumnSet(pool);
   query += appendCommonSqlFilters(filters, request, { hasSubscriptionId: capacitySnapshotColumns.has('subscriptionId') });
   query += `
-    GROUP BY CAST(capturedAtUtc AS date)
-    ORDER BY [day] ASC
+    ORDER BY capturedAtUtc ASC, skuName ASC
   `;
 
   const result = await request.query(query);
-  return result.recordset.map((r) => ({
-    day: r.day,
-    totalRows: Number(r.totalRows || 0),
-    constrainedRows: Number(r.constrainedRows || 0),
-    totalQuotaAvailable: Number(r.totalQuotaAvailable || 0)
+  const rows = result.recordset.map((record) => normalizeCapacityRow({
+    day: record.day,
+    capturedAtUtc: record.capturedAtUtc,
+    sourceType: record.sourceType,
+    family: record.skuFamily,
+    sku: record.skuName,
+    availability: record.availabilityState,
+    quotaLimit: Number(record.quotaLimit || 0),
+    quotaCurrent: Number(record.quotaCurrent || 0),
+    region: record.region,
+    subscriptionId: record.subscriptionId
   }));
+  return deriveCapacityTrendRows(rows);
+}
+
+function deriveCapacityTrendRows(rows) {
+  const scopedRows = Array.isArray(rows) ? rows : [];
+  const grouped = new Map();
+  const today = new Date().toISOString().slice(0, 10);
+
+  scopedRows.forEach((row) => {
+    const day = String(row?.day || row?.capturedAtUtc || today).slice(0, 10);
+    const current = grouped.get(day) || {
+      day,
+      totalRows: 0,
+      constrainedRows: 0,
+      totalQuotaAvailable: 0,
+      peakUtilizationPct: 0
+    };
+    const quotaLimit = Number(row?.quotaLimit || 0);
+    const quotaCurrent = Number(row?.quotaCurrent || 0);
+
+    current.totalRows += 1;
+    if (isBlockedAvailability(row?.availability)) {
+      current.constrainedRows += 1;
+    }
+    current.totalQuotaAvailable += quotaLimit - quotaCurrent;
+
+    if (quotaLimit > 0) {
+      const utilizationPct = Math.round((quotaCurrent / quotaLimit) * 100);
+      current.peakUtilizationPct = Math.max(current.peakUtilizationPct, utilizationPct);
+    }
+
+    grouped.set(day, current);
+  });
+
+  const ordered = [...grouped.values()]
+    .sort((left, right) => String(left.day).localeCompare(String(right.day)));
+
+  return ordered.map((row, index) => {
+    const trailing7 = ordered.slice(Math.max(0, index - 6), index + 1);
+    const trailing14 = ordered.slice(Math.max(0, index - 13), index + 1);
+    return {
+      day: row.day,
+      totalRows: Number(row.totalRows || 0),
+      constrainedRows: Number(row.constrainedRows || 0),
+      totalQuotaAvailable: Number(row.totalQuotaAvailable || 0),
+      peakUtilizationPct: Number(row.peakUtilizationPct || 0),
+      rolling7DayPeakUtilizationPct: Math.max(0, ...trailing7.map((entry) => Number(entry.peakUtilizationPct || 0))),
+      rolling14DayPeakUtilizationPct: Math.max(0, ...trailing14.map((entry) => Number(entry.peakUtilizationPct || 0)))
+    };
+  });
 }
 
 function toFamilyLabel(familyName) {
@@ -822,7 +880,7 @@ function getCapacityScoreLabel(summary) {
 
 function getCapacityScoreReason(summary) {
   if (summary.score === 'High') {
-    return 'All in-scope rows are OK with positive available quota.';
+    return 'All in-scope snapshot rows are OK with positive available quota.';
   }
 
   if (summary.score === 'Medium') {
@@ -1184,6 +1242,7 @@ module.exports = {
   getSubscriptionSummary,
   getCapacityTrends,
   getFamilySummary,
+  deriveCapacityTrendRows,
   deriveCapacityScoreRows,
   getCapacityScoreSummary,
   getCapacityScoreSummaryPaginated

@@ -114,6 +114,7 @@ Status legend:
 - [x] Admin ingestion trigger is queued/polled as a background job instead of holding the browser request open
 - [x] Admin UI setting for scheduled refresh rates (capacity ingestion and live placement refresh stored in SQL)
 - [x] Quota Workbench allocation report uses `Quota Group` and `Assigned quota` labels, with the old provisioning column hidden
+- [ ] Build a comparison-focused PaaS report against the alternate scanner because product management suspects the newer PaaS source is more accurate
 - [ ] Admin UI setting for quota discovery scope selection (management group and, if needed, quota group picker/default)
 - [ ] Clean up Quota Workbench button interactions, emphasis, and color treatment so step actions read clearly and consistently
 - [x] Pagination for report grids (prefer server-side paging for large result sets)

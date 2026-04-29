@@ -30,6 +30,11 @@ function buildCommonFilterPreview(filters = {}) {
     params.family = filters.family;
   }
 
+  if (filters.sku && filters.sku !== 'all') {
+    clauses.push('AND skuName = @sku');
+    params.sku = filters.sku;
+  }
+
   if (filters.availability && filters.availability !== 'all') {
     clauses.push('AND availabilityState = @availability');
     params.availability = filters.availability;
@@ -141,16 +146,21 @@ function buildTrendPreview(filters = {}) {
     query: formatQuery(`
       SELECT
         CONVERT(varchar(10), CAST(capturedAtUtc AS date), 23) AS [day],
-        COUNT(1) AS totalRows,
-        SUM(CASE WHEN availabilityState = 'CONSTRAINED' THEN 1 ELSE 0 END) AS constrainedRows,
-        SUM(quotaLimit - quotaCurrent) AS totalQuotaAvailable
+        capturedAtUtc,
+        sourceType,
+        skuFamily,
+        skuName,
+        availabilityState,
+        quotaCurrent,
+        quotaLimit,
+        region,
+        subscriptionId
       FROM dbo.CapacitySnapshot
       WHERE capturedAtUtc >= DATEADD(day, -@daysBack, SYSUTCDATETIME())${common.where}
-      GROUP BY CAST(capturedAtUtc AS date)
-      ORDER BY [day] ASC
+      ORDER BY capturedAtUtc ASC, skuName ASC
     `),
     params: { daysBack, ...common.params },
-    notes: common.notes
+    notes: ['The API now loads filtered snapshot rows and derives daily totals plus peak-utilization rollups in memory.', ...common.notes]
   }];
 }
 

@@ -241,6 +241,11 @@ function formatNumber(value) {
   return Number.isFinite(numeric) ? numeric.toLocaleString() : 'n/a';
 }
 
+function formatPercent(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? `${numeric}%` : 'n/a';
+}
+
 function formatMoney(value, digits = 0) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? `$${numeric.toFixed(digits)}` : 'n/a';
@@ -619,12 +624,40 @@ function matrixStatusMeta(status) {
   return { short: '✗ BLOCKED', description: 'Cannot deploy. Pick a different region or SKU.' };
 }
 
+function formatCapacityScoreLabel(value) {
+  return String(value || '').toUpperCase() === 'HIGH' ? 'Snapshot OK' : (value || 'n/a');
+}
+
+function getCapacityScoreDisplayMeta(row) {
+  const liveScore = String(row?.livePlacementScore || '').trim();
+  const normalizedLiveScore = liveScore.toUpperCase();
+
+  if (row?.livePlacementRestricted || normalizedLiveScore.includes('RESTRICTED')) {
+    return {
+      value: 'Restricted',
+      label: 'Live Restricted'
+    };
+  }
+
+  if (normalizedLiveScore.includes('NOTAVAILABLE') || normalizedLiveScore.includes('UNAVAILABLE')) {
+    return {
+      value: 'Unavailable',
+      label: 'Live Unavailable'
+    };
+  }
+
+  return {
+    value: row?.score,
+    label: formatCapacityScoreLabel(row?.score)
+  };
+}
+
 function capacityScoreLegendItems() {
   return [
     {
       value: 'High',
-      title: 'High',
-      description: 'Strong derived capacity posture from the saved OK, Limited, Constrained, and quota observations.'
+      title: 'Snapshot OK',
+      description: 'Strong derived snapshot posture from the saved OK, Limited, Constrained, and quota observations. If the latest live Azure result is restricted or unavailable, that live state takes precedence in the table.'
     },
     {
       value: 'Medium',
@@ -1066,14 +1099,14 @@ function familySummaryFromRows(rows) {
   })).sort((a, b) => String(a.family).localeCompare(String(b.family)));
 }
 
-function StatusPill({ value }) {
-  return <span className={classNames('rx-pill', `rx-pill--${String(value || 'default').toLowerCase()}`)}>{value || 'n/a'}</span>;
+function StatusPill({ value, label }) {
+  return <span className={classNames('rx-pill', `rx-pill--${String(value || 'default').toLowerCase()}`)}>{label || value || 'n/a'}</span>;
 }
 
-function Banner({ tone, message, detail }) {
+function Banner({ tone, message, detail, className }) {
   if (!message) return null;
   return (
-    <div className={classNames('rx-banner', `rx-banner--${tone || 'info'}`)}>
+    <div className={classNames('rx-banner', `rx-banner--${tone || 'info'}`, className)}>
       <div className="rx-banner__message">{message}</div>
       {detail ? <div className="rx-banner__detail">{detail}</div> : null}
     </div>
@@ -1597,7 +1630,7 @@ function TrendLineChart({ title, subtitle, rows, series, emptyMessage }) {
           <div key={item.key} className="rx-trend-legend__item">
             <span className="rx-trend-legend__swatch" style={{ backgroundColor: item.color }}></span>
             <strong>{item.label}</strong>
-            <span>{formatCompactNumber(item.getValue(scopedRows[scopedRows.length - 1]))}</span>
+            <span>{item.formatValue ? item.formatValue(item.getValue(scopedRows[scopedRows.length - 1])) : formatCompactNumber(item.getValue(scopedRows[scopedRows.length - 1]))}</span>
           </div>
         ))}
       </div>
@@ -1629,7 +1662,7 @@ function TrendLineChart({ title, subtitle, rows, series, emptyMessage }) {
                 {points.map((point) => (
                   <g key={`${item.key}-${point.day}`}>
                     <circle cx={point.x} cy={point.y} r="4" fill={item.color}></circle>
-                    <title>{`${item.label}: ${formatNumber(point.value)} on ${point.day}`}</title>
+                    <title>{`${item.label}: ${item.formatValue ? item.formatValue(point.value) : formatNumber(point.value)} on ${point.day}`}</title>
                   </g>
                 ))}
               </g>
@@ -1659,6 +1692,12 @@ function TrendReport({ rows, filters, selectedSubscriptionCount, totalSubscripti
   const regionLabel = filters.region && filters.region !== 'all'
     ? filters.region
     : `${filters.regionPreset || 'all'} preset`;
+  const familyLabel = filters.family && filters.family !== 'all'
+    ? (formatFamilyLabel(filters.family) || filters.family)
+    : 'All families';
+  const skuLabel = filters.sku && filters.sku !== 'all'
+    ? filters.sku
+    : 'All SKUs';
 
   return (
     <div className="rx-view-stack">
@@ -1666,14 +1705,14 @@ function TrendReport({ rows, filters, selectedSubscriptionCount, totalSubscripti
         <div className="rx-panel__header">
           <div>
             <h2>Trend Calculation</h2>
-            <p>The server groups `dbo.CapacitySnapshot` by capture date after applying the active region preset, specific region, selected subscriptions, family, and availability filters.</p>
+            <p>The server groups `dbo.CapacitySnapshot` by capture date after applying the active region preset, specific region, selected subscriptions, family, SKU, and availability filters.</p>
           </div>
         </div>
         <div className="rx-trend-summary">
           <div className="rx-trend-summary__item">
             <span>Filter Scope</span>
             <strong>{regionLabel}</strong>
-            <small>{subscriptionLabel}</small>
+            <small>{subscriptionLabel} · {familyLabel} · {skuLabel}</small>
           </div>
           <div className="rx-trend-summary__item">
             <span>Latest Quota Available</span>
@@ -1685,8 +1724,61 @@ function TrendReport({ rows, filters, selectedSubscriptionCount, totalSubscripti
             <strong>{latestRow ? formatNumber(latestRow.totalRows) : 'n/a'}</strong>
             <small>{firstRow ? `${observationDelta >= 0 ? '+' : ''}${formatNumber(observationDelta)} vs first day` : 'Waiting for history'}</small>
           </div>
+          <div className="rx-trend-summary__item">
+            <span>Observed Daily Peak</span>
+            <strong>{latestRow ? formatPercent(latestRow.peakUtilizationPct) : 'n/a'}</strong>
+            <small>Highest sampled quota utilization on the latest day</small>
+          </div>
+          <div className="rx-trend-summary__item">
+            <span>Rolling 7-Day Peak</span>
+            <strong>{latestRow ? formatPercent(latestRow.rolling7DayPeakUtilizationPct) : 'n/a'}</strong>
+            <small>Highest sampled peak across the trailing 7 days</small>
+          </div>
+          <div className="rx-trend-summary__item">
+            <span>Rolling 14-Day Peak</span>
+            <strong>{latestRow ? formatPercent(latestRow.rolling14DayPeakUtilizationPct) : 'n/a'}</strong>
+            <small>Highest sampled peak across the trailing 14 days</small>
+          </div>
         </div>
-        <p className="rx-trend-note">Large swings usually mean more or fewer snapshot rows were captured on that day. React is only rendering the result; the region and subscription filters are applied by the API before the daily totals are calculated.</p>
+        <p className="rx-trend-note">Peak utilization is based on the highest sampled quota usage saved that day. With twice-daily ingestion, this is the peak observed in your captures, not a guaranteed true intraday maximum between runs.</p>
+      </section>
+      <TrendLineChart
+        title="Peak Utilization Over Time"
+        subtitle="Daily sampled peak utilization plus trailing 7-day and 14-day peak overlays for the current scope."
+        rows={scopedRows}
+        series={[
+          {
+            key: 'peakUtilizationPct',
+            label: 'Daily Peak Utilization',
+            color: '#7c3aed',
+            getValue: (row) => row.peakUtilizationPct,
+            formatValue: formatPercent
+          },
+          {
+            key: 'rolling7DayPeakUtilizationPct',
+            label: '7-Day Rolling Peak',
+            color: '#d97706',
+            getValue: (row) => row.rolling7DayPeakUtilizationPct,
+            formatValue: formatPercent
+          },
+          {
+            key: 'rolling14DayPeakUtilizationPct',
+            label: '14-Day Rolling Peak',
+            color: '#0f766e',
+            getValue: (row) => row.rolling14DayPeakUtilizationPct,
+            formatValue: formatPercent
+          }
+        ]}
+        emptyMessage="No peak utilization history rows available."
+      />
+      <section className="rx-panel rx-panel--compact rx-panel--muted">
+        <div className="rx-panel__header">
+          <div>
+            <h2>Headroom Context</h2>
+            <p>These daily totals are still useful, but they answer a different question than peak utilization.</p>
+          </div>
+        </div>
+        <p className="rx-trend-note">Large swings usually mean more or fewer snapshot rows were captured on that day. React is only rendering the result; the region, subscription, family, and SKU filters are applied by the API before the daily totals are calculated.</p>
       </section>
       <TrendLineChart
         title="Quota Available Over Time"
@@ -1730,7 +1822,10 @@ function TrendReport({ rows, filters, selectedSubscriptionCount, totalSubscripti
           { key: 'day', label: 'Day' },
           { key: 'totalRows', label: 'Total Rows', render: (row) => formatNumber(row.totalRows) },
           { key: 'constrainedRows', label: 'Constrained Rows', render: (row) => formatNumber(row.constrainedRows) },
-          { key: 'totalQuotaAvailable', label: 'Total Quota Available', render: (row) => formatNumber(row.totalQuotaAvailable) }
+          { key: 'totalQuotaAvailable', label: 'Total Quota Available', render: (row) => formatNumber(row.totalQuotaAvailable) },
+          { key: 'peakUtilizationPct', label: 'Daily Peak Utilization', render: (row) => formatPercent(row.peakUtilizationPct) },
+          { key: 'rolling7DayPeakUtilizationPct', label: '7-Day Peak', render: (row) => formatPercent(row.rolling7DayPeakUtilizationPct) },
+          { key: 'rolling14DayPeakUtilizationPct', label: '14-Day Peak', render: (row) => formatPercent(row.rolling14DayPeakUtilizationPct) }
         ]}
         rows={scopedRows}
         emptyMessage="No trend history rows available."
@@ -2186,6 +2281,136 @@ function AIModelSummaryReportView({ rows, loading, status, availableRegions }) {
   );
 }
 
+function formatExportCell(value) {
+  if (value == null) {
+    return '';
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => formatExportCell(item)).filter(Boolean).join(', ');
+  }
+
+  if (typeof value === 'boolean') {
+    return value ? 'Yes' : 'No';
+  }
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? String(value) : '';
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+
+  return String(value);
+}
+
+function escapeCsvCell(value) {
+  const normalized = formatExportCell(value).replace(/\r?\n/g, ' ').trim();
+  if (!/[",\n]/.test(normalized)) {
+    return normalized;
+  }
+  return `"${normalized.replace(/"/g, '""')}"`;
+}
+
+function buildClientCsv(columns, rows) {
+  const exportColumns = Array.isArray(columns) ? columns : [];
+  const exportRows = Array.isArray(rows) ? rows : [];
+  const header = exportColumns.map((column) => escapeCsvCell(column.label || column.key || '')).join(',');
+  const body = exportRows.map((row) => exportColumns.map((column) => {
+    const value = typeof column.value === 'function'
+      ? column.value(row)
+      : row?.[column.key];
+    return escapeCsvCell(value);
+  }).join(',')).join('\r\n');
+  return [header, body].filter(Boolean).join('\r\n');
+}
+
+function sanitizeExportFilenamePart(value) {
+  return String(value || 'report')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'report';
+}
+
+function buildExportTimestamp() {
+  return new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+}
+
+function triggerFileDownload(blob, filename) {
+  const objectUrl = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = objectUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(objectUrl);
+}
+
+function buildAIProviderMatrixExport(rows = [], availableRegions = []) {
+  const scopedRows = Array.isArray(rows) ? rows : [];
+  const preferredRegions = Array.isArray(availableRegions)
+    ? availableRegions.map((region) => String(region || '').trim()).filter(Boolean)
+    : [];
+  const discoveredRegions = [...new Set(scopedRows.map((row) => String(row.region || '').trim()).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right));
+  const regionOrder = [];
+
+  preferredRegions.forEach((region) => {
+    if (!regionOrder.includes(region)) {
+      regionOrder.push(region);
+    }
+  });
+  discoveredRegions.forEach((region) => {
+    if (!regionOrder.includes(region)) {
+      regionOrder.push(region);
+    }
+  });
+
+  const providerRegionCounts = new Map();
+  const providers = new Set();
+
+  scopedRows.forEach((row) => {
+    const region = String(row.region || '').trim();
+    const provider = getAIModelProviderLabel(row);
+    if (!region || !provider) {
+      return;
+    }
+    providers.add(provider);
+    const key = `${provider}::${region}`;
+    providerRegionCounts.set(key, Number(providerRegionCounts.get(key) || 0) + 1);
+  });
+
+  const matrixRows = [...providers]
+    .sort((left, right) => left.localeCompare(right))
+    .map((provider) => {
+      const row = { provider, coveredRegions: 0 };
+      regionOrder.forEach((region) => {
+        const count = Number(providerRegionCounts.get(`${provider}::${region}`) || 0);
+        row[region] = count > 0 ? `${formatNumber(count)} model${count === 1 ? '' : 's'}` : '-';
+        if (count > 0) {
+          row.coveredRegions += 1;
+        }
+      });
+      return row;
+    });
+
+  return {
+    regionOrder,
+    rows: matrixRows
+  };
+}
+
 function QuotaDiscoveryView(props) {
   const {
     managementGroups,
@@ -2488,7 +2713,6 @@ function QuotaWorkbenchView(props) {
     return [];
   }, [managementGroups, selectedManagementGroup]);
   const shareableRows = Array.isArray(shareableReport?.rows) ? shareableReport.rows : [];
-  const shareableSummary = shareableReport?.summary || { rowCount: 0, subscriptionCount: 0, regionCount: 0, skuCount: 0, totalShareableQuota: 0, totalAllocatedQuota: 0 };
   const shareableSubtitle = shareableReport?.generatedAtUtc
     ? `Only rows with a quota deficit are shown. Values are absolute deficit magnitudes. Generated ${formatTimestamp(shareableReport.generatedAtUtc)}.`
     : 'Only rows with a quota deficit are shown. Values are absolute deficit magnitudes. This report is read-only.';
@@ -2675,17 +2899,6 @@ function ShareableQuotaReportView(props) {
           <span className="rx-selected-count">Selected quota group: {selectedQuotaGroup === 'all' ? 'None' : selectedQuotaGroup}</span>
         </div>
       </section>
-      <section className="rx-panel rx-panel--compact rx-panel--muted">
-        <div className="rx-panel__header"><div><h2>Summary</h2><p>Only rows with a quota deficit are listed. Values are shown as absolute deficit magnitudes. No move or apply actions are available from this report.</p></div></div>
-        <div className="rx-summary-grid">
-          <article className="rx-metric-card"><span>Deficit Rows</span><strong>{formatNumber(shareableSummary.rowCount || 0)}</strong></article>
-          <article className="rx-metric-card"><span>Subscriptions</span><strong>{formatNumber(shareableSummary.subscriptionCount || 0)}</strong></article>
-          <article className="rx-metric-card"><span>Regions</span><strong>{formatNumber(shareableSummary.regionCount || 0)}</strong></article>
-          <article className="rx-metric-card"><span>SKUs</span><strong>{formatNumber(shareableSummary.skuCount || 0)}</strong></article>
-          <article className="rx-metric-card"><span>Total Allocated</span><strong>{formatNumber(shareableSummary.totalAllocatedQuota || 0)}</strong></article>
-          <article className="rx-metric-card"><span>Total Required</span><strong>{formatNumber(shareableSummary.totalShareableQuota || 0)}</strong></article>
-        </div>
-      </section>
       <DataTable title="Quota Allocation Report" subtitle={shareableSubtitle} columns={[{ key: 'subscriptionId', label: 'Subscription Id' }, { key: 'region', label: 'Region' }, { key: 'displayName', label: 'Quota SKU / Family', render: (row) => row.displayName || row.resourceName || 'n/a' }, { key: 'resourceName', label: 'Resource Name', render: (row) => row.resourceName || 'n/a' }, { key: 'shareableQuota', label: 'Quota Group', render: (row) => formatNumber(row.shareableQuota) }, { key: 'quotaLimit', label: 'Assigned Quota', render: (row) => formatNullableNumber(row.quotaLimit) }]} rows={shareableRows} pageSize={50} emptyMessage={selectedQuotaGroup === 'all' ? 'Select a quota group and load the quota report.' : 'No quota deficit rows were returned for the selected quota group.'} />
     </div>
   );
@@ -2707,8 +2920,8 @@ function App() {
   const [selectedSubscriptionIds, setSelectedSubscriptionIds] = useState([]);
   const [livePlacementSubscriptionId, setLivePlacementSubscriptionId] = useState('');
   const [livePlacementFamily, setLivePlacementFamily] = useState('');
-  const [filters, setFilters] = useState({ regionPreset: 'USMajor', region: 'all', familyBase: 'all', family: 'all', availability: 'all', resourceType: 'all', provider: 'all' });
-  const [capacityData, setCapacityData] = useState({ rows: [], summary: null, facets: { regions: [], families: [] }, pagination: { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false } });
+  const [filters, setFilters] = useState({ regionPreset: 'USMajor', region: 'all', familyBase: 'all', family: 'all', sku: 'all', availability: 'all', resourceType: 'all', provider: 'all' });
+  const [capacityData, setCapacityData] = useState({ rows: [], summary: null, facets: { regions: [], families: [], skus: [] }, pagination: { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false } });
   const [allFamilyFacetOptions, setAllFamilyFacetOptions] = useState([]);
   const [computeFamilyCatalogOptions, setComputeFamilyCatalogOptions] = useState([]);
   const [capacityAnalytics, setCapacityAnalytics] = useState({ regionHealth: [], topSkus: [], matrix: { regions: [], rows: [] }, recommendedTargetSku: '', aiQuotaProviderOptions: [] });
@@ -2725,7 +2938,7 @@ function App() {
   const [showSqlPreview, setShowSqlPreview] = useState(false);
   const [sqlPreviewState, setSqlPreviewState] = useState({ loading: false, error: '', rows: [] });
   const [uiSettingsBusy, setUiSettingsBusy] = useState(false);
-  const [selectedCapacityExport, setSelectedCapacityExport] = useState('xlsx:report');
+  const [selectedExportOption, setSelectedExportOption] = useState('server:xlsx:report');
 
   const queryFilters = useMemo(() => {
     const next = {
@@ -2733,6 +2946,7 @@ function App() {
       region: filters.region,
       familyBase: filters.familyBase,
       family: filters.family,
+      sku: filters.sku,
       availability: filters.availability,
       resourceType: filters.resourceType,
       subscriptionIds: selectedSubscriptionIds.join(',')
@@ -2783,6 +2997,12 @@ function App() {
     }
     return fullFamilyOptions.filter((family) => extractFamilyBase(family) === filters.familyBase);
   }, [filters.familyBase, fullFamilyOptions]);
+  const scopedSkuOptions = useMemo(() => {
+    return (Array.isArray(capacityData.facets.skus) ? capacityData.facets.skus : [])
+      .map((sku) => normalizeSkuName(sku))
+      .filter((sku) => sku && !isAggregateSkuName(sku))
+      .sort((left, right) => compareSkuValues(left, right));
+  }, [capacityData.facets.skus]);
   const livePlacementSelectedSubscription = useMemo(() => (
     subscriptionOptions.find((option) => option.subscriptionId === livePlacementSubscriptionId) || null
   ), [livePlacementSubscriptionId, subscriptionOptions]);
@@ -2836,6 +3056,7 @@ function App() {
   const regionHealth = useMemo(() => (Array.isArray(capacityAnalytics.regionHealth) ? capacityAnalytics.regionHealth : []), [capacityAnalytics.regionHealth]);
   const topSkus = useMemo(() => (Array.isArray(capacityAnalytics.topSkus) ? capacityAnalytics.topSkus : []), [capacityAnalytics.topSkus]);
   const familySummaryRows = useMemo(() => (familyRows.length > 0 ? familyRows : []), [familyRows]);
+  const recommendationRows = useMemo(() => (Array.isArray(recommendState.result?.recommendations) ? recommendState.result.recommendations : []), [recommendState.result]);
   const matrix = useMemo(() => {
     const source = capacityAnalytics.matrix || { regions: [], rows: [] };
     const availableRegions = new Set((Array.isArray(source.regions) ? source.regions : []).map((region) => String(region || '').trim().toLowerCase()).filter(Boolean));
@@ -2919,6 +3140,289 @@ function App() {
     ? `Sidebar subscription selections (${formatNumber(selectedSubscriptionIds.length)}) do not filter PaaS yet. This snapshot reflects the worker subscription scope shown here.`
     : 'PaaS rows are not filtered by the sidebar subscription picker yet. This snapshot reflects the worker subscription scope shown here.';
   const isAdminView = Boolean(auth?.canAccessAdmin && activeView === 'admin');
+  const filteredQuotaCandidateRows = useMemo(() => {
+    const familyTerm = normalizeSearchText(quotaState.candidateFilters.family || '');
+    return (Array.isArray(quotaState.candidates) ? quotaState.candidates : []).filter((row) => {
+      const recipientNeed = getQuotaRecipientNeed(row);
+      const movableQuota = Number(row.movableQuota || row.suggestedMovable || 0);
+      const bySub = quotaState.candidateFilters.subscriptionId === 'all' || row.subscriptionId === quotaState.candidateFilters.subscriptionId;
+      const byRegion = quotaState.candidateFilters.region === 'all' || row.region === quotaState.candidateFilters.region;
+      const byIntent = quotaState.candidateFilters.intent === 'all'
+        || (quotaState.candidateFilters.intent === 'donor' && movableQuota > 0)
+        || (quotaState.candidateFilters.intent === 'need' && recipientNeed > 0);
+      const searchText = normalizeSearchText([row.family, row.quotaName, row.subscriptionName, row.subscriptionId, row.region].filter(Boolean).join(' '));
+      const byFamily = !familyTerm || searchText.includes(familyTerm);
+      return bySub && byRegion && byIntent && byFamily;
+    });
+  }, [quotaState.candidateFilters.family, quotaState.candidateFilters.intent, quotaState.candidateFilters.region, quotaState.candidateFilters.subscriptionId, quotaState.candidates]);
+  const aiSummaryMatrixExport = useMemo(() => buildAIProviderMatrixExport(aiModelRows, scopedRegionOptions), [aiModelRows, scopedRegionOptions]);
+  const adminExportRows = useMemo(() => {
+    const status = adminState.status || null;
+    const summary = status?.lastSummary || {};
+    const job = adminState.job || null;
+    const jobState = job?.status === 'queued' || job?.status === 'running' ? job.status : null;
+    const stateLabel = jobState === 'queued'
+      ? 'Queued'
+      : (jobState === 'running'
+        ? 'Running'
+        : (status?.inProgress ? 'Running' : (status?.lastError ? 'Failed' : (status?.lastSuccessUtc ? 'Healthy' : 'Idle'))));
+
+    return [
+      { section: 'Status', metric: 'State', value: stateLabel },
+      { section: 'Status', metric: 'Job Id', value: job?.jobId || '' },
+      { section: 'Status', metric: 'Last Run', value: formatTimestamp(status?.lastRunUtc) },
+      { section: 'Status', metric: 'Last Success', value: formatTimestamp(status?.lastSuccessUtc) },
+      { section: 'Status', metric: 'Last Error', value: status?.lastError || '' },
+      { section: 'Status', metric: 'Inserted Rows', value: status?.lastInsertedRows || 0 },
+      { section: 'Status', metric: 'Score Rows', value: summary.insertedScoreRows || 0 },
+      { section: 'Status', metric: 'AI Model Rows', value: summary.insertedAIModelRows || 0 },
+      { section: 'Status', metric: 'Subscriptions', value: summary.subscriptionCount || 0 },
+      { section: 'Scheduler', metric: 'Ingest Interval Minutes', value: adminState.schedule.ingest.intervalMinutes },
+      { section: 'Scheduler', metric: 'Ingest Run On Startup', value: adminState.schedule.ingest.runOnStartup },
+      { section: 'Scheduler', metric: 'Live Placement Interval Minutes', value: adminState.schedule.livePlacement.intervalMinutes },
+      { section: 'Scheduler', metric: 'Live Placement Run On Startup', value: adminState.schedule.livePlacement.runOnStartup },
+      { section: 'Scheduler', metric: 'AI Model Catalog Interval Minutes', value: adminState.schedule.aiModelCatalog.intervalMinutes },
+      { section: 'Runtime', metric: 'Ingest Interval Minutes', value: adminState.runtime.ingest.intervalMinutes },
+      { section: 'Runtime', metric: 'Live Placement Interval Minutes', value: adminState.runtime.livePlacement.intervalMinutes },
+      { section: 'Runtime', metric: 'AI Model Catalog Interval Minutes', value: adminState.runtime.aiModelCatalog.intervalMinutes }
+    ];
+  }, [adminState.job, adminState.runtime.aiModelCatalog.intervalMinutes, adminState.runtime.ingest.intervalMinutes, adminState.runtime.livePlacement.intervalMinutes, adminState.schedule.aiModelCatalog.intervalMinutes, adminState.schedule.ingest.intervalMinutes, adminState.schedule.ingest.runOnStartup, adminState.schedule.livePlacement.intervalMinutes, adminState.schedule.livePlacement.runOnStartup, adminState.status]);
+  const activeReportExportOptions = useMemo(() => {
+    if (activeView === 'capacity-grid') {
+      return [
+        { value: 'server:csv:grid', label: 'CSV Export', type: 'server', format: 'csv', variant: 'grid' },
+        { value: 'server:xlsx:grid', label: 'Grid XLSX', type: 'server', format: 'xlsx', variant: 'grid' },
+        { value: 'server:xlsx:report', label: 'Report XLSX', type: 'server', format: 'xlsx', variant: 'report' }
+      ];
+    }
+
+    if (activeView === 'region-health') {
+      return [{ value: 'client:region-health', label: 'CSV Export', type: 'client', filenameBase: 'region-health', rows: regionHealth, columns: [
+        { label: 'Region', value: (row) => row.region },
+        { label: 'Observed Capacity', value: (row) => row.totalRows },
+        { label: 'Deployable Capacity', value: (row) => row.deployableRows },
+        { label: 'Constrained Capacity', value: (row) => row.constrainedRows },
+        { label: 'Quota Headroom', value: (row) => Math.round(Number(row.totalQuotaHeadroom || 0)) },
+        { label: 'Deployable Families', value: (row) => row.deployableFamilyCount },
+        { label: 'Subscriptions With Capacity', value: (row) => row.deployableSubscriptionCount },
+        { label: 'Providers', value: (row) => Array.isArray(row.providers) ? row.providers.join(', ') : '' },
+        { label: 'Most Constrained Families', value: (row) => Array.isArray(row.topConstrainedFamilies) ? row.topConstrainedFamilies.join(', ') : '' }
+      ] }];
+    }
+
+    if (activeView === 'recommender') {
+      return [{ value: 'client:recommender', label: 'CSV Export', type: 'client', filenameBase: 'capacity-recommender', rows: recommendationRows, columns: [
+        { label: 'Rank', value: (row) => row.rank },
+        { label: 'SKU', value: (row) => normalizeSkuName(row.sku) || '' },
+        { label: 'Region', value: (row) => row.region },
+        { label: 'vCPU', value: (row) => row.vCPU },
+        { label: 'MemGB', value: (row) => row.memGiB },
+        { label: 'Score', value: (row) => row.score },
+        { label: 'CPU', value: (row) => row.cpu },
+        { label: 'Disk', value: (row) => row.disk },
+        { label: 'Type', value: (row) => row.purpose },
+        { label: 'Capacity', value: (row) => row.capacity },
+        { label: 'Zones', value: (row) => row.zonesOK },
+        { label: 'PriceHr', value: (row) => row.priceHr },
+        { label: 'PriceMo', value: (row) => row.priceMo }
+      ] }];
+    }
+
+    if (activeView === 'paas-availability') {
+      return [{ value: 'client:paas-rows', label: 'CSV Export', type: 'client', filenameBase: 'paas-availability', rows: filteredPaaSRows, columns: [
+        { label: 'Service', value: (row) => row.service },
+        { label: 'Region', value: (row) => row.region },
+        { label: 'Category', value: (row) => row.category },
+        { label: 'Name', value: (row) => row.displayName || row.name || '' },
+        { label: 'Edition', value: (row) => row.edition || '' },
+        { label: 'Tier', value: (row) => row.tier || '' },
+        { label: 'Status', value: (row) => row.status || (row.available ? 'Available' : 'Unknown') },
+        { label: 'Quota Used', value: (row) => row.quotaCurrent },
+        { label: 'Quota Limit', value: (row) => row.quotaLimit },
+        { label: 'Metric', value: (row) => formatPaaSMetric(row) }
+      ] }];
+    }
+
+    if (activeView === 'shareable-quota-report') {
+      return [{ value: 'client:shareable-quota', label: 'CSV Export', type: 'client', filenameBase: 'shareable-quota-report', rows: quotaState.shareableReport.rows, columns: [
+        { label: 'Subscription Id', value: (row) => row.subscriptionId },
+        { label: 'Region', value: (row) => row.region },
+        { label: 'Quota SKU / Family', value: (row) => row.displayName || row.resourceName || '' },
+        { label: 'Resource Name', value: (row) => row.resourceName || '' },
+        { label: 'Quota Group', value: (row) => row.shareableQuota },
+        { label: 'Assigned Quota', value: (row) => row.quotaLimit }
+      ] }];
+    }
+
+    if (activeView === 'sku-chart') {
+      return [{ value: 'client:top-skus', label: 'CSV Export', type: 'client', filenameBase: 'top-skus', rows: topSkus, columns: [
+        { label: 'SKU', value: (row) => row.sku },
+        { label: 'Available Quota', value: (row) => row.available }
+      ] }];
+    }
+
+    if (activeView === 'capacity-score') {
+      return [
+        { value: 'client:capacity-score', label: 'CSV Export: Score Rows', type: 'client', filenameBase: 'capacity-score', rows: capacityScores.rows, columns: [
+          { label: 'Region', value: (row) => row.region },
+          { label: 'SKU', value: (row) => normalizeSkuName(row.sku) || '' },
+          { label: 'Family', value: (row) => formatFamilyLabel(row.family) || row.family || '' },
+          { label: 'Capacity Score', value: (row) => row.score },
+          { label: 'Azure Live Score', value: (row) => row.livePlacementScore || '' },
+          { label: 'Checked', value: (row) => formatTimestamp(row.liveCheckedAtUtc) },
+          { label: 'Subscriptions', value: (row) => row.subscriptionCount },
+          { label: 'OK', value: (row) => row.okRows },
+          { label: 'Limited', value: (row) => row.limitedRows },
+          { label: 'Constrained', value: (row) => row.constrainedRows },
+          { label: 'Quota', value: (row) => row.totalQuotaAvailable },
+          { label: 'Reason', value: (row) => row.reason || '' }
+        ] },
+        { value: 'client:capacity-score-subscriptions', label: 'CSV Export: Subscription Summary', type: 'client', filenameBase: 'capacity-score-subscriptions', rows: capacityScores.subscriptionSummary, columns: [
+          { label: 'Subscription Key', value: (row) => row.subscriptionKey },
+          { label: 'SKU Observations', value: (row) => row.skuObservations || row.totalRows },
+          { label: 'Constrained Observations', value: (row) => row.constrainedObservations || row.constrainedRows },
+          { label: 'Quota Available', value: (row) => row.totalQuotaAvailable }
+        ] }
+      ];
+    }
+
+    if (activeView === 'family-summary') {
+      return [{ value: 'client:family-summary', label: 'CSV Export', type: 'client', filenameBase: 'family-summary', rows: familySummaryRows, columns: [
+        { label: 'Family', value: (row) => row.family },
+        { label: 'SKUs', value: (row) => row.skus },
+        { label: 'OK SKUs', value: (row) => row.ok },
+        { label: 'Largest', value: (row) => row.largest },
+        { label: 'Zones', value: (row) => row.zones },
+        { label: 'Status', value: (row) => row.status },
+        { label: 'Quota', value: (row) => row.quota }
+      ] }];
+    }
+
+    if (activeView === 'region-matrix') {
+      return [{ value: 'client:region-matrix', label: 'CSV Export', type: 'client', filenameBase: 'region-matrix', rows: matrix.rows, columns: [
+        { label: 'Family', value: (row) => row.family },
+        { label: 'Key', value: (row) => row.rowStatus },
+        { label: 'Ready', value: (row) => row.readyRegionCount },
+        ...matrix.regions.map((region) => ({ label: region, value: (row) => matrix.resolveCellStatus(row.regionMap[region]) }))
+      ] }];
+    }
+
+    if (activeView === 'trend') {
+      return [{ value: 'client:trend', label: 'CSV Export', type: 'client', filenameBase: 'trend-history', rows: trendRows, columns: [
+        { label: 'Day', value: (row) => row.day },
+        { label: 'Total Rows', value: (row) => row.totalRows },
+        { label: 'Constrained Rows', value: (row) => row.constrainedRows },
+        { label: 'Total Quota Available', value: (row) => row.totalQuotaAvailable },
+        { label: 'Daily Peak Utilization Pct', value: (row) => row.peakUtilizationPct },
+        { label: 'Rolling 7 Day Peak Utilization Pct', value: (row) => row.rolling7DayPeakUtilizationPct },
+        { label: 'Rolling 14 Day Peak Utilization Pct', value: (row) => row.rolling14DayPeakUtilizationPct }
+      ] }];
+    }
+
+    if (activeView === 'ai-summary-report') {
+      return [{ value: 'client:ai-summary', label: 'CSV Export', type: 'client', filenameBase: 'ai-summary-report', rows: aiSummaryMatrixExport.rows, columns: [
+        { label: 'Provider', value: (row) => row.provider },
+        ...aiSummaryMatrixExport.regionOrder.map((region) => ({ label: region, value: (row) => row[region] })),
+        { label: 'Covered Regions', value: (row) => row.coveredRegions }
+      ] }];
+    }
+
+    if (activeView === 'ai-model-availability') {
+      return [{ value: 'client:ai-model-availability', label: 'CSV Export', type: 'client', filenameBase: 'ai-model-availability', rows: aiModelRows, columns: [
+        { label: 'Provider', value: (row) => getAIModelProviderLabel(row) },
+        { label: 'Model', value: (row) => row.modelName },
+        { label: 'Version', value: (row) => row.modelVersion },
+        { label: 'Region', value: (row) => row.region },
+        { label: 'Deployment Types', value: (row) => row.deploymentTypes || '' },
+        { label: 'Fine-Tuning', value: (row) => row.finetuneCapable },
+        { label: 'Default', value: (row) => row.isDefault },
+        { label: 'Format', value: (row) => row.modelFormat },
+        { label: 'SKU', value: (row) => row.skuName },
+        { label: 'Deprecation', value: (row) => formatDateValue(row.deprecationDate) },
+        { label: 'Updated', value: (row) => formatTimestamp(row.capturedAtUtc) }
+      ] }];
+    }
+
+    if (activeView === 'quota-workbench') {
+      return [
+        { value: 'client:quota-workbench-shareable', label: 'CSV Export: Allocation Report', type: 'client', filenameBase: 'quota-workbench-allocation-report', rows: quotaState.shareableReport.rows, columns: [
+          { label: 'Subscription Id', value: (row) => row.subscriptionId },
+          { label: 'Region', value: (row) => row.region },
+          { label: 'Quota SKU / Family', value: (row) => row.displayName || row.resourceName || '' },
+          { label: 'Resource Name', value: (row) => row.resourceName || '' },
+          { label: 'Quota Group', value: (row) => row.shareableQuota },
+          { label: 'Assigned Quota', value: (row) => row.quotaLimit }
+        ] },
+        { value: 'client:quota-workbench-candidates', label: 'CSV Export: Candidates', type: 'client', filenameBase: 'quota-workbench-candidates', rows: filteredQuotaCandidateRows, columns: [
+          { label: 'Subscription Name', value: (row) => row.subscriptionName || row.subscriptionId },
+          { label: 'Subscription Id', value: (row) => row.subscriptionId },
+          { label: 'Region', value: (row) => row.region },
+          { label: 'Family', value: (row) => row.family },
+          { label: 'SKUs', value: (row) => formatSkuList(row) },
+          { label: 'Availability', value: (row) => row.availability },
+          { label: 'Current', value: (row) => row.quotaCurrent },
+          { label: 'Limit', value: (row) => row.quotaLimit },
+          { label: 'Available', value: (row) => row.quotaAvailable },
+          { label: 'Need', value: (row) => getQuotaRecipientNeed(row) },
+          { label: 'Movable', value: (row) => row.movableQuota || row.suggestedMovable },
+          { label: 'Status', value: (row) => row.status || row.candidateStatus }
+        ] },
+        { value: 'client:quota-workbench-runs', label: 'CSV Export: Captured Runs', type: 'client', filenameBase: 'quota-workbench-runs', rows: quotaState.quotaRuns, columns: [
+          { label: 'Run ID', value: (row) => row.analysisRunId },
+          { label: 'Captured At', value: (row) => row.capturedAtUtc },
+          { label: 'Rows', value: (row) => row.rowCount || row.candidateCount || 0 },
+          { label: 'Subscriptions', value: (row) => row.subscriptionCount || 0 },
+          { label: 'Movable Rows', value: (row) => row.movableCandidateCount || 0 }
+        ] },
+        { value: 'client:quota-workbench-plan', label: 'CSV Export: Planned Moves', type: 'client', filenameBase: 'quota-workbench-plan', rows: quotaState.planRows, columns: [
+          { label: 'Region', value: (row) => row.region },
+          { label: 'Quota Family', value: (row) => row.quotaName },
+          { label: 'Selected SKU', value: (row) => row.selectedSku || '' },
+          { label: 'SKUs In Scope', value: (row) => formatSkuList(row) },
+          { label: 'Donor', value: (row) => row.donorSubscriptionName },
+          { label: 'Recipient', value: (row) => row.recipientSubscriptionName },
+          { label: 'Transfer', value: (row) => row.transferAmount },
+          { label: 'Donor Before', value: (row) => row.donorAvailableBefore },
+          { label: 'Donor Left', value: (row) => row.donorRemainingMovable },
+          { label: 'Recipient Need', value: (row) => row.recipientNeededQuota },
+          { label: 'Need Left', value: (row) => row.recipientRemainingNeed },
+          { label: 'Recipient State', value: (row) => row.recipientAvailabilityState }
+        ] },
+        { value: 'client:quota-workbench-simulation', label: 'CSV Export: Simulation Impact', type: 'client', filenameBase: 'quota-workbench-simulation', rows: quotaState.impactRows, columns: [
+          { label: 'Role', value: (row) => row.role },
+          { label: 'Subscription', value: (row) => row.subscriptionName },
+          { label: 'Region', value: (row) => row.region },
+          { label: 'Quota Family', value: (row) => row.quotaName },
+          { label: 'SKUs In Scope', value: (row) => formatSkuList(row) },
+          { label: 'Delta', value: (row) => row.delta },
+          { label: 'Before', value: (row) => row.quotaAvailableBefore },
+          { label: 'After', value: (row) => row.quotaAvailableAfter },
+          { label: 'Gap Before', value: (row) => row.gapBefore },
+          { label: 'Gap After', value: (row) => row.gapAfter },
+          { label: 'Projected', value: (row) => row.projectedState }
+        ] },
+        { value: 'client:quota-workbench-apply', label: 'CSV Export: Apply Results', type: 'client', filenameBase: 'quota-workbench-apply-results', rows: quotaState.applyResults, columns: [
+          { label: 'Subscription Id', value: (row) => row.subscriptionId },
+          { label: 'Region', value: (row) => row.region },
+          { label: 'Quota Family', value: (row) => row.quotaName },
+          { label: 'Rows', value: (row) => row.rowsSubmitted },
+          { label: 'Requested Cores', value: (row) => row.requestedCores },
+          { label: 'Status', value: (row) => row.status },
+          { label: 'Error', value: (row) => row.error || '' }
+        ] }
+      ];
+    }
+
+    if (activeView === 'admin') {
+      return [{ value: 'client:admin-status', label: 'CSV Export', type: 'client', filenameBase: 'admin-ingestion-status', rows: adminExportRows, columns: [
+        { label: 'Section', value: (row) => row.section },
+        { label: 'Metric', value: (row) => row.metric },
+        { label: 'Value', value: (row) => row.value }
+      ] }];
+    }
+
+    return [];
+  }, [activeView, adminExportRows, aiModelRows, aiSummaryMatrixExport.regionOrder, aiSummaryMatrixExport.rows, capacityScores.rows, capacityScores.subscriptionSummary, filteredPaaSRows, filteredQuotaCandidateRows, familySummaryRows, matrix.regions, matrix.resolveCellStatus, matrix.rows, quotaState.applyResults, quotaState.impactRows, quotaState.planRows, quotaState.quotaRuns, quotaState.shareableReport.rows, recommendationRows, regionHealth, scopedRegionOptions, topSkus, trendRows]);
 
   useEffect(() => {
     if (!Array.isArray(subscriptionOptions) || subscriptionOptions.length === 0) {
@@ -2963,13 +3467,26 @@ function App() {
   }, [capacityData.facets.families, filters.family, livePlacementFamily]);
 
   useEffect(() => {
+    if (activeReportExportOptions.length === 0) {
+      if (selectedExportOption) {
+        setSelectedExportOption('');
+      }
+      return;
+    }
+
+    if (!activeReportExportOptions.some((option) => option.value === selectedExportOption)) {
+      setSelectedExportOption(activeReportExportOptions[0].value);
+    }
+  }, [activeReportExportOptions, selectedExportOption]);
+
+  useEffect(() => {
     if (!filters.family || filters.family === 'all') {
       return;
     }
     if (filteredFamilyOptions.includes(filters.family)) {
       return;
     }
-    setFilters((current) => ({ ...current, family: 'all' }));
+    setFilters((current) => ({ ...current, family: 'all', sku: 'all' }));
   }, [filteredFamilyOptions, filters.family]);
 
   useEffect(() => {
@@ -2979,8 +3496,18 @@ function App() {
     if (familyBaseOptions.some((option) => option.value === filters.familyBase)) {
       return;
     }
-    setFilters((current) => ({ ...current, familyBase: 'all', family: 'all' }));
+    setFilters((current) => ({ ...current, familyBase: 'all', family: 'all', sku: 'all' }));
   }, [familyBaseOptions, filters.familyBase]);
+
+  useEffect(() => {
+    if (!filters.sku || filters.sku === 'all') {
+      return;
+    }
+    if (scopedSkuOptions.includes(filters.sku)) {
+      return;
+    }
+    setFilters((current) => ({ ...current, sku: 'all' }));
+  }, [filters.sku, scopedSkuOptions]);
 
   useEffect(() => {
     if (!recommendedTargetSku) {
@@ -3184,17 +3711,20 @@ function App() {
         const sanitizedRegions = (Array.isArray(payload.facets && payload.facets.regions) ? payload.facets.regions : []).filter(isDisplayableRegion);
         const sanitizedFamilies = (Array.isArray(payload.facets && payload.facets.families) ? payload.facets.families : []).filter(isDisplayableFamily);
         const canonicalFamilies = buildFamilyOptions(sanitizedFamilies).map((option) => option.value);
+        const sanitizedSkus = (Array.isArray(payload.facets && payload.facets.skus) ? payload.facets.skus : [])
+          .map((sku) => normalizeSkuName(sku))
+          .filter((sku) => sku && !isAggregateSkuName(sku));
         setCapacityData({
           rows: Array.isArray(payload.data) ? payload.data.map((row) => ({ ...row, sku: normalizeSkuName(row.sku) })) : [],
           summary: payload.summary || null,
-          facets: { regions: sanitizedRegions, families: canonicalFamilies },
+          facets: { regions: sanitizedRegions, families: canonicalFamilies, skus: [...new Set(sanitizedSkus)].sort((left, right) => compareSkuValues(left, right)) },
           pagination: payload.pagination || { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false }
         });
       } catch (error) {
         if (capacityGridRequestRef.current !== requestId) {
           return;
         }
-        setCapacityData({ rows: [], summary: null, facets: { regions: [], families: [] }, pagination: { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false } });
+        setCapacityData({ rows: [], summary: null, facets: { regions: [], families: [], skus: [] }, pagination: { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false } });
         setAppStatus({ tone: 'error', message: error.message || 'Failed to load capacity grid.' });
       }
     }
@@ -3306,9 +3836,22 @@ function App() {
       const query = new URLSearchParams(queryFilters);
       const trendQuery = new URLSearchParams({ ...queryFilters, days: '7' }).toString();
 
+      fetchJsonWithRetry(`/api/capacity/trends?${trendQuery}`)
+        .then((payload) => {
+          if (analyticsRequestRef.current !== requestId) {
+            return;
+          }
+          setTrendRows(Array.isArray(payload.rows) ? payload.rows : []);
+        })
+        .catch(() => {
+          if (analyticsRequestRef.current !== requestId) {
+            return;
+          }
+          setTrendRows([]);
+        });
+
       const results = await Promise.allSettled([
         fetchJson(`/api/capacity/analytics?${query.toString()}`),
-        fetchJsonWithRetry(`/api/capacity/trends?${trendQuery}`),
         fetchJson(`/api/capacity/families?${new URLSearchParams({ ...queryFilters, family: 'all' }).toString()}`),
         fetchJson(`/api/capacity/subscriptions?${query.toString()}`)
       ]);
@@ -3317,7 +3860,7 @@ function App() {
         return;
       }
 
-      const [capacityResult, trendResult, familyResult, subSummaryResult] = results;
+      const [capacityResult, familyResult, subSummaryResult] = results;
       const failures = results.filter((result) => result.status === 'rejected');
 
       if (capacityResult.status === 'fulfilled') {
@@ -3332,14 +3875,10 @@ function App() {
         setCapacityAnalytics({ regionHealth: [], topSkus: [], matrix: { regions: [], rows: [] }, recommendedTargetSku: '', aiQuotaProviderOptions: [] });
       }
 
-      if (trendResult.status === 'fulfilled') {
-        setTrendRows(Array.isArray(trendResult.value.rows) ? trendResult.value.rows : []);
-      } else {
-        setTrendRows([]);
-      }
-
       if (familyResult.status === 'fulfilled') {
         setFamilyRows(Array.isArray(familyResult.value.rows) ? familyResult.value.rows : []);
+      } else {
+        setFamilyRows([]);
       }
 
       if (subSummaryResult.status === 'fulfilled') {
@@ -3353,6 +3892,11 @@ function App() {
             desiredCount
           };
         });
+      } else {
+        setCapacityScores((current) => ({
+          ...current,
+          subscriptionSummary: []
+        }));
       }
 
       if (failures.length > 0) {
@@ -3447,6 +3991,7 @@ function App() {
       regionPreset: filters.regionPreset,
       region: filters.region,
       family: filters.family,
+      sku: filters.sku,
       availability: filters.availability,
       resourceType: filters.resourceType,
       subscriptionIds: selectedSubscriptionIds.join(','),
@@ -3558,16 +4103,19 @@ function App() {
   function updateFilter(name, value) {
     setFilters((current) => {
       if (name === 'regionPreset') {
-        return { ...current, regionPreset: value, region: 'all', familyBase: 'all', family: 'all' };
+        return { ...current, regionPreset: value, region: 'all', familyBase: 'all', family: 'all', sku: 'all' };
       }
       if (name === 'region') {
-        return { ...current, region: value, familyBase: 'all', family: 'all' };
+        return { ...current, region: value, familyBase: 'all', family: 'all', sku: 'all' };
       }
       if (name === 'resourceType') {
-        return { ...current, resourceType: value, provider: value === 'AI' ? current.provider : 'all', familyBase: 'all', family: 'all' };
+        return { ...current, resourceType: value, provider: value === 'AI' ? current.provider : 'all', familyBase: 'all', family: 'all', sku: 'all' };
       }
       if (name === 'familyBase') {
-        return { ...current, familyBase: value, family: 'all' };
+        return { ...current, familyBase: value, family: 'all', sku: 'all' };
+      }
+      if (name === 'family') {
+        return { ...current, family: value, sku: 'all' };
       }
       return { ...current, [name]: value };
     });
@@ -3585,10 +4133,10 @@ function App() {
     setSelectedSubscriptionIds([]);
   }
 
-  async function downloadCapacityExport(format, variant = 'grid') {
+  async function downloadCapacityExport(format, variant = 'grid', busyKeyOverride = '') {
     const normalizedFormat = String(format || 'csv').toLowerCase() === 'xlsx' ? 'xlsx' : 'csv';
     const normalizedVariant = String(variant || 'grid').toLowerCase() === 'report' ? 'report' : 'grid';
-    const busyKey = `${normalizedFormat}:${normalizedVariant}`;
+    const busyKey = busyKeyOverride || `server:${normalizedFormat}:${normalizedVariant}`;
     setExportBusyFormat(busyKey);
     try {
       const query = new URLSearchParams({ ...queryFilters, format: normalizedFormat, variant: normalizedVariant });
@@ -3612,14 +4160,7 @@ function App() {
 
       const blob = await response.blob();
       const filename = getFilenameFromDisposition(response.headers.get('content-disposition'), `capacity-dashboard-export.${normalizedFormat}`);
-      const objectUrl = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = objectUrl;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(objectUrl);
+      triggerFileDownload(blob, filename);
       setAppStatus({ tone: 'success', message: `Downloaded ${filename}.` });
     } catch (error) {
       setAppStatus({ tone: 'error', message: error.message || 'Failed to export capacity data.' });
@@ -3628,9 +4169,44 @@ function App() {
     }
   }
 
-  function runSelectedCapacityExport() {
-    const [format, variant] = String(selectedCapacityExport || 'xlsx:report').split(':');
-    downloadCapacityExport(format || 'xlsx', variant || 'report');
+  async function downloadClientCsvExport(option) {
+    if (!option) {
+      setAppStatus({ tone: 'warn', message: 'No export is configured for this report.' });
+      return;
+    }
+
+    setExportBusyFormat(option.value);
+    try {
+      const rows = Array.isArray(option.rows) ? option.rows : [];
+      if (rows.length === 0) {
+        setAppStatus({ tone: 'warn', message: option.emptyMessage || 'No rows are available to export for this report.' });
+        return;
+      }
+
+      const csv = buildClientCsv(option.columns, rows);
+      const filename = `${sanitizeExportFilenamePart(option.filenameBase || REPORT_VIEWS.find((view) => view.key === activeView)?.label || activeView)}-${buildExportTimestamp()}.csv`;
+      triggerFileDownload(new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' }), filename);
+      setAppStatus({ tone: 'success', message: `Downloaded ${filename}.` });
+    } catch (error) {
+      setAppStatus({ tone: 'error', message: error.message || 'Failed to export report data.' });
+    } finally {
+      setExportBusyFormat('');
+    }
+  }
+
+  function runSelectedExport() {
+    const option = activeReportExportOptions.find((candidate) => candidate.value === selectedExportOption) || activeReportExportOptions[0];
+    if (!option) {
+      setAppStatus({ tone: 'warn', message: 'No export is configured for this report.' });
+      return;
+    }
+
+    if (option.type === 'server') {
+      downloadCapacityExport(option.format || 'csv', option.variant || 'grid', option.value);
+      return;
+    }
+
+    downloadClientCsvExport(option);
   }
 
   async function runRecommendation() {
@@ -4121,7 +4697,7 @@ function App() {
       return <AIModelAvailabilityView rows={aiModelRows} status={aiModelState.status} loading={aiModelState.loading} filters={aiModelFilters} />;
     }
     if (activeView === 'capacity-score') {
-      return <div className="rx-view-stack"><section className="rx-panel rx-panel--compact"><div className="rx-panel__header"><div><h2>Regional SKU Capacity Score</h2><p>Derived capacity score plus the latest saved or refreshed live placement details.</p></div></div><div className="rx-field-grid rx-field-grid--filters"><label className="rx-field"><span>Desired Placement Count</span><input className="rx-input" type="number" min="1" max="1000" value={capacityScores.desiredCount} onChange={(event) => setCapacityScores((current) => ({ ...current, desiredCount: String(normalizeDesiredPlacementCount(event.target.value)), pagination: { ...current.pagination, pageNumber: 1 } }))} /></label><label className="rx-field rx-field--wide"><span>Live Placement Subscription</span><select value={livePlacementSubscriptionId} onChange={(event) => setLivePlacementSubscriptionId(event.target.value)}><option value="">Select subscription</option>{subscriptionOptions.map((option) => <option key={option.subscriptionId} value={option.subscriptionId}>{option.subscriptionName || option.subscriptionId} ({option.subscriptionId})</option>)}</select></label><label className="rx-field"><span>Live Placement Family</span><select value={livePlacementFamily} onChange={(event) => setLivePlacementFamily(event.target.value)}><option value="">Select family</option>{capacityData.facets.families.map((family) => <option key={family} value={family}>{formatFamilyLabel(family) || family}</option>)}</select></label></div><div className="rx-inline-actions"><span className="rx-selected-count">{livePlacementScopeMessage}</span><button className="rx-button" type="button" disabled={capacityScores.busy || !canRefreshLivePlacement} onClick={refreshLivePlacement}>{capacityScores.busy ? 'Refreshing...' : 'Refresh Live Placement'}</button></div><Banner tone={capacityScores.status.tone} message={capacityScores.status.message} detail={capacityScores.status.detail} /></section><section className="rx-panel rx-panel--compact rx-panel--muted"><div className="rx-panel__header"><div><h2>Capacity Score Key</h2><p>Use this legend to distinguish saved capacity signals from live Azure placement responses.</p></div></div><div className="rx-matrix-key rx-matrix-key--compact"><div className="rx-matrix-key__group"><h3>Capacity Score</h3>{capacityScoreLegendItems().map((item) => <div key={item.value} className="rx-matrix-key__item"><StatusPill value={item.value} /><div><p>{item.description}</p></div></div>)}</div><div className="rx-matrix-key__group"><h3>Azure Live Score</h3>{livePlacementLegendItems().map((item) => <div key={item.value} className="rx-matrix-key__item"><StatusPill value={item.value} /><div><p>{item.description}</p></div></div>)}<div className="rx-matrix-key__item"><div><strong>Last Checked</strong><p>The timestamp shows when the latest live result or latest explicit unavailable result was saved.</p></div></div></div></div></section><DataTable title="Capacity Score" subtitle="Derived capacity score plus latest live placement details from SQL snapshots." tableClassName="rx-table--dense rx-capacity-score-table" sectionClassName="rx-panel--compact" columns={[{ key: 'region', label: 'Region' }, { key: 'sku', label: 'SKU', render: (row) => normalizeSkuName(row.sku) || 'n/a' }, { key: 'family', label: 'Family', render: (row) => formatFamilyLabel(row.family) || 'n/a' }, { key: 'score', label: 'Capacity Score', render: (row) => <StatusPill value={row.score} /> }, { key: 'livePlacementScore', label: 'Azure Live Score', render: (row) => row.livePlacementScore || 'n/a' }, { key: 'liveCheckedAtUtc', label: 'Checked', render: (row) => formatTimestamp(row.liveCheckedAtUtc) }, { key: 'subscriptionCount', label: 'Subscriptions', render: (row) => formatNumber(row.subscriptionCount) }, { key: 'okRows', label: 'OK', render: (row) => formatNumber(row.okRows) }, { key: 'limitedRows', label: 'Limited', render: (row) => formatNumber(row.limitedRows) }, { key: 'constrainedRows', label: 'Constrained', render: (row) => formatNumber(row.constrainedRows) }, { key: 'totalQuotaAvailable', label: 'Quota', render: (row) => formatNumber(row.totalQuotaAvailable) }, { key: 'reason', label: 'Reason', headerClassName: 'rx-capacity-score-table__reason', cellClassName: 'rx-capacity-score-table__reason', render: (row) => <span title={row.reason || ''}>{row.reason || 'n/a'}</span> }]} rows={capacityScores.rows} emptyMessage="No capacity score entries available." /><ServerPagination pagination={capacityScores.pagination} onPageChange={(pageNumber) => setCapacityScores((current) => ({ ...current, pagination: { ...current.pagination, pageNumber: Math.max(1, pageNumber) } }))} onPageSizeChange={(pageSize) => setCapacityScores((current) => ({ ...current, pagination: { ...current.pagination, pageNumber: 1, pageSize: Math.max(1, pageSize) } }))} /><DataTable title="Subscription Summary" tableClassName="rx-table--dense" sectionClassName="rx-panel--compact" columns={[{ key: 'subscriptionKey', label: 'Subscription Key' }, { key: 'skuObservations', label: 'SKU Observations', render: (row) => formatNumber(row.skuObservations || row.totalRows) }, { key: 'constrainedObservations', label: 'Constrained', render: (row) => formatNumber(row.constrainedObservations || row.constrainedRows) }, { key: 'totalQuotaAvailable', label: 'Quota Available', render: (row) => formatNumber(row.totalQuotaAvailable) }]} rows={capacityScores.subscriptionSummary} emptyMessage="No subscription summary rows available." /></div>;
+      return <div className="rx-view-stack"><section className="rx-panel rx-panel--compact"><div className="rx-panel__header"><div><h2>Regional SKU Capacity Score</h2><p>Derived capacity score plus the latest saved or refreshed live placement details.</p></div></div><div className="rx-field-grid rx-field-grid--filters"><label className="rx-field"><span>Desired Placement Count</span><input className="rx-input" type="number" min="1" max="1000" value={capacityScores.desiredCount} onChange={(event) => setCapacityScores((current) => ({ ...current, desiredCount: String(normalizeDesiredPlacementCount(event.target.value)), pagination: { ...current.pagination, pageNumber: 1 } }))} /></label><label className="rx-field rx-field--wide"><span>Live Placement Subscription</span><select value={livePlacementSubscriptionId} onChange={(event) => setLivePlacementSubscriptionId(event.target.value)}><option value="">Select subscription</option>{subscriptionOptions.map((option) => <option key={option.subscriptionId} value={option.subscriptionId}>{option.subscriptionName || option.subscriptionId} ({option.subscriptionId})</option>)}</select></label><label className="rx-field"><span>Live Placement Family</span><select value={livePlacementFamily} onChange={(event) => setLivePlacementFamily(event.target.value)}><option value="">Select family</option>{capacityData.facets.families.map((family) => <option key={family} value={family}>{formatFamilyLabel(family) || family}</option>)}</select></label></div><div className="rx-inline-actions"><span className="rx-selected-count">{livePlacementScopeMessage}</span><button className="rx-button" type="button" disabled={capacityScores.busy || !canRefreshLivePlacement} onClick={refreshLivePlacement}>{capacityScores.busy ? 'Refreshing...' : 'Refresh Live Placement'}</button></div><Banner tone={capacityScores.status.tone} message={capacityScores.status.message} detail={capacityScores.status.detail} /></section><section className="rx-panel rx-panel--compact rx-panel--muted"><div className="rx-panel__header"><div><h2>Capacity Score Key</h2><p>Use this legend to distinguish saved capacity signals from live Azure placement responses.</p></div></div><div className="rx-matrix-key rx-matrix-key--compact"><div className="rx-matrix-key__group"><h3>Capacity Score</h3>{capacityScoreLegendItems().map((item) => <div key={item.value} className="rx-matrix-key__item"><StatusPill value={item.value} label={item.title} /><div><p>{item.description}</p></div></div>)}</div><div className="rx-matrix-key__group"><h3>Azure Live Score</h3>{livePlacementLegendItems().map((item) => <div key={item.value} className="rx-matrix-key__item"><StatusPill value={item.value} /><div><p>{item.description}</p></div></div>)}<div className="rx-matrix-key__item"><div><strong>Last Checked</strong><p>The timestamp shows when the latest live result or latest explicit unavailable result was saved.</p></div></div></div></div></section><DataTable title="Capacity Score" subtitle="Derived capacity score plus latest live placement details from SQL snapshots." tableClassName="rx-table--dense rx-capacity-score-table" sectionClassName="rx-panel--compact" columns={[{ key: 'region', label: 'Region' }, { key: 'sku', label: 'SKU', render: (row) => normalizeSkuName(row.sku) || 'n/a' }, { key: 'family', label: 'Family', render: (row) => formatFamilyLabel(row.family) || 'n/a' }, { key: 'score', label: 'Capacity Score', render: (row) => { const display = getCapacityScoreDisplayMeta(row); return <StatusPill value={display.value} label={display.label} />; } }, { key: 'livePlacementScore', label: 'Azure Live Score', render: (row) => row.livePlacementScore || 'n/a' }, { key: 'liveCheckedAtUtc', label: 'Checked', render: (row) => formatTimestamp(row.liveCheckedAtUtc) }, { key: 'subscriptionCount', label: 'Subscriptions', render: (row) => formatNumber(row.subscriptionCount) }, { key: 'okRows', label: 'OK', render: (row) => formatNumber(row.okRows) }, { key: 'limitedRows', label: 'Limited', render: (row) => formatNumber(row.limitedRows) }, { key: 'constrainedRows', label: 'Constrained', render: (row) => formatNumber(row.constrainedRows) }, { key: 'totalQuotaAvailable', label: 'Quota', render: (row) => formatNumber(row.totalQuotaAvailable) }, { key: 'reason', label: 'Reason', headerClassName: 'rx-capacity-score-table__reason', cellClassName: 'rx-capacity-score-table__reason', render: (row) => <span title={row.reason || ''}>{row.reason || 'n/a'}</span> }]} rows={capacityScores.rows} emptyMessage="No capacity score entries available." /><ServerPagination pagination={capacityScores.pagination} onPageChange={(pageNumber) => setCapacityScores((current) => ({ ...current, pagination: { ...current.pagination, pageNumber: Math.max(1, pageNumber) } }))} onPageSizeChange={(pageSize) => setCapacityScores((current) => ({ ...current, pagination: { ...current.pagination, pageNumber: 1, pageSize: Math.max(1, pageSize) } }))} /><DataTable title="Subscription Summary" tableClassName="rx-table--dense" sectionClassName="rx-panel--compact" columns={[{ key: 'subscriptionKey', label: 'Subscription Key' }, { key: 'skuObservations', label: 'SKU Observations', render: (row) => formatNumber(row.skuObservations || row.totalRows) }, { key: 'constrainedObservations', label: 'Constrained', render: (row) => formatNumber(row.constrainedObservations || row.constrainedRows) }, { key: 'totalQuotaAvailable', label: 'Quota Available', render: (row) => formatNumber(row.totalQuotaAvailable) }]} rows={capacityScores.subscriptionSummary} emptyMessage="No subscription summary rows available." /></div>;
     }
     if (activeView === 'family-summary') {
       return <DataTable key="family-summary" title="Family Summary" subtitle="Compute-family rollup optimized for quota planning conversations." columns={[{ key: 'family', label: 'Family' }, { key: 'skus', label: 'SKUs', render: (row) => formatNumber(row.skus) }, { key: 'ok', label: 'OK SKUs', render: (row) => formatNumber(row.ok) }, { key: 'largest', label: 'Largest' }, { key: 'zones', label: 'Zones' }, { key: 'status', label: 'Status', render: (row) => <StatusPill value={row.status} /> }, { key: 'quota', label: 'Quota', render: (row) => formatNumber(row.quota) }]} rows={familySummaryRows} emptyMessage="No family summary rows available." />;
@@ -4163,16 +4739,26 @@ function App() {
             <button key={view.key} className={classNames('rx-nav-item', activeView === view.key && 'is-active')} type="button" onClick={() => setActiveView(view.key)}>{view.label}</button>
           ))}
         </nav>
-        {activeView === 'capacity-grid' ? <><div className="rx-nav-group">Exports</div><div className="rx-export-box"><label className="rx-field rx-field--compact"><span>Export option</span><select value={selectedCapacityExport} onChange={(event) => setSelectedCapacityExport(event.target.value)} disabled={Boolean(exportBusyFormat)}><option value="csv:grid">CSV Export</option><option value="xlsx:grid">Grid XLSX</option><option value="xlsx:report">Report XLSX</option></select></label><div className="rx-export-box__actions"><span className="rx-selected-count">Uses the current sidebar filter scope.</span><button className="rx-button rx-button--secondary rx-button--compact" type="button" disabled={Boolean(exportBusyFormat)} onClick={runSelectedCapacityExport}>{exportBusyFormat ? 'Running...' : 'Run'}</button></div></div></> : null}
+        <div className="rx-nav-group">Exports</div>
+        <div className="rx-export-box">
+          <label className="rx-field rx-field--compact">
+            <span>Export option</span>
+            <select value={selectedExportOption} onChange={(event) => setSelectedExportOption(event.target.value)} disabled={Boolean(exportBusyFormat) || activeReportExportOptions.length === 0}>
+              {activeReportExportOptions.length === 0 ? <option value="">No exports available</option> : activeReportExportOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          <div className="rx-export-box__actions">
+            <span className="rx-selected-count">{activeView === 'capacity-grid' ? 'Uses the current sidebar filter scope.' : `Exports the current ${REPORT_VIEWS.find((view) => view.key === activeView)?.label || activeView} dataset.`}</span>
+            <button className="rx-button rx-button--secondary rx-button--compact" type="button" disabled={Boolean(exportBusyFormat) || activeReportExportOptions.length === 0} onClick={runSelectedExport}>{exportBusyFormat ? 'Running...' : 'Run'}</button>
+          </div>
+        </div>
         {auth && auth.canAccessAdmin ? <><div className="rx-nav-group">Admin</div><nav className="rx-nav-list">{adminViews.map((view) => <button key={view.key} className={classNames('rx-nav-item', activeView === view.key && 'is-active')} type="button" onClick={() => setActiveView(view.key)}>{view.label}</button>)}</nav></> : null}
       </aside>
 
       <main className="rx-main">
-        <header className="rx-topbar">
-          <div>
+        <header className={classNames('rx-topbar', drawerOpen && 'is-drawer-open')}>
+          <div className="rx-topbar__intro">
             <div className="rx-kicker">{deploymentEnvironment.label}</div>
-            <h2>{REPORT_VIEWS.find((view) => view.key === activeView)?.label || 'React V2'}</h2>
-            <p>Right-side flyout keeps high-cardinality filters like subscriptions out of the main content flow.</p>
           </div>
           <div className="rx-topbar__actions">
             {isAdminView ? <label className="rx-check rx-check--sql-toggle"><input type="checkbox" checked={showSqlPreview} disabled={uiSettingsBusy} onChange={(event) => handleShowSqlPreviewChange(event.target.checked)} />Show SQL</label> : null}
@@ -4184,9 +4770,9 @@ function App() {
             <button className="rx-button rx-button--secondary" type="button" onClick={() => setSidebarOpen((current) => !current)}>{sidebarOpen ? 'Hide Reports' : 'Show Reports'}</button>
             <button className="rx-button rx-button--secondary" type="button" onClick={() => setDrawerOpen((current) => !current)}>{drawerOpen ? 'Hide Filters' : 'Show Filters'}</button>
           </div>
+          <Banner tone={appStatus.tone} message={appStatus.message} className="rx-topbar__status" />
         </header>
 
-        <Banner tone={appStatus.tone} message={appStatus.message} />
         {viewContent}
         {auth?.canAccessAdmin && showSqlPreview ? <SqlPreviewPanel activeViewLabel={REPORT_VIEWS.find((view) => view.key === activeView)?.label || activeView} loading={sqlPreviewState.loading} error={sqlPreviewState.error} rows={sqlPreviewState.rows} /> : null}
       </main>
@@ -4213,7 +4799,7 @@ function App() {
             <label className="rx-field"><span>Resource type</span><select value={filters.resourceType} onChange={(event) => updateFilter('resourceType', event.target.value)}>{RESOURCE_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
             {filters.resourceType === 'AI' && aiQuotaProviderOptions.length > 0 ? <label className="rx-field"><span>AI provider</span><select value={filters.provider} onChange={(event) => updateFilter('provider', event.target.value)}><option value="all">All verified providers</option>{aiQuotaProviderOptions.map((provider) => <option key={provider} value={provider}>{provider}</option>)}</select></label> : null}
             <label className="rx-field"><span>Family base</span><select value={filters.familyBase} onChange={(event) => updateFilter('familyBase', event.target.value)}><option value="all">All bases</option>{familyBaseOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-            <label className="rx-field"><span>Family</span><select value={filters.family} onChange={(event) => updateFilter('family', event.target.value)}><option value="all">All Families</option>{filteredFamilyOptions.map((family) => <option key={family} value={family}>{formatFamilyLabel(family) || family}</option>)}</select></label>
+            <label className="rx-field"><span>SKU family</span><select value={filters.family} onChange={(event) => updateFilter('family', event.target.value)}><option value="all">All families</option>{filteredFamilyOptions.map((family) => <option key={family} value={family}>{formatFamilyLabel(family) || family}</option>)}</select></label>
             <label className="rx-field"><span>Availability</span><select value={filters.availability} onChange={(event) => updateFilter('availability', event.target.value)}><option value="all">All states</option><option value="OK">OK</option><option value="LIMITED">LIMITED</option><option value="CONSTRAINED">CONSTRAINED</option><option value="RESTRICTED">RESTRICTED</option></select></label>
           </DrawerFilterSection>
           <DrawerFilterSection title="Subscriptions">

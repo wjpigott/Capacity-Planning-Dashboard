@@ -193,29 +193,66 @@ body {
 }
 
 .rx-topbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: flex-start;
-  justify-content: space-between;
   gap: 16px;
   margin-bottom: 18px;
 }
 
+.rx-topbar.is-drawer-open {
+  grid-template-columns: 1fr;
+}
+
+.rx-topbar__intro {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rx-topbar h2 {
+  font-size: clamp(2rem, 4vw, 3.25rem);
+  line-height: 1.05;
+}
+
+.rx-topbar.is-drawer-open h2 {
+  font-size: clamp(1.9rem, 3vw, 2.7rem);
+}
+
 .rx-topbar p {
-  margin: 8px 0 0;
+  margin: 0;
+  max-width: 48rem;
   color: var(--rx-muted);
+}
+
+.rx-topbar__status {
+  grid-column: 1 / -1;
+  margin-bottom: 0;
 }
 
 .rx-topbar__actions {
   display: flex;
   align-items: center;
-  gap: 12px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.rx-topbar.is-drawer-open .rx-topbar__actions {
+  justify-content: flex-start;
+}
+
+.rx-topbar.is-drawer-open .rx-topbar p {
+  display: none;
 }
 
 .rx-user-chip {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 10px 14px;
+  padding: 8px 12px;
   border: 1px solid rgba(213, 224, 235, 0.9);
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.84);
@@ -703,8 +740,8 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 44px;
-  padding: 0 18px;
+  min-height: 40px;
+  padding: 0 16px;
   border: none;
   border-radius: 14px;
   background: linear-gradient(180deg, #0b5fa8 0%, #004b84 100%);
@@ -986,8 +1023,8 @@ body {
 }
 
 .rx-matrix-key--compact {
-  grid-template-columns: repeat(2, max-content);
-  justify-content: start;
+  grid-template-columns: minmax(0, 1.5fr) minmax(280px, 1fr);
+  width: 100%;
   align-items: start;
   gap: 2px 12px;
 }
@@ -1006,7 +1043,7 @@ body {
 
 .rx-matrix-key__item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
   padding: 2px 0;
 }
@@ -1021,6 +1058,7 @@ body {
   flex-wrap: wrap;
   align-items: baseline;
   gap: 6px;
+  min-width: 0;
 }
 
 .rx-matrix-key--compact .rx-matrix-key__item > div {
@@ -1037,6 +1075,7 @@ body {
   color: var(--rx-muted);
   font-size: 11px;
   line-height: 1.2;
+  overflow-wrap: anywhere;
 }
 
 .rx-matrix-key--compact .rx-matrix-key__item p {
@@ -1266,9 +1305,12 @@ body {
   }
 
   .rx-hero,
-  .rx-panel__header,
-  .rx-topbar {
+  .rx-panel__header {
     flex-direction: column;
+  }
+
+  .rx-topbar {
+    grid-template-columns: 1fr;
   }
 
   .rx-sql-card__meta {

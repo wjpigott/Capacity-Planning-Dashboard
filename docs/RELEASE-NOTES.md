@@ -1,5 +1,23 @@
 # Release Notes
 
+## 2026-04-29
+
+This update captures the report regression that followed the recent shared filter and trend work, along with the fixes that restored the reporting views in dev.
+
+Highlights:
+
+- Fixed shared SKU filter normalization so the default sentinel `sku=all` is treated as no filter instead of excluding every row.
+- Restored Capacity Grid and the shared analytics reads after the filter regression by correcting `normalizeSkuFilter()` in the capacity service.
+- Verified live backend data for Region Matrix, Family Summary, and Region Health through internal diagnostics rather than relying only on the auth-gated public routes.
+- Decoupled the React analytics loader so Region Matrix, Family Summary, and Region Health no longer wait on the slower trend request before rendering.
+- Added a faster SQL aggregation path for common trend reads to reduce the amount of in-memory trend derivation work.
+
+Operational notes:
+
+- The first regression symptom was caused by the literal `all` SKU sentinel flowing into equality-based filtering.
+- A second blank-report symptom remained even after the filter fix because the shared analytics loader was blocked by the trend request timing out or running slowly.
+- After the loader decoupling change was deployed to `app-capdash-dev-cap001`, Capacity Grid, Region Matrix, Family Summary, and Region Health were all confirmed working again.
+
 ## 2026-04-23
 
 This update brings the validated Terraform deployment path into the mainline branch and aligns the deployment workflow across Bicep and Terraform.

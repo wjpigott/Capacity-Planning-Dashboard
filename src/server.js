@@ -440,6 +440,7 @@ function getCapacityFiltersFromQuery(query = {}) {
     region: getFirstQueryValue(query.region),
     family: getFirstQueryValue(query.family),
     familyBase: getFirstQueryValue(query.familyBase),
+    sku: getFirstQueryValue(query.sku),
     availability: getFirstQueryValue(query.availability),
     resourceType: getFirstQueryValue(query.resourceType),
     pageNumber: getFirstQueryValue(query.pageNumber),
@@ -708,6 +709,7 @@ function getCapacityFiltersFromQuery(query = {}) {
     region: getFirstQueryValue(query.region),
     family: getFirstQueryValue(query.family),
     familyBase: getFirstQueryValue(query.familyBase),
+    sku: getFirstQueryValue(query.sku),
     availability: getFirstQueryValue(query.availability),
     resourceType: getFirstQueryValue(query.resourceType),
     provider: getFirstQueryValue(query.provider),
@@ -2177,6 +2179,7 @@ app.get('/api/capacity/subscriptions', async (req, res) => {
       region: req.query.region,
       family: req.query.family,
       familyBase: req.query.familyBase,
+      sku: req.query.sku,
       availability: req.query.availability,
       resourceType: req.query.resourceType,
       provider: req.query.provider
@@ -2199,6 +2202,7 @@ app.get('/api/admin/sql-preview', requireAdmin, async (req, res) => {
       region: req.query.region,
       family: req.query.family,
       familyBase: req.query.familyBase,
+      sku: req.query.sku,
       quotaName: req.query.quotaName,
       availability: req.query.availability,
       resourceType: req.query.resourceType,
@@ -2221,6 +2225,7 @@ app.get('/api/capacity/trends', async (req, res) => {
       region: req.query.region,
       family: req.query.family,
       familyBase: req.query.familyBase,
+      sku: req.query.sku,
       availability: req.query.availability,
       resourceType: req.query.resourceType
     });
@@ -2238,6 +2243,7 @@ app.get('/api/capacity/families', async (req, res) => {
       region: req.query.region,
       family: req.query.family,
       familyBase: req.query.familyBase,
+      sku: req.query.sku,
       availability: req.query.availability
     });
     res.json({ rows });
@@ -2257,6 +2263,7 @@ app.get('/api/capacity/scores', async (req, res) => {
       region: req.query.region,
       family: req.query.family,
       familyBase: req.query.familyBase,
+      sku: req.query.sku,
       availability: req.query.availability,
       desiredCount: req.query.desiredCount
     }, pageNumber, pageSize);

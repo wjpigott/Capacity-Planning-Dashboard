@@ -37,9 +37,10 @@ This dashboard should call backend APIs only. Do not expose ARM credentials, sub
   - Returns accessible group quotas for the configured management group, including: managementGroupId, groupQuotaName, displayName, groupType, provisioningState, subscriptionCount, subscriptionIds
 
 - `GET /api/quota/shareable-report?managementGroupId={mgId}&groupQuotaName={quotaGroup}`
-  - Returns a read-only shareable quota allocation report for the selected quota group using Azure GroupQuota allocation data
-  - Includes only rows where `shareableQuota > 0`, with: subscriptionId, region, resourceName, displayName, quotaLimit, shareableQuota, and provisioningState
-  - Also returns summary counts for rows, subscriptions, regions, SKUs, and total shareable quota
+  - Returns a read-only quota allocation report for the selected quota group using Azure GroupQuota allocation data
+  - Includes only rows where the raw Azure `shareableQuota < 0`; the returned `shareableQuota` value is the absolute magnitude of that quota deficit
+  - Each row includes: subscriptionId, region, resourceName, displayName, quotaLimit, shareableQuota, rawShareableQuota, and provisioningState
+  - Also returns summary counts for rows, subscriptions, regions, SKUs, total allocated quota, and total reported quota deficit
 
 ## Planning APIs
 

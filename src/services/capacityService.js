@@ -668,76 +668,30 @@ async function getSubscriptions({ search, limit } = {}) {
 }
 
 async function getSubscriptionSummary(filters) {
-  if (filters.resourceType && filters.resourceType !== 'all') {
-    const rows = await getCapacityRows(filters);
-    const bySubscription = new Map();
+  const rows = await getCapacityRows(filters);
+  const bySubscription = new Map();
 
-    for (const row of rows) {
-      const key = row.subscriptionKey || 'legacy-data';
-      if (!bySubscription.has(key)) {
-        bySubscription.set(key, {
-          subscriptionKey: key,
-          rowCount: 0,
-          constrainedRows: 0,
-          totalQuotaAvailable: 0
-        });
-      }
-
-      const entry = bySubscription.get(key);
-      entry.rowCount += 1;
-      if (isBlockedAvailability(row.availability)) {
-        entry.constrainedRows += 1;
-      }
-      entry.totalQuotaAvailable += Number(row.quotaLimit || 0) - Number(row.quotaCurrent || 0);
+  for (const row of rows) {
+    const key = row.subscriptionKey || 'legacy-data';
+    if (!bySubscription.has(key)) {
+      bySubscription.set(key, {
+        subscriptionKey: key,
+        rowCount: 0,
+        constrainedRows: 0,
+        totalQuotaAvailable: 0
+      });
     }
 
-    return [...bySubscription.values()]
-      .sort((left, right) => right.rowCount - left.rowCount || left.subscriptionKey.localeCompare(right.subscriptionKey));
+    const entry = bySubscription.get(key);
+    entry.rowCount += 1;
+    if (isBlockedAvailability(row.availability)) {
+      entry.constrainedRows += 1;
+    }
+    entry.totalQuotaAvailable += Number(row.quotaLimit || 0) - Number(row.quotaCurrent || 0);
   }
 
-  const pool = await getSqlPool();
-
-  const sourceRows = applyFilters(applyRegionPreset(mockRows, filters.regionPreset), filters);
-  if (!pool) {
-    return [
-      {
-        subscriptionKey: 'legacy-data',
-        rowCount: sourceRows.length,
-        constrainedRows: sourceRows.filter((r) => isBlockedAvailability(r.availability)).length,
-        totalQuotaAvailable: sourceRows.reduce((acc, r) => acc + (r.quotaLimit - r.quotaCurrent), 0)
-      }
-    ];
-  }
-
-  const capacitySnapshotColumns = await getCapacitySnapshotColumnSet(pool);
-  const subscriptionKeyExpr = capacitySnapshotColumns.has('subscriptionKey')
-    ? "ISNULL(subscriptionKey, 'legacy-data')"
-    : "'legacy-data'";
-  const request = pool.request();
-  let query = `${buildLatestSnapshotBatchCte()}
-    SELECT
-      ${subscriptionKeyExpr} AS subscriptionKey,
-      COUNT(1) AS [rowCount],
-      SUM(CASE WHEN availabilityState IN ('CONSTRAINED', 'RESTRICTED') THEN 1 ELSE 0 END) AS [constrainedRows],
-      SUM(quotaLimit - quotaCurrent) AS [totalQuotaAvailable]
-    FROM dbo.CapacitySnapshot snapshot
-    CROSS JOIN LatestBatch latestBatch
-    WHERE snapshot.capturedAtUtc = latestBatch.capturedAtUtc
-  `;
-
-  query += appendCommonSqlFilters(filters, request, { hasSubscriptionId: capacitySnapshotColumns.has('subscriptionId') });
-  query += `
-    GROUP BY ${subscriptionKeyExpr}
-    ORDER BY COUNT(1) DESC, ${subscriptionKeyExpr} ASC
-  `;
-
-  const result = await request.query(query);
-  return result.recordset.map((r) => ({
-    subscriptionKey: r.subscriptionKey,
-    rowCount: Number(r.rowCount || 0),
-    constrainedRows: Number(r.constrainedRows || 0),
-    totalQuotaAvailable: Number(r.totalQuotaAvailable || 0)
-  }));
+  return [...bySubscription.values()]
+    .sort((left, right) => right.rowCount - left.rowCount || left.subscriptionKey.localeCompare(right.subscriptionKey));
 }
 
 async function getCapacityTrends(filters) {

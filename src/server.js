@@ -2177,7 +2177,9 @@ app.get('/api/capacity/subscriptions', async (req, res) => {
       region: req.query.region,
       family: req.query.family,
       familyBase: req.query.familyBase,
-      availability: req.query.availability
+      availability: req.query.availability,
+      resourceType: req.query.resourceType,
+      provider: req.query.provider
     });
     res.json({ rows });
   } catch (err) {

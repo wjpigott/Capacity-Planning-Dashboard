@@ -6,6 +6,7 @@ const QUOTA_API_VERSION = '2025-09-01';
 const MANAGEMENT_API_VERSION = '2023-04-01';
 const SUBSCRIPTIONS_API_VERSION = '2022-12-01';
 const COMPUTE_RESOURCE_PROVIDER = 'Microsoft.Compute';
+const SHAREABLE_REPORT_REGION_CONCURRENCY = 8;
 
 function getCredential() {
   const managedIdentityClientId = process.env.INGEST_MSI_CLIENT_ID || process.env.AZURE_CLIENT_ID || process.env.SQL_MSI_CLIENT_ID;
@@ -35,7 +36,11 @@ async function armGetAll(url, token) {
 
     if (!response.ok) {
       const body = await response.text();
-      throw new Error(`ARM GET failed (${response.status}) for ${nextLink}: ${body}`);
+      const error = new Error(`ARM GET failed (${response.status}) for ${nextLink}: ${body}`);
+      error.status = response.status;
+      error.body = body;
+      error.url = nextLink;
+      throw error;
     }
 
     const payload = await response.json();
@@ -47,6 +52,26 @@ async function armGetAll(url, token) {
   }
 
   return items;
+}
+
+async function armGetJson(url, token) {
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    const error = new Error(`ARM GET failed (${response.status}) for ${url}: ${body}`);
+    error.status = response.status;
+    error.body = body;
+    error.url = url;
+    throw error;
+  }
+
+  return response.json();
 }
 
 async function armGetNestedQuotaAllocations(url, token) {
@@ -63,13 +88,20 @@ async function armGetNestedQuotaAllocations(url, token) {
 
     if (!response.ok) {
       const body = await response.text();
-      throw new Error(`ARM GET failed (${response.status}) for ${nextLink}: ${body}`);
+      const error = new Error(`ARM GET failed (${response.status}) for ${nextLink}: ${body}`);
+      error.status = response.status;
+      error.body = body;
+      error.url = nextLink;
+      throw error;
     }
 
     const payload = await response.json();
-    if (Array.isArray(payload?.properties?.value)) {
-      items.push(...payload.properties.value);
-    }
+    const currentItems = Array.isArray(payload?.properties?.value)
+      ? payload.properties.value
+      : Array.isArray(payload?.value)
+        ? payload.value
+        : [];
+    items.push(...currentItems);
 
     nextLink = payload?.properties?.nextLink || payload?.nextLink || null;
   }
@@ -77,10 +109,172 @@ async function armGetNestedQuotaAllocations(url, token) {
   return items;
 }
 
+async function getQuotaGroupAllocationEntry(managementGroupId, groupQuotaName, subscriptionId, region, quotaName, token, resourceProviderName = COMPUTE_RESOURCE_PROVIDER) {
+  const url = `${ARM_BASE}/providers/Microsoft.Management/managementGroups/${encodeURIComponent(managementGroupId)}/subscriptions/${encodeURIComponent(subscriptionId)}/providers/Microsoft.Quota/groupQuotas/${encodeURIComponent(groupQuotaName)}/resourceProviders/${encodeURIComponent(resourceProviderName)}/quotaAllocations/${encodeURIComponent(String(region || '').trim().toLowerCase())}?api-version=${QUOTA_API_VERSION}`;
+  const entries = await armGetNestedQuotaAllocations(url, token);
+  const normalizedQuotaName = String(quotaName || '').trim().toLowerCase();
+
+  return entries.find((entry) => {
+    const properties = entry?.properties || {};
+    const resourceName = String(properties.resourceName || properties?.name?.value || entry?.name || '').trim().toLowerCase();
+    return resourceName && resourceName === normalizedQuotaName;
+  }) || null;
+}
+
+async function listQuotaGroupAllocationEntries(managementGroupId, groupQuotaName, subscriptionId, region, token, resourceProviderName = COMPUTE_RESOURCE_PROVIDER) {
+  const url = `${ARM_BASE}/providers/Microsoft.Management/managementGroups/${encodeURIComponent(managementGroupId)}/subscriptions/${encodeURIComponent(subscriptionId)}/providers/Microsoft.Quota/groupQuotas/${encodeURIComponent(groupQuotaName)}/resourceProviders/${encodeURIComponent(resourceProviderName)}/quotaAllocations/${encodeURIComponent(String(region || '').trim().toLowerCase())}?api-version=${QUOTA_API_VERSION}`;
+  return armGetNestedQuotaAllocations(url, token);
+}
+
+function buildShareableQuotaRegionGroups(candidates = []) {
+  const groups = new Map();
+
+  candidates.forEach((candidate) => {
+    const subscriptionId = String(candidate?.subscriptionId || '').trim();
+    const region = String(candidate?.region || '').trim().toLowerCase();
+    const family = String(candidate?.family || '').trim().toLowerCase();
+    if (!subscriptionId || !region || !family) {
+      return;
+    }
+
+    const key = `${subscriptionId}|${region}`;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        subscriptionId,
+        region,
+        families: new Set()
+      });
+    }
+
+    groups.get(key).families.add(family);
+  });
+
+  return [...groups.values()].map((group) => ({
+    subscriptionId: group.subscriptionId,
+    region: group.region,
+    families: [...group.families].sort()
+  }));
+}
+
+function buildSubscriptionLocationGroups(subscriptionLocations = new Map()) {
+  const groups = [];
+
+  for (const [subscriptionId, locations] of subscriptionLocations.entries()) {
+    for (const location of locations || []) {
+      const region = String(location?.name || '').trim().toLowerCase();
+      if (!subscriptionId || !region) {
+        continue;
+      }
+
+      groups.push({
+        subscriptionId,
+        region
+      });
+    }
+  }
+
+  return groups;
+}
+
+function hasShareableQuotaDeficit(entry) {
+  const shareableQuota = Number(entry?.properties?.shareableQuota);
+  return Number.isFinite(shareableQuota) && shareableQuota < 0;
+}
+
+function indexQuotaAllocationEntries(entries = []) {
+  const indexed = new Map();
+
+  entries.forEach((entry) => {
+    const properties = entry?.properties || {};
+    const resourceName = String(properties.resourceName || properties?.name?.value || entry?.name || '').trim().toLowerCase();
+    if (!resourceName || !hasShareableQuotaDeficit(entry)) {
+      return;
+    }
+
+    const existing = indexed.get(resourceName);
+    const existingShareable = Math.abs(Number(existing?.properties?.shareableQuota || 0));
+    const currentShareable = Math.abs(Number(properties.shareableQuota || 0));
+    const existingLimit = Number(existing?.properties?.limit || 0);
+    const currentLimit = Number(properties.limit || 0);
+    if (!existing || currentShareable > existingShareable || (currentShareable === existingShareable && currentLimit > existingLimit)) {
+      indexed.set(resourceName, entry);
+    }
+  });
+
+  return indexed;
+}
+
+async function mapWithConcurrency(items, limit, mapper) {
+  const concurrency = Math.max(1, Number(limit) || 1);
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
+
+async function collectShareableQuotaRowsFromRegionGroups(regionGroups, { managementGroupId, groupQuotaName, token }) {
+  const rawGroupRows = await mapWithConcurrency(regionGroups, SHAREABLE_REPORT_REGION_CONCURRENCY, async (group) => {
+    try {
+      const entries = await listQuotaGroupAllocationEntries(
+        managementGroupId,
+        groupQuotaName,
+        group.subscriptionId,
+        group.region,
+        token
+      );
+      return entries
+        .filter((entry) => hasShareableQuotaDeficit(entry))
+        .map((entry) => normalizeShareableQuotaRow({
+          managementGroupId,
+          groupQuotaName,
+          subscriptionId: group.subscriptionId,
+          region: group.region,
+          entry
+        }));
+    } catch (error) {
+      if (isIgnorableShareableQuotaLocationError(error)) {
+        return [];
+      }
+      throw error;
+    }
+  });
+
+  return rawGroupRows.flat();
+}
+
+function isIgnorableShareableQuotaLocationError(error) {
+  if (!error) {
+    return false;
+  }
+
+  if (Number(error.status) === 404) {
+    return true;
+  }
+
+  const detail = String(error.body || error.message || '').toLowerCase();
+  return detail.includes('notfound')
+    || detail.includes('was not found')
+    || detail.includes('no registered resource provider found')
+    || detail.includes('unsupported location')
+    || detail.includes('not supported in location')
+    || detail.includes('location is not available')
+    || detail.includes('not available for subscription');
+}
+
 function normalizeShareableQuotaRow({ managementGroupId, groupQuotaName, subscriptionId, region, entry, resourceProviderName = COMPUTE_RESOURCE_PROVIDER }) {
   const properties = entry?.properties || {};
   const limitValue = Number(properties.limit);
-  const shareableQuotaValue = Number(properties.shareableQuota);
+  const rawShareableQuotaValue = Number(properties.shareableQuota);
   const localizedName = String(properties?.name?.localizedValue || '').trim();
   const resourceName = String(properties.resourceName || properties?.name?.value || entry?.name || '').trim();
 
@@ -93,7 +287,8 @@ function normalizeShareableQuotaRow({ managementGroupId, groupQuotaName, subscri
     resourceName,
     displayName: localizedName || resourceName,
     quotaLimit: Number.isFinite(limitValue) ? limitValue : null,
-    shareableQuota: Number.isFinite(shareableQuotaValue) ? shareableQuotaValue : 0,
+    shareableQuota: Number.isFinite(rawShareableQuotaValue) && rawShareableQuotaValue < 0 ? Math.abs(rawShareableQuotaValue) : 0,
+    rawShareableQuota: Number.isFinite(rawShareableQuotaValue) ? rawShareableQuotaValue : 0,
     provisioningState: properties.provisioningState || null
   };
 }
@@ -105,6 +300,11 @@ function filterShareableQuotaRows(rows = []) {
       const byShareable = Number(right.shareableQuota || 0) - Number(left.shareableQuota || 0);
       if (byShareable !== 0) {
         return byShareable;
+      }
+
+      const byLimit = Number(right.quotaLimit || 0) - Number(left.quotaLimit || 0);
+      if (byLimit !== 0) {
+        return byLimit;
       }
 
       return String(left.region || '').localeCompare(String(right.region || ''))
@@ -119,6 +319,7 @@ function summarizeShareableQuotaRows(rows = []) {
   const resourceNames = new Set();
 
   let totalShareableQuota = 0;
+  let totalAllocatedQuota = 0;
   rows.forEach((row) => {
     if (row.subscriptionId) {
       subscriptionIds.add(row.subscriptionId);
@@ -130,6 +331,7 @@ function summarizeShareableQuotaRows(rows = []) {
       resourceNames.add(row.resourceName);
     }
     totalShareableQuota += Number(row.shareableQuota || 0);
+    totalAllocatedQuota += Number(row.quotaLimit || 0);
   });
 
   return {
@@ -137,7 +339,8 @@ function summarizeShareableQuotaRows(rows = []) {
     subscriptionCount: subscriptionIds.size,
     regionCount: regions.size,
     skuCount: resourceNames.size,
-    totalShareableQuota
+    totalShareableQuota,
+    totalAllocatedQuota
   };
 }
 
@@ -224,6 +427,28 @@ async function listQuotaGroups(managementGroupIdOverride) {
   };
 }
 
+async function getQuotaGroup(managementGroupId, groupQuotaName, token) {
+  const url = `${ARM_BASE}/providers/Microsoft.Management/managementGroups/${encodeURIComponent(managementGroupId)}/providers/Microsoft.Quota/groupQuotas/${encodeURIComponent(groupQuotaName)}?api-version=${QUOTA_API_VERSION}`;
+  const group = await armGetJson(url, token);
+
+  return {
+    managementGroupId,
+    groupQuotaName,
+    displayName: group?.properties?.displayName || groupQuotaName,
+    groupType: group?.properties?.groupType || null,
+    provisioningState: group?.properties?.provisioningState || null
+  };
+}
+
+async function listQuotaGroupSubscriptions(managementGroupId, groupQuotaName, token) {
+  const url = `${ARM_BASE}/providers/Microsoft.Management/managementGroups/${encodeURIComponent(managementGroupId)}/providers/Microsoft.Quota/groupQuotas/${encodeURIComponent(groupQuotaName)}/subscriptions?api-version=${QUOTA_API_VERSION}`;
+  const subscriptions = await armGetAll(url, token);
+
+  return subscriptions
+    .map((subscription) => subscription?.properties?.subscriptionId || subscription?.name)
+    .filter(Boolean);
+}
+
 async function listQuotaGroupShareableQuota(managementGroupIdOverride, groupQuotaName) {
   const managementGroupId = managementGroupIdOverride || getManagementGroupId();
   if (!managementGroupId) {
@@ -235,35 +460,50 @@ async function listQuotaGroupShareableQuota(managementGroupIdOverride, groupQuot
   }
 
   const token = await getToken();
-  const quotaGroupsResult = await listQuotaGroups(managementGroupId);
-  const quotaGroup = quotaGroupsResult.groups.find((group) => group.groupQuotaName === groupQuotaName);
-  if (!quotaGroup) {
-    throw new Error(`Quota group '${groupQuotaName}' was not found in management group '${managementGroupId}'.`);
+  const [quotaGroup, subscriptionIds] = await Promise.all([
+    getQuotaGroup(managementGroupId, groupQuotaName, token),
+    listQuotaGroupSubscriptions(managementGroupId, groupQuotaName, token)
+  ]);
+
+  const { getQuotaCandidates } = require('./quotaCandidateService');
+  let candidateResult = { candidates: [] };
+  try {
+    candidateResult = await getQuotaCandidates({
+      managementGroupId,
+      groupQuotaName,
+      region: 'all',
+      family: 'all'
+    });
+  } catch {
+    candidateResult = { candidates: [] };
   }
 
-  const locationCache = new Map();
-  const rawRows = [];
+  const regionGroups = buildShareableQuotaRegionGroups(candidateResult.candidates);
+  let rawRows = await collectShareableQuotaRowsFromRegionGroups(regionGroups, {
+    managementGroupId,
+    groupQuotaName,
+    token
+  });
 
-  for (const subscriptionId of quotaGroup.subscriptionIds) {
-    let locations = locationCache.get(subscriptionId);
-    if (!locations) {
-      locations = await listSubscriptionLocations(subscriptionId, token);
-      locationCache.set(subscriptionId, locations);
-    }
+  if (rawRows.length === 0 && subscriptionIds.length > 0) {
+    const subscriptionLocations = new Map();
+    await mapWithConcurrency(subscriptionIds, SHAREABLE_REPORT_REGION_CONCURRENCY, async (subscriptionId) => {
+      try {
+        const locations = await listSubscriptionLocations(subscriptionId, token);
+        subscriptionLocations.set(subscriptionId, locations);
+      } catch (error) {
+        if (!isIgnorableShareableQuotaLocationError(error)) {
+          throw error;
+        }
+      }
+    });
 
-    for (const location of locations) {
-      const allocationsUrl = `${ARM_BASE}/providers/Microsoft.Management/managementGroups/${encodeURIComponent(managementGroupId)}/subscriptions/${encodeURIComponent(subscriptionId)}/providers/Microsoft.Quota/groupQuotas/${encodeURIComponent(groupQuotaName)}/resourceProviders/${encodeURIComponent(COMPUTE_RESOURCE_PROVIDER)}/quotaAllocations/${encodeURIComponent(location.name)}?api-version=${QUOTA_API_VERSION}`;
-      const allocations = await armGetNestedQuotaAllocations(allocationsUrl, token);
-      allocations.forEach((entry) => {
-        rawRows.push(normalizeShareableQuotaRow({
-          managementGroupId,
-          groupQuotaName,
-          subscriptionId,
-          region: location.name,
-          entry
-        }));
-      });
-    }
+    const fallbackRegionGroups = buildSubscriptionLocationGroups(subscriptionLocations);
+    rawRows = await collectShareableQuotaRowsFromRegionGroups(fallbackRegionGroups, {
+      managementGroupId,
+      groupQuotaName,
+      token
+    });
   }
 
   const rows = filterShareableQuotaRows(rawRows);
@@ -275,7 +515,7 @@ async function listQuotaGroupShareableQuota(managementGroupIdOverride, groupQuot
     groupType: quotaGroup.groupType,
     provisioningState: quotaGroup.provisioningState,
     generatedAtUtc: new Date().toISOString(),
-    scannedSubscriptionCount: quotaGroup.subscriptionIds.length,
+    scannedSubscriptionCount: subscriptionIds.length,
     summary: summarizeShareableQuotaRows(rows),
     rows
   };
@@ -286,8 +526,14 @@ module.exports = {
   listQuotaGroups,
   listQuotaGroupShareableQuota,
   __testHooks: {
+    armGetNestedQuotaAllocations,
     normalizeShareableQuotaRow,
     filterShareableQuotaRows,
-    summarizeShareableQuotaRows
+    summarizeShareableQuotaRows,
+    isIgnorableShareableQuotaLocationError,
+    buildShareableQuotaRegionGroups,
+    buildSubscriptionLocationGroups,
+    indexQuotaAllocationEntries,
+    hasShareableQuotaDeficit
   }
 };

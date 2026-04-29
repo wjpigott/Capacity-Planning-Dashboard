@@ -2,11 +2,35 @@
 param(
     [string]$ResourceGroup = "CapacityDashboard",
     [string]$AppName = "app-capdash-dev-cap001",
-    [string]$SourcePath = (Resolve-Path "$PSScriptRoot")
+    [string]$SourcePath = (Resolve-Path "$PSScriptRoot"),
+    [switch]$SkipTests
 )
 
 Write-Host "Starting clean web app deployment..."
 Write-Host "Source: $SourcePath"
+
+if (-not $SkipTests) {
+    $packageJsonPath = Join-Path $SourcePath 'package.json'
+    if (-not (Test-Path $packageJsonPath)) {
+        Write-Host "✗ ERROR: package.json not found at $packageJsonPath"
+        exit 1
+    }
+
+    Write-Host "Running test gate: npm test"
+    Push-Location $SourcePath
+    try {
+        & npm test
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "✗ Tests failed; deployment aborted"
+            exit $LASTEXITCODE
+        }
+        Write-Host "✓ Tests passed"
+    } finally {
+        Pop-Location
+    }
+} else {
+    Write-Warning "Skipping npm test before deployment because -SkipTests was provided."
+}
 
 # Create clean staging directory
 $stagingPath = "$env:TEMP\capdash-clean-deploy-$(Get-Date -Format 'yyyyMMdd-HHmmss')"

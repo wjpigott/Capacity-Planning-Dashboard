@@ -62,7 +62,7 @@ const {
   updateIngestionScheduler,
   getIngestionSchedulerConfig
 } = require('./services/azureIngestionService');
-const { listManagementGroups, listQuotaGroups } = require('./services/quotaDiscoveryService');
+const { listManagementGroups, listQuotaGroups, listQuotaGroupShareableQuota } = require('./services/quotaDiscoveryService');
 const {
   getSqlPool,
   createSqlPoolWithAccessToken,
@@ -522,12 +522,8 @@ function queueCapacityIngestionJob(options) {
     createdAtUtc,
     startedAtUtc: null,
     completedAtUtc: null,
-    sendErrorResponse(res, {
-      clientMessage: 'Failed to retrieve paginated capacity data.',
-      err,
-      scope: 'api/capacity/paged',
-      exposeMessage: process.env.NODE_ENV !== 'production'
-    });
+    options,
+    result: null,
     error: null
   };
 
@@ -536,11 +532,13 @@ function queueCapacityIngestionJob(options) {
   setImmediate(async () => {
     const startedAt = Date.now();
     job.status = 'running';
-    sendErrorResponse(res, {
-      clientMessage: 'Failed to retrieve capacity analytics summary.',
-      err,
-      scope: 'api/capacity/analytics',
-      exposeMessage: process.env.NODE_ENV !== 'production'
+    job.startedAtUtc = new Date(startedAt).toISOString();
+
+    try {
+      const result = await runCapacityIngestion(options);
+      job.status = 'completed';
+      job.completedAtUtc = new Date().toISOString();
+      job.result = result;
 
       await logDashboardOperation({
         type: 'capacity-ingest',
@@ -2008,6 +2006,32 @@ app.get('/api/quota/groups', requireAdmin, async (_, res) => {
   }
 });
 
+app.get('/api/quota/shareable-report', requireAdmin, async (req, res) => {
+  try {
+    const result = await listQuotaGroupShareableQuota(req.query.managementGroupId, req.query.groupQuotaName);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    const status = err.message.includes('required') ? 400 : (err.message.includes('QUOTA_MANAGEMENT_GROUP_ID') ? 503 : 500);
+    sendErrorResponse(res, {
+      status,
+      clientMessage: status === 400 ? 'Quota shareable report request is invalid.' : 'Failed to load the shareable quota report.',
+      err,
+      scope: 'api/quota/shareable-report',
+      exposeMessage: status === 400,
+      extra: {
+        rows: [],
+        summary: {
+          rowCount: 0,
+          subscriptionCount: 0,
+          regionCount: 0,
+          skuCount: 0,
+          totalShareableQuota: 0
+        }
+      }
+    });
+  }
+});
+
 app.get('/api/quota/management-groups', requireAdmin, async (_, res) => {
   try {
     const groups = await listManagementGroups();
@@ -2153,7 +2177,9 @@ app.get('/api/capacity/subscriptions', async (req, res) => {
       region: req.query.region,
       family: req.query.family,
       familyBase: req.query.familyBase,
-      availability: req.query.availability
+      availability: req.query.availability,
+      resourceType: req.query.resourceType,
+      provider: req.query.provider
     });
     res.json({ rows });
   } catch (err) {

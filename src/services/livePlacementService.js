@@ -176,7 +176,17 @@ function resolveRecommendationWorkerTimeoutMs(regionCount = 1) {
   const configuredTimeoutMs = Number(
     process.env.CAPACITY_RECOMMEND_WORKER_TIMEOUT_MS
     || process.env.CAPACITY_WORKER_TIMEOUT_MS
-    throw error;
+    || 0
+  );
+
+  if (Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0) {
+    return Math.max(configuredTimeoutMs, 1000);
+  }
+
+  const count = Math.max(1, Number(regionCount) || 1);
+  const dynamicTimeoutMs = DEFAULT_RECOMMENDATION_WORKER_TIMEOUT_MS + ((count - 1) * 15000);
+  return Math.min(Math.max(dynamicTimeoutMs, 1000), 600000);
+}
 
 function useWorkerFirstMode() {
   return Boolean(resolveWorkerBaseUrl());
@@ -1742,5 +1752,11 @@ module.exports = {
   runScheduledLivePlacementRefresh,
   startLivePlacementScheduler,
   updateLivePlacementScheduler,
-  getLivePlacementSchedulerConfig
+  getLivePlacementSchedulerConfig,
+  __testHooks: {
+    normalizeSkuName,
+    isAggregateSkuName,
+    normalizeRecommendationContract,
+    parseExtraSkus
+  }
 };

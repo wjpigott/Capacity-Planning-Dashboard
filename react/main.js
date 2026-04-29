@@ -2486,14 +2486,11 @@ function QuotaWorkbenchView(props) {
 
     return [];
   }, [managementGroups, selectedManagementGroup]);
-<<<<<<< HEAD
-=======
   const shareableRows = Array.isArray(shareableReport?.rows) ? shareableReport.rows : [];
   const shareableSummary = shareableReport?.summary || { rowCount: 0, subscriptionCount: 0, regionCount: 0, skuCount: 0, totalShareableQuota: 0, totalAllocatedQuota: 0 };
   const shareableSubtitle = shareableReport?.generatedAtUtc
     ? `Only rows with a quota deficit are shown. Values are absolute deficit magnitudes. Generated ${formatTimestamp(shareableReport.generatedAtUtc)}.`
     : 'Only rows with a quota deficit are shown. Values are absolute deficit magnitudes. This report is read-only.';
->>>>>>> f451de8 (Document quota report semantics and labels)
 
   useEffect(() => {
     if (selectedMoveCandidate && activeStep === 'discover') {
@@ -3913,8 +3910,6 @@ function App() {
         setQuotaState((current) => ({ ...current, busy: { ...current.busy, discover: false }, status: { tone: 'error', message: error.message || 'Failed to discover quota groups.' } }));
       }
     },
-<<<<<<< HEAD
-=======
     loadShareableReport: async () => {
       if (!auth?.canAccessAdmin || quotaState.selectedQuotaGroup === 'all') return;
       setQuotaState((current) => ({ ...current, busy: { ...current.busy, shareableReport: true } }));
@@ -3925,7 +3920,6 @@ function App() {
         setQuotaState((current) => ({ ...current, shareableReport: { rows: [], summary: { rowCount: 0, subscriptionCount: 0, regionCount: 0, skuCount: 0, totalShareableQuota: 0 }, generatedAtUtc: null }, busy: { ...current.busy, shareableReport: false }, status: { tone: 'error', message: error.message || 'Failed to load quota allocation report.' } }));
       }
     },
->>>>>>> f451de8 (Document quota report semantics and labels)
     generate: async () => {
       if (!auth?.canAccessAdmin) return;
       setQuotaState((current) => ({ ...current, busy: { ...current.busy, generate: true } }));

@@ -46,6 +46,7 @@ const REPORT_VIEWS = [
   { key: 'region-health', label: 'Region Health', adminOnly: false },
   { key: 'recommender', label: 'Capacity Recommender', adminOnly: false },
   { key: 'paas-availability', label: 'PaaS Availability', adminOnly: false },
+  { key: 'shareable-quota-report', label: 'Shareable Quota Report', adminOnly: true },
   { key: 'sku-chart', label: 'Top SKUs', adminOnly: false },
   { key: 'capacity-score', label: 'Capacity Score', adminOnly: false },
   { key: 'family-summary', label: 'Family Summary', adminOnly: false },
@@ -53,8 +54,8 @@ const REPORT_VIEWS = [
   { key: 'trend', label: 'Trend History', adminOnly: false },
   { key: 'ai-summary-report', label: 'AI Summary Report', adminOnly: false },
   { key: 'ai-model-availability', label: 'AI Model Availability', adminOnly: false },
-  { key: 'admin', label: 'Data Ingestion', adminOnly: true },
-  { key: 'quota-workbench', label: 'Quota Workbench', adminOnly: true }
+  { key: 'admin', label: 'Data Ingestion', adminOnly: true, navGroup: 'admin' },
+  { key: 'quota-workbench', label: 'Quota Workbench', adminOnly: true, navGroup: 'admin' }
 ];
 
 const baseRegionPresets = {
@@ -2487,10 +2488,10 @@ function QuotaWorkbenchView(props) {
     return [];
   }, [managementGroups, selectedManagementGroup]);
   const shareableRows = Array.isArray(shareableReport?.rows) ? shareableReport.rows : [];
-  const shareableSummary = shareableReport?.summary || { rowCount: 0, subscriptionCount: 0, regionCount: 0, skuCount: 0, totalShareableQuota: 0 };
+  const shareableSummary = shareableReport?.summary || { rowCount: 0, subscriptionCount: 0, regionCount: 0, skuCount: 0, totalShareableQuota: 0, totalAllocatedQuota: 0 };
   const shareableSubtitle = shareableReport?.generatedAtUtc
-    ? `Only rows with positive shareable quota are shown. Generated ${formatTimestamp(shareableReport.generatedAtUtc)}.`
-    : 'Only rows with positive shareable quota are shown. This report is read-only.';
+    ? `Only rows with a quota deficit are shown. Values are absolute deficit magnitudes. Generated ${formatTimestamp(shareableReport.generatedAtUtc)}.`
+    : 'Only rows with a quota deficit are shown. Values are absolute deficit magnitudes. This report is read-only.';
 
   useEffect(() => {
     if (selectedMoveCandidate && activeStep === 'discover') {
@@ -2527,7 +2528,7 @@ function QuotaWorkbenchView(props) {
         </div>
         <div className="rx-inline-actions">
           <button className="rx-button" type="button" onClick={actions.discover} disabled={busy.discover}>{busy.discover ? 'Discovering...' : 'Discover Quota Groups'}</button>
-          <button className="rx-button rx-button--secondary" type="button" onClick={actions.loadShareableReport} disabled={busy.shareableReport || selectedQuotaGroup === 'all'}>{busy.shareableReport ? 'Loading Report...' : 'Load Shareable Report'}</button>
+          <button className="rx-button rx-button--secondary" type="button" onClick={actions.loadShareableReport} disabled={busy.shareableReport || selectedQuotaGroup === 'all'}>{busy.shareableReport ? 'Loading Report...' : 'Load Quota Report'}</button>
           <button className="rx-button rx-button--secondary" type="button" onClick={actions.refresh} disabled={busy.refresh}>{busy.refresh ? 'Refreshing...' : 'Refresh Workspace'}</button>
           <span className="rx-selected-count">Selected quota group: {selectedQuotaGroup === 'all' ? 'None' : selectedQuotaGroup}</span>
           <button className="rx-chip-button" type="button" onClick={() => setActiveStep('discover')} disabled={selectedQuotaGroup === 'all'}>Continue to Step 2</button>
@@ -2551,16 +2552,17 @@ function QuotaWorkbenchView(props) {
         </div>
         <DataTable title="Discovered Quota Groups" columns={[{ key: 'managementGroupId', label: 'Management Group' }, { key: 'groupQuotaName', label: 'Quota Group' }, { key: 'displayName', label: 'Display Name' }, { key: 'groupType', label: 'Group Type' }, { key: 'provisioningState', label: 'Provisioning State' }, { key: 'subscriptionCount', label: 'Subscriptions', render: (row) => formatNumber(row.subscriptionCount) }]} rows={quotaGroups} emptyMessage="No quota groups discovered yet." />
         <section className="rx-panel rx-panel--compact rx-panel--muted">
-          <div className="rx-panel__header"><div><h2>Shareable Quota Report</h2><p>Read-only visibility into quota allocations that can be returned to the group pool for the selected quota group.</p></div></div>
+          <div className="rx-panel__header"><div><h2>Quota Allocation Report</h2><p>Read-only visibility into quota allocation deficits for the selected quota group.</p></div></div>
           <div className="rx-summary-grid">
-            <article className="rx-metric-card"><span>Shareable Rows</span><strong>{formatNumber(shareableSummary.rowCount || 0)}</strong></article>
+            <article className="rx-metric-card"><span>Deficit Rows</span><strong>{formatNumber(shareableSummary.rowCount || 0)}</strong></article>
             <article className="rx-metric-card"><span>Subscriptions</span><strong>{formatNumber(shareableSummary.subscriptionCount || 0)}</strong></article>
             <article className="rx-metric-card"><span>Regions</span><strong>{formatNumber(shareableSummary.regionCount || 0)}</strong></article>
             <article className="rx-metric-card"><span>SKUs</span><strong>{formatNumber(shareableSummary.skuCount || 0)}</strong></article>
-            <article className="rx-metric-card"><span>Total Shareable</span><strong>{formatNumber(shareableSummary.totalShareableQuota || 0)}</strong></article>
+            <article className="rx-metric-card"><span>Total Allocated</span><strong>{formatNumber(shareableSummary.totalAllocatedQuota || 0)}</strong></article>
+            <article className="rx-metric-card"><span>Total Required</span><strong>{formatNumber(shareableSummary.totalShareableQuota || 0)}</strong></article>
           </div>
         </section>
-        <DataTable title="Shareable Quota Report" subtitle={shareableSubtitle} columns={[{ key: 'subscriptionId', label: 'Subscription Id' }, { key: 'region', label: 'Region' }, { key: 'displayName', label: 'Quota SKU / Family', render: (row) => row.displayName || row.resourceName || 'n/a' }, { key: 'resourceName', label: 'Resource Name', render: (row) => row.resourceName || 'n/a' }, { key: 'shareableQuota', label: 'Shareable Quota', render: (row) => formatNumber(row.shareableQuota) }, { key: 'quotaLimit', label: 'Allocated Limit', render: (row) => formatNullableNumber(row.quotaLimit) }, { key: 'provisioningState', label: 'Provisioning', render: (row) => row.provisioningState || 'n/a' }]} rows={shareableRows} pageSize={50} emptyMessage={selectedQuotaGroup === 'all' ? 'Select a quota group and load the shareable report.' : 'No positive shareable quota rows were returned for the selected quota group.'} />
+        <DataTable title="Quota Allocation Report" subtitle={shareableSubtitle} columns={[{ key: 'subscriptionId', label: 'Subscription Id' }, { key: 'region', label: 'Region' }, { key: 'displayName', label: 'Quota SKU / Family', render: (row) => row.displayName || row.resourceName || 'n/a' }, { key: 'resourceName', label: 'Resource Name', render: (row) => row.resourceName || 'n/a' }, { key: 'shareableQuota', label: 'Quota Group', render: (row) => formatNumber(row.shareableQuota) }, { key: 'quotaLimit', label: 'Assigned Quota', render: (row) => formatNullableNumber(row.quotaLimit) }]} rows={shareableRows} pageSize={50} emptyMessage={selectedQuotaGroup === 'all' ? 'Select a quota group and load the quota report.' : 'No quota deficit rows were returned for the selected quota group.'} />
         <DataTable title="Quota Candidates" subtitle="Pick a donor or recipient row to move into the planning steps." columns={[{ key: 'moveAction', label: 'Select', render: (row) => { const recipientNeed = getQuotaRecipientNeed(row); const movableQuota = Number(row.movableQuota || row.suggestedMovable || 0); const disabled = recipientNeed <= 0 && movableQuota <= 0; const isSelected = selectedMoveCandidate && selectedMoveCandidate.subscriptionId === row.subscriptionId && selectedMoveCandidate.region === row.region && selectedMoveCandidate.quotaName === (row.family || row.quotaName); const buttonLabel = disabled ? 'No Action' : (isSelected ? 'Selected' : (movableQuota > 0 ? 'Pick Donor' : 'Pick Need')); return <button className="rx-button rx-button--secondary" type="button" disabled={disabled} onClick={() => onSelectMoveCandidate(row)}>{buttonLabel}</button>; } }, { key: 'subscriptionName', label: 'Subscription', render: (row) => row.subscriptionName || row.subscriptionId || 'n/a' }, { key: 'region', label: 'Region' }, { key: 'family', label: 'Family' }, { key: 'skuList', label: 'SKUs', render: (row) => formatSkuList(row) }, { key: 'skuCount', label: 'SKU Count', render: (row) => formatNumber(row.skuCount || 0) }, { key: 'availability', label: 'Availability', render: (row) => <StatusPill value={row.availability} /> }, { key: 'quotaCurrent', label: 'Current', render: (row) => formatNumber(row.quotaCurrent) }, { key: 'quotaLimit', label: 'Limit', render: (row) => formatNumber(row.quotaLimit) }, { key: 'quotaAvailable', label: 'Available', render: (row) => formatNumber(row.quotaAvailable) }, { key: 'recipientNeed', label: 'Need', render: (row) => formatNumber(getQuotaRecipientNeed(row)) }, { key: 'movableQuota', label: 'Movable', render: (row) => formatNumber(row.movableQuota || row.suggestedMovable) }, { key: 'status', label: 'Status', render: (row) => <StatusPill value={row.status || row.candidateStatus} /> }]} rows={filteredCandidates} emptyMessage="Generate candidates to populate this table." />
       </section>
 
@@ -2618,6 +2620,73 @@ function QuotaWorkbenchView(props) {
           </div>
         </section>
       </section>
+    </div>
+  );
+}
+
+function ShareableQuotaReportView(props) {
+  const {
+    managementGroups,
+    selectedManagementGroup,
+    onManagementGroupChange,
+    quotaGroups,
+    selectedQuotaGroup,
+    onQuotaGroupChange,
+    shareableReport,
+    actions,
+    busy,
+    status
+  } = props;
+
+  const managementGroupOptions = useMemo(() => {
+    if (Array.isArray(managementGroups) && managementGroups.length > 0) {
+      return managementGroups;
+    }
+
+    if (selectedManagementGroup) {
+      return [{
+        id: selectedManagementGroup,
+        displayName: selectedManagementGroup,
+        tenantId: null
+      }];
+    }
+
+    return [];
+  }, [managementGroups, selectedManagementGroup]);
+  const shareableRows = Array.isArray(shareableReport?.rows) ? shareableReport.rows : [];
+  const shareableSummary = shareableReport?.summary || { rowCount: 0, subscriptionCount: 0, regionCount: 0, skuCount: 0, totalShareableQuota: 0, totalAllocatedQuota: 0 };
+  const shareableSubtitle = shareableReport?.generatedAtUtc
+    ? `Only rows with a quota deficit are shown. Values are absolute deficit magnitudes. Generated ${formatTimestamp(shareableReport.generatedAtUtc)}.`
+    : 'Only rows with a quota deficit are shown. Values are absolute deficit magnitudes. This report is read-only.';
+
+  return (
+    <div className="rx-view-stack">
+      <Banner tone={status.tone} message={status.message} />
+      <section className="rx-panel">
+        <div className="rx-panel__header"><div><h2>Quota Allocation Report</h2><p>Read-only visibility into quota allocation deficits for a selected quota group.</p></div></div>
+        <div className="rx-field-grid">
+          <label className="rx-field"><span>Management Group</span><select value={selectedManagementGroup} onChange={(event) => onManagementGroupChange(event.target.value)}><option value="" disabled>{managementGroupOptions.length ? 'Select management group' : 'No management groups available'}</option>{managementGroupOptions.map((group) => <option key={group.id} value={group.id}>{group.displayName} ({group.id})</option>)}</select></label>
+          <label className="rx-field"><span>Quota Group</span><select value={selectedQuotaGroup} onChange={(event) => onQuotaGroupChange(event.target.value)}><option value="all">Select quota group</option>{quotaGroups.map((group) => <option key={group.groupQuotaName} value={group.groupQuotaName}>{group.groupQuotaName}</option>)}</select></label>
+        </div>
+        <div className="rx-inline-actions">
+          <button className="rx-button" type="button" onClick={actions.discover} disabled={busy.discover}>{busy.discover ? 'Discovering...' : 'Discover Quota Groups'}</button>
+          <button className="rx-button rx-button--secondary" type="button" onClick={actions.loadShareableReport} disabled={busy.shareableReport || selectedQuotaGroup === 'all'}>{busy.shareableReport ? 'Loading Report...' : 'Load Quota Report'}</button>
+          <button className="rx-button rx-button--secondary" type="button" onClick={actions.refresh} disabled={busy.refresh || selectedQuotaGroup === 'all'}>{busy.refresh ? 'Refreshing...' : 'Refresh Report'}</button>
+          <span className="rx-selected-count">Selected quota group: {selectedQuotaGroup === 'all' ? 'None' : selectedQuotaGroup}</span>
+        </div>
+      </section>
+      <section className="rx-panel rx-panel--compact rx-panel--muted">
+        <div className="rx-panel__header"><div><h2>Summary</h2><p>Only rows with a quota deficit are listed. Values are shown as absolute deficit magnitudes. No move or apply actions are available from this report.</p></div></div>
+        <div className="rx-summary-grid">
+          <article className="rx-metric-card"><span>Deficit Rows</span><strong>{formatNumber(shareableSummary.rowCount || 0)}</strong></article>
+          <article className="rx-metric-card"><span>Subscriptions</span><strong>{formatNumber(shareableSummary.subscriptionCount || 0)}</strong></article>
+          <article className="rx-metric-card"><span>Regions</span><strong>{formatNumber(shareableSummary.regionCount || 0)}</strong></article>
+          <article className="rx-metric-card"><span>SKUs</span><strong>{formatNumber(shareableSummary.skuCount || 0)}</strong></article>
+          <article className="rx-metric-card"><span>Total Allocated</span><strong>{formatNumber(shareableSummary.totalAllocatedQuota || 0)}</strong></article>
+          <article className="rx-metric-card"><span>Total Required</span><strong>{formatNumber(shareableSummary.totalShareableQuota || 0)}</strong></article>
+        </div>
+      </section>
+      <DataTable title="Quota Allocation Report" subtitle={shareableSubtitle} columns={[{ key: 'subscriptionId', label: 'Subscription Id' }, { key: 'region', label: 'Region' }, { key: 'displayName', label: 'Quota SKU / Family', render: (row) => row.displayName || row.resourceName || 'n/a' }, { key: 'resourceName', label: 'Resource Name', render: (row) => row.resourceName || 'n/a' }, { key: 'shareableQuota', label: 'Quota Group', render: (row) => formatNumber(row.shareableQuota) }, { key: 'quotaLimit', label: 'Assigned Quota', render: (row) => formatNullableNumber(row.quotaLimit) }]} rows={shareableRows} pageSize={50} emptyMessage={selectedQuotaGroup === 'all' ? 'Select a quota group and load the quota report.' : 'No quota deficit rows were returned for the selected quota group.'} />
     </div>
   );
 }
@@ -2726,8 +2795,8 @@ function App() {
       : 'Select the target family for live placement refresh.');
 
   const visibleViews = useMemo(() => REPORT_VIEWS.filter((view) => !view.adminOnly || auth?.canAccessAdmin), [auth]);
-  const reportingViews = useMemo(() => visibleViews.filter((view) => !view.adminOnly).sort((left, right) => left.label.localeCompare(right.label)), [visibleViews]);
-  const adminViews = useMemo(() => visibleViews.filter((view) => view.adminOnly).sort((left, right) => left.label.localeCompare(right.label)), [visibleViews]);
+  const reportingViews = useMemo(() => visibleViews.filter((view) => view.navGroup !== 'admin').sort((left, right) => left.label.localeCompare(right.label)), [visibleViews]);
+  const adminViews = useMemo(() => visibleViews.filter((view) => view.navGroup === 'admin').sort((left, right) => left.label.localeCompare(right.label)), [visibleViews]);
 
   const recommenderFamilySkuOptions = useMemo(() => getRecommenderFamilySkuOptions(filters.family), [filters.family]);
   const recommendationTargetSkuOptions = useMemo(() => {
@@ -3847,9 +3916,9 @@ function App() {
       setQuotaState((current) => ({ ...current, busy: { ...current.busy, shareableReport: true } }));
       try {
         const payload = await fetchJson(`/api/quota/shareable-report?${new URLSearchParams({ managementGroupId: quotaState.selectedManagementGroup, groupQuotaName: quotaState.selectedQuotaGroup }).toString()}`);
-        setQuotaState((current) => ({ ...current, shareableReport: { rows: Array.isArray(payload.rows) ? payload.rows : [], summary: payload.summary || current.shareableReport.summary, generatedAtUtc: payload.generatedAtUtc || null }, busy: { ...current.busy, shareableReport: false }, status: { tone: 'success', message: `Loaded ${payload.summary?.rowCount || 0} shareable quota row(s) for ${payload.groupQuotaName || quotaState.selectedQuotaGroup}.` } }));
+        setQuotaState((current) => ({ ...current, shareableReport: { rows: Array.isArray(payload.rows) ? payload.rows : [], summary: payload.summary || current.shareableReport.summary, generatedAtUtc: payload.generatedAtUtc || null }, busy: { ...current.busy, shareableReport: false }, status: { tone: 'success', message: `Loaded ${payload.summary?.rowCount || 0} quota deficit row(s) for ${payload.groupQuotaName || quotaState.selectedQuotaGroup}.` } }));
       } catch (error) {
-        setQuotaState((current) => ({ ...current, shareableReport: { rows: [], summary: { rowCount: 0, subscriptionCount: 0, regionCount: 0, skuCount: 0, totalShareableQuota: 0 }, generatedAtUtc: null }, busy: { ...current.busy, shareableReport: false }, status: { tone: 'error', message: error.message || 'Failed to load shareable quota report.' } }));
+        setQuotaState((current) => ({ ...current, shareableReport: { rows: [], summary: { rowCount: 0, subscriptionCount: 0, regionCount: 0, skuCount: 0, totalShareableQuota: 0 }, generatedAtUtc: null }, busy: { ...current.busy, shareableReport: false }, status: { tone: 'error', message: error.message || 'Failed to load quota allocation report.' } }));
       }
     },
     generate: async () => {
@@ -4065,6 +4134,9 @@ function App() {
     }
     if (activeView === 'quota-workbench') {
       return <QuotaWorkbenchView managementGroups={quotaState.managementGroups} selectedManagementGroup={quotaState.selectedManagementGroup} onManagementGroupChange={(value) => setQuotaState({ ...quotaState, selectedManagementGroup: value, selectedQuotaGroup: 'all', shareableReport: { rows: [], summary: { rowCount: 0, subscriptionCount: 0, regionCount: 0, skuCount: 0, totalShareableQuota: 0 }, generatedAtUtc: null }, selectedAnalysisRunId: '', selectedDonorSubscriptionId: '', selectedMoveCandidate: null, requestedTransferAmount: 0, planRows: [], impactRows: [], applyResults: [], planSummary: {} })} quotaGroups={quotaState.quotaGroups} selectedQuotaGroup={quotaState.selectedQuotaGroup} onQuotaGroupChange={(value) => setQuotaState({ ...quotaState, selectedQuotaGroup: value, shareableReport: { rows: [], summary: { rowCount: 0, subscriptionCount: 0, regionCount: 0, skuCount: 0, totalShareableQuota: 0 }, generatedAtUtc: null }, selectedAnalysisRunId: '', selectedDonorSubscriptionId: '', selectedMoveCandidate: null, requestedTransferAmount: 0, planRows: [], impactRows: [], applyResults: [], planSummary: {} })} shareableReport={quotaState.shareableReport} candidates={quotaState.candidates} candidateFilters={quotaState.candidateFilters} setCandidateFilters={(value) => setQuotaState({ ...quotaState, candidateFilters: value })} selectedMoveCandidate={quotaState.selectedMoveCandidate} onSelectMoveCandidate={(row) => { const skuOptions = normalizeSkuList(row.skuList); const recipientNeed = getQuotaRecipientNeed(row); const movableQuota = Number(row.movableQuota || row.suggestedMovable || 0); const mode = movableQuota > 0 ? 'donor' : 'recipient'; const requestedTransferAmount = mode === 'donor' ? movableQuota : recipientNeed; setQuotaState((current) => ({ ...current, selectedMoveCandidate: { subscriptionId: row.subscriptionId, subscriptionName: row.subscriptionName || row.subscriptionId, donorSubscriptionId: mode === 'donor' ? row.subscriptionId : '', recipientSubscriptionId: mode === 'recipient' ? row.subscriptionId : '', recipientSubscriptionName: row.subscriptionName || row.subscriptionId, region: row.region, quotaName: row.family || row.quotaName, skuList: skuOptions, selectedSku: '', quotaAvailable: row.quotaAvailable, safetyBuffer: row.safetyBuffer, availability: row.availability, movableQuota, mode }, selectedDonorSubscriptionId: mode === 'donor' ? row.subscriptionId : '', requestedTransferAmount, planRows: [], impactRows: [], applyResults: [], planSummary: {}, status: { tone: 'success', message: `Selected ${row.subscriptionName || row.subscriptionId} as a ${mode} quota row. Continue to Step 3 to build the move.` } })); }} quotaRuns={quotaState.quotaRuns} selectedAnalysisRunId={quotaState.selectedAnalysisRunId} donorOptions={donorOptions} selectedDonorSubscriptionId={quotaState.selectedDonorSubscriptionId} onSelectedSkuChange={(value) => setQuotaState({ ...quotaState, selectedMoveCandidate: quotaState.selectedMoveCandidate ? { ...quotaState.selectedMoveCandidate, selectedSku: value } : null, selectedDonorSubscriptionId: '', planRows: [], impactRows: [], applyResults: [], planSummary: {} })} requestedTransferAmount={quotaState.requestedTransferAmount} onRequestedTransferAmountChange={(value) => setQuotaState({ ...quotaState, requestedTransferAmount: Math.max(0, Number(value || 0)), planRows: [], impactRows: [], applyResults: [], planSummary: {} })} onAnalysisRunChange={(value) => setQuotaState({ ...quotaState, selectedAnalysisRunId: value, selectedDonorSubscriptionId: '', planRows: [], impactRows: [], applyResults: [], planSummary: {} })} onDonorSubscriptionChange={(value) => setQuotaState({ ...quotaState, selectedDonorSubscriptionId: value, planRows: [], impactRows: [], applyResults: [], planSummary: {} })} planRows={quotaState.planRows} impactRows={quotaState.impactRows} applyResults={quotaState.applyResults} summary={quotaState.planSummary} actions={quotaActions} busy={quotaState.busy} status={quotaState.status} />;
+    }
+    if (activeView === 'shareable-quota-report') {
+      return <ShareableQuotaReportView managementGroups={quotaState.managementGroups} selectedManagementGroup={quotaState.selectedManagementGroup} onManagementGroupChange={(value) => setQuotaState({ ...quotaState, selectedManagementGroup: value, selectedQuotaGroup: 'all', shareableReport: { rows: [], summary: { rowCount: 0, subscriptionCount: 0, regionCount: 0, skuCount: 0, totalShareableQuota: 0 }, generatedAtUtc: null }, selectedAnalysisRunId: '', selectedDonorSubscriptionId: '', selectedMoveCandidate: null, requestedTransferAmount: 0, planRows: [], impactRows: [], applyResults: [], planSummary: {} })} quotaGroups={quotaState.quotaGroups} selectedQuotaGroup={quotaState.selectedQuotaGroup} onQuotaGroupChange={(value) => setQuotaState({ ...quotaState, selectedQuotaGroup: value, shareableReport: { rows: [], summary: { rowCount: 0, subscriptionCount: 0, regionCount: 0, skuCount: 0, totalShareableQuota: 0 }, generatedAtUtc: null }, selectedAnalysisRunId: '', selectedDonorSubscriptionId: '', selectedMoveCandidate: null, requestedTransferAmount: 0, planRows: [], impactRows: [], applyResults: [], planSummary: {} })} shareableReport={quotaState.shareableReport} actions={quotaActions} busy={quotaState.busy} status={quotaState.status} />;
     }
     if (activeView === 'admin') {
       return <AdminIngestionView job={adminState.job} status={adminState.status} schedule={adminState.schedule} runtime={adminState.runtime} persistence={adminState.persistence} selectedRegionPreset={filters.regionPreset} actions={adminActions} onScheduleChange={(scope, field, value) => setAdminState((current) => ({ ...current, schedule: { ...current.schedule, [scope]: { ...current.schedule[scope], [field]: value } } }))} busy={adminState.busy} viewStatus={adminState.statusMessage} />;

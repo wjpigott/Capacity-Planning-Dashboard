@@ -113,6 +113,7 @@ Status legend:
 - [x] Ingestion status widget in UI
 - [x] Admin ingestion trigger is queued/polled as a background job instead of holding the browser request open
 - [x] Admin UI setting for scheduled refresh rates (capacity ingestion and live placement refresh stored in SQL)
+- [x] Quota Workbench allocation report uses `Quota Group` and `Assigned quota` labels, with the old provisioning column hidden
 - [ ] Admin UI setting for quota discovery scope selection (management group and, if needed, quota group picker/default)
 - [ ] Clean up Quota Workbench button interactions, emphasis, and color treatment so step actions read clearly and consistently
 - [x] Pagination for report grids (prefer server-side paging for large result sets)
@@ -876,6 +877,7 @@ Key query behavior:
 - Increasing `Desired Placement Count` raises the bar for a `High` live placement result, because the placement API is evaluating a larger simultaneous allocation request.
 - `Desired Placement Count` does not change the persisted dashboard score history in `dbo.CapacityScoreSnapshot`.
 - Live placement refreshes now persist snapshot rows to `dbo.LivePlacementSnapshot` for the effective desired count used by the refresh. The Capacity Score grid auto-hydrates from SQL snapshots for the currently selected desired count.
+- In the Quota Workbench allocation report, rows are driven by subscriptions whose raw Azure GroupQuota `shareableQuota` is negative; the UI displays the absolute value in the `Quota Group` column and shows the current allocation in `Assigned quota`.
 
 #### Data Ingestion (Admin page)
 

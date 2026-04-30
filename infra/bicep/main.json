@@ -1,11 +1,12 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "languageVersion": "2.0",
   "contentVersion": "1.0.0.0",
   "metadata": {
     "_generator": {
       "name": "bicep",
       "version": "0.42.1.51946",
-      "templateHash": "17138665659851206142"
+      "templateHash": "2514981402947223731"
     }
   },
   "parameters": {
@@ -145,6 +146,55 @@
         "description": "Optional management group ID used by the dashboard quota discovery UI when tenant-wide management group enumeration is not permitted."
       }
     },
+    "existingSqlServerName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Existing Azure SQL server name to reuse. Provide the short resource name, not the FQDN."
+      }
+    },
+    "existingSqlServerResourceGroupName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource group that contains the existing Azure SQL server. Defaults to the deployment resource group when empty."
+      }
+    },
+    "existingSqlDatabaseName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Existing Azure SQL database name to reuse when the dashboard should attach to an existing database on the existing SQL server."
+      }
+    },
+    "existingKeyVaultName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Existing Key Vault name to reuse."
+      }
+    },
+    "existingKeyVaultResourceGroupName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource group that contains the existing Key Vault. Defaults to the deployment resource group when empty."
+      }
+    },
+    "existingWorkerStorageAccountName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Existing storage account name to reuse for the worker host."
+      }
+    },
+    "existingWorkerStorageAccountResourceGroupName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource group that contains the existing worker storage account. Defaults to the deployment resource group when empty."
+      }
+    },
     "workerSubscriptionRbacSubscriptionIds": {
       "type": "array",
       "defaultValue": [],
@@ -182,7 +232,7 @@
     },
     "authEnabled": {
       "type": "bool",
-      "defaultValue": false,
+      "defaultValue": true,
       "metadata": {
         "description": "Enable Microsoft Entra sign-in for the dashboard app routes."
       }
@@ -245,10 +295,22 @@
     "keyVaultDnsSuffix": "[if(startsWith(variables('keyVaultDnsSuffixRaw'), '.'), substring(variables('keyVaultDnsSuffixRaw'), 1), variables('keyVaultDnsSuffixRaw'))]",
     "keyVaultPrivateDnsZoneName": "[if(startsWith(variables('keyVaultDnsSuffix'), 'vaultcore.'), format('privatelink.{0}', variables('keyVaultDnsSuffix')), replace(variables('keyVaultDnsSuffix'), 'vault.', 'privatelink.vaultcore.'))]",
     "keyVaultPrivateDnsZoneVnetLinkName": "[format('pdz-link-kv-capdash-{0}-{1}', parameters('environment'), parameters('workloadSuffix'))]",
-    "effectiveAuthRedirectUri": "[if(empty(parameters('authRedirectUri')), format('https://{0}.azurewebsites.net/auth/callback', variables('webAppName')), parameters('authRedirectUri'))]"
+    "effectiveAuthRedirectUri": "[if(empty(parameters('authRedirectUri')), format('https://{0}.azurewebsites.net/auth/callback', variables('webAppName')), parameters('authRedirectUri'))]",
+    "useExistingSqlServer": "[not(empty(parameters('existingSqlServerName')))]",
+    "useExistingSqlDatabase": "[not(empty(parameters('existingSqlDatabaseName')))]",
+    "useExistingKeyVault": "[not(empty(parameters('existingKeyVaultName')))]",
+    "useExistingWorkerStorageAccount": "[not(empty(parameters('existingWorkerStorageAccountName')))]",
+    "effectiveSqlServerResourceGroupName": "[if(empty(parameters('existingSqlServerResourceGroupName')), resourceGroup().name, parameters('existingSqlServerResourceGroupName'))]",
+    "effectiveSqlServerName": "[if(variables('useExistingSqlServer'), parameters('existingSqlServerName'), variables('sqlServerName'))]",
+    "effectiveSqlDatabaseName": "[if(variables('useExistingSqlDatabase'), parameters('existingSqlDatabaseName'), variables('sqlDatabaseName'))]",
+    "effectiveSqlServerFqdn": "[if(contains(variables('effectiveSqlServerName'), '.'), variables('effectiveSqlServerName'), format('{0}{1}', variables('effectiveSqlServerName'), environment().suffixes.sqlServerHostname))]",
+    "effectiveKeyVaultResourceGroupName": "[if(empty(parameters('existingKeyVaultResourceGroupName')), resourceGroup().name, parameters('existingKeyVaultResourceGroupName'))]",
+    "effectiveKeyVaultName": "[if(variables('useExistingKeyVault'), parameters('existingKeyVaultName'), variables('keyVaultName'))]",
+    "effectiveWorkerStorageAccountResourceGroupName": "[if(empty(parameters('existingWorkerStorageAccountResourceGroupName')), resourceGroup().name, parameters('existingWorkerStorageAccountResourceGroupName'))]",
+    "effectiveWorkerStorageAccountName": "[if(variables('useExistingWorkerStorageAccount'), parameters('existingWorkerStorageAccountName'), variables('functionStorageName'))]"
   },
-  "resources": [
-    {
+  "resources": {
+    "vnet": {
       "type": "Microsoft.Network/virtualNetworks",
       "apiVersion": "2023-09-01",
       "name": "[variables('vnetName')]",
@@ -284,7 +346,25 @@
         ]
       }
     },
-    {
+    "appServiceIntegrationSubnet": {
+      "existing": true,
+      "type": "Microsoft.Network/virtualNetworks/subnets",
+      "apiVersion": "2023-09-01",
+      "name": "[format('{0}/{1}', variables('vnetName'), variables('appServiceIntegrationSubnetName'))]",
+      "dependsOn": [
+        "vnet"
+      ]
+    },
+    "privateEndpointSubnet": {
+      "existing": true,
+      "type": "Microsoft.Network/virtualNetworks/subnets",
+      "apiVersion": "2023-09-01",
+      "name": "[format('{0}/{1}', variables('vnetName'), variables('privateEndpointSubnetName'))]",
+      "dependsOn": [
+        "vnet"
+      ]
+    },
+    "logAnalytics": {
       "type": "Microsoft.OperationalInsights/workspaces",
       "apiVersion": "2023-09-01",
       "name": "[variables('logAnalyticsName')]",
@@ -296,7 +376,7 @@
         "retentionInDays": 30
       }
     },
-    {
+    "appInsights": {
       "type": "Microsoft.Insights/components",
       "apiVersion": "2020-02-02",
       "name": "[variables('appInsightsName')]",
@@ -307,10 +387,11 @@
         "WorkspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]"
       },
       "dependsOn": [
-        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]"
+        "logAnalytics"
       ]
     },
-    {
+    "functionStorage": {
+      "condition": "[not(variables('useExistingWorkerStorageAccount'))]",
       "type": "Microsoft.Storage/storageAccounts",
       "apiVersion": "2023-05-01",
       "name": "[variables('functionStorageName')]",
@@ -327,7 +408,7 @@
         "accessTier": "Hot"
       }
     },
-    {
+    "plan": {
       "type": "Microsoft.Web/serverfarms",
       "apiVersion": "2023-12-01",
       "name": "[variables('appServicePlanName')]",
@@ -342,7 +423,7 @@
         "reserved": false
       }
     },
-    {
+    "workerPlan": {
       "type": "Microsoft.Web/serverfarms",
       "apiVersion": "2023-12-01",
       "name": "[variables('workerPlanName')]",
@@ -357,7 +438,7 @@
         "reserved": false
       }
     },
-    {
+    "webApp": {
       "type": "Microsoft.Web/sites",
       "apiVersion": "2023-12-01",
       "name": "[variables('webAppName')]",
@@ -376,7 +457,7 @@
           "appSettings": [
             {
               "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
-              "value": "[reference(resourceId('Microsoft.Insights/components', variables('appInsightsName')), '2020-02-02').ConnectionString]"
+              "value": "[reference('appInsights').ConnectionString]"
             },
             {
               "name": "Dashboard__Mode",
@@ -384,11 +465,11 @@
             },
             {
               "name": "SQL_SERVER",
-              "value": "[format('{0}{1}', variables('sqlServerName'), environment().suffixes.sqlServerHostname)]"
+              "value": "[variables('effectiveSqlServerFqdn')]"
             },
             {
               "name": "SQL_DATABASE",
-              "value": "[variables('sqlDatabaseName')]"
+              "value": "[variables('effectiveSqlDatabaseName')]"
             },
             {
               "name": "SQL_AUTH_MODE",
@@ -396,7 +477,7 @@
             },
             {
               "name": "CAPACITY_WORKER_BASE_URL",
-              "value": "[format('https://{0}', reference(resourceId('Microsoft.Web/sites', variables('functionAppName')), '2023-12-01').defaultHostName)]"
+              "value": "[format('https://{0}', reference('functionApp').defaultHostName)]"
             },
             {
               "name": "CAPACITY_WORKER_SHARED_SECRET",
@@ -470,13 +551,13 @@
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Insights/components', variables('appInsightsName'))]",
-        "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]",
-        "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
-        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+        "appInsights",
+        "functionApp",
+        "plan",
+        "vnet"
       ]
     },
-    {
+    "webAppVnetIntegration": {
       "type": "Microsoft.Web/sites/networkConfig",
       "apiVersion": "2023-12-01",
       "name": "[format('{0}/{1}', variables('webAppName'), 'virtualNetwork')]",
@@ -485,11 +566,11 @@
         "swiftSupported": true
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]",
-        "[resourceId('Microsoft.Web/sites', variables('webAppName'))]"
+        "vnet",
+        "webApp"
       ]
     },
-    {
+    "functionApp": {
       "type": "Microsoft.Web/sites",
       "apiVersion": "2023-12-01",
       "name": "[variables('functionAppName')]",
@@ -511,11 +592,11 @@
           "appSettings": [
             {
               "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
-              "value": "[reference(resourceId('Microsoft.Insights/components', variables('appInsightsName')), '2020-02-02').ConnectionString]"
+              "value": "[reference('appInsights').ConnectionString]"
             },
             {
               "name": "AzureWebJobsStorage__accountName",
-              "value": "[variables('functionStorageName')]"
+              "value": "[variables('effectiveWorkerStorageAccountName')]"
             },
             {
               "name": "AzureWebJobsStorage__credential",
@@ -549,13 +630,12 @@
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Insights/components', variables('appInsightsName'))]",
-        "[resourceId('Microsoft.Storage/storageAccounts', variables('functionStorageName'))]",
-        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]",
-        "[resourceId('Microsoft.Web/serverfarms', variables('workerPlanName'))]"
+        "appInsights",
+        "vnet",
+        "workerPlan"
       ]
     },
-    {
+    "functionAppVnetIntegration": {
       "type": "Microsoft.Web/sites/networkConfig",
       "apiVersion": "2023-12-01",
       "name": "[format('{0}/{1}', variables('functionAppName'), 'virtualNetwork')]",
@@ -564,11 +644,12 @@
         "swiftSupported": true
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]",
-        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+        "functionApp",
+        "vnet"
       ]
     },
-    {
+    "kv": {
+      "condition": "[not(variables('useExistingKeyVault'))]",
       "type": "Microsoft.KeyVault/vaults",
       "apiVersion": "2023-07-01",
       "name": "[variables('keyVaultName')]",
@@ -585,7 +666,8 @@
         "publicNetworkAccess": "[parameters('keyVaultPublicNetworkAccess')]"
       }
     },
-    {
+    "sqlServer": {
+      "condition": "[not(variables('useExistingSqlServer'))]",
       "type": "Microsoft.Sql/servers",
       "apiVersion": "2023-08-01-preview",
       "name": "[variables('sqlServerName')]",
@@ -604,13 +686,15 @@
         "minimalTlsVersion": "1.2"
       }
     },
-    {
+    "sqlPrivateDnsZone": {
+      "condition": "[not(variables('useExistingSqlServer'))]",
       "type": "Microsoft.Network/privateDnsZones",
       "apiVersion": "2020-06-01",
       "name": "[variables('sqlPrivateDnsZoneName')]",
       "location": "global"
     },
-    {
+    "sqlPrivateDnsZoneVnetLink": {
+      "condition": "[not(variables('useExistingSqlServer'))]",
       "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
       "apiVersion": "2020-06-01",
       "name": "[format('{0}/{1}', variables('sqlPrivateDnsZoneName'), variables('sqlPrivateDnsZoneVnetLinkName'))]",
@@ -622,11 +706,12 @@
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Network/privateDnsZones', variables('sqlPrivateDnsZoneName'))]",
-        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+        "sqlPrivateDnsZone",
+        "vnet"
       ]
     },
-    {
+    "sqlPrivateEndpoint": {
+      "condition": "[not(variables('useExistingSqlServer'))]",
       "type": "Microsoft.Network/privateEndpoints",
       "apiVersion": "2023-09-01",
       "name": "[variables('sqlPrivateEndpointName')]",
@@ -648,11 +733,12 @@
         ]
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]",
-        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+        "sqlServer",
+        "vnet"
       ]
     },
-    {
+    "sqlPrivateEndpointDnsZoneGroup": {
+      "condition": "[not(variables('useExistingSqlServer'))]",
       "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
       "apiVersion": "2023-09-01",
       "name": "[format('{0}/{1}', variables('sqlPrivateEndpointName'), 'default')]",
@@ -667,17 +753,19 @@
         ]
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Network/privateDnsZones', variables('sqlPrivateDnsZoneName'))]",
-        "[resourceId('Microsoft.Network/privateEndpoints', variables('sqlPrivateEndpointName'))]"
+        "sqlPrivateDnsZone",
+        "sqlPrivateEndpoint"
       ]
     },
-    {
+    "keyVaultPrivateDnsZone": {
+      "condition": "[not(variables('useExistingKeyVault'))]",
       "type": "Microsoft.Network/privateDnsZones",
       "apiVersion": "2020-06-01",
       "name": "[variables('keyVaultPrivateDnsZoneName')]",
       "location": "global"
     },
-    {
+    "keyVaultPrivateDnsZoneVnetLink": {
+      "condition": "[not(variables('useExistingKeyVault'))]",
       "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
       "apiVersion": "2020-06-01",
       "name": "[format('{0}/{1}', variables('keyVaultPrivateDnsZoneName'), variables('keyVaultPrivateDnsZoneVnetLinkName'))]",
@@ -689,11 +777,12 @@
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Network/privateDnsZones', variables('keyVaultPrivateDnsZoneName'))]",
-        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+        "keyVaultPrivateDnsZone",
+        "vnet"
       ]
     },
-    {
+    "keyVaultPrivateEndpoint": {
+      "condition": "[not(variables('useExistingKeyVault'))]",
       "type": "Microsoft.Network/privateEndpoints",
       "apiVersion": "2023-09-01",
       "name": "[variables('keyVaultPrivateEndpointName')]",
@@ -715,11 +804,12 @@
         ]
       },
       "dependsOn": [
-        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
-        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+        "kv",
+        "vnet"
       ]
     },
-    {
+    "keyVaultPrivateEndpointDnsZoneGroup": {
+      "condition": "[not(variables('useExistingKeyVault'))]",
       "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
       "apiVersion": "2023-09-01",
       "name": "[format('{0}/{1}', variables('keyVaultPrivateEndpointName'), 'default')]",
@@ -734,11 +824,12 @@
         ]
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Network/privateDnsZones', variables('keyVaultPrivateDnsZoneName'))]",
-        "[resourceId('Microsoft.Network/privateEndpoints', variables('keyVaultPrivateEndpointName'))]"
+        "keyVaultPrivateDnsZone",
+        "keyVaultPrivateEndpoint"
       ]
     },
-    {
+    "sqlDatabase": {
+      "condition": "[and(not(variables('useExistingSqlDatabase')), not(variables('useExistingSqlServer')))]",
       "type": "Microsoft.Sql/servers/databases",
       "apiVersion": "2023-08-01-preview",
       "name": "[format('{0}/{1}', variables('sqlServerName'), variables('sqlDatabaseName'))]",
@@ -751,85 +842,327 @@
         "collation": "SQL_Latin1_General_CP1_CI_AS"
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+        "sqlServer"
       ]
     },
-    {
+    "webToKvRole": {
+      "condition": "[not(variables('useExistingKeyVault'))]",
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
       "scope": "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
       "name": "[guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.Web/sites', variables('webAppName')), 'KeyVaultSecretsUser')]",
       "properties": {
         "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')]",
-        "principalId": "[reference(resourceId('Microsoft.Web/sites', variables('webAppName')), '2023-12-01', 'full').identity.principalId]",
+        "principalId": "[reference('webApp', '2023-12-01', 'full').identity.principalId]",
         "principalType": "ServicePrincipal"
       },
       "dependsOn": [
-        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
-        "[resourceId('Microsoft.Web/sites', variables('webAppName'))]"
+        "kv",
+        "webApp"
       ]
     },
-    {
+    "workerToKvRole": {
+      "condition": "[not(variables('useExistingKeyVault'))]",
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
       "scope": "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
       "name": "[guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.Web/sites', variables('functionAppName')), 'KeyVaultSecretsUser')]",
       "properties": {
         "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')]",
-        "principalId": "[reference(resourceId('Microsoft.Web/sites', variables('functionAppName')), '2023-12-01', 'full').identity.principalId]",
+        "principalId": "[reference('functionApp', '2023-12-01', 'full').identity.principalId]",
         "principalType": "ServicePrincipal"
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]",
-        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+        "functionApp",
+        "kv"
       ]
     },
-    {
+    "workerToFunctionStorageBlobRole": {
+      "condition": "[not(variables('useExistingWorkerStorageAccount'))]",
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
       "scope": "[resourceId('Microsoft.Storage/storageAccounts', variables('functionStorageName'))]",
       "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', variables('functionStorageName')), resourceId('Microsoft.Web/sites', variables('functionAppName')), 'StorageBlobDataOwner')]",
       "properties": {
         "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b')]",
-        "principalId": "[reference(resourceId('Microsoft.Web/sites', variables('functionAppName')), '2023-12-01', 'full').identity.principalId]",
+        "principalId": "[reference('functionApp', '2023-12-01', 'full').identity.principalId]",
         "principalType": "ServicePrincipal"
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]",
-        "[resourceId('Microsoft.Storage/storageAccounts', variables('functionStorageName'))]"
+        "functionApp",
+        "functionStorage"
       ]
     },
-    {
+    "workerToFunctionStorageQueueRole": {
+      "condition": "[not(variables('useExistingWorkerStorageAccount'))]",
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
       "scope": "[resourceId('Microsoft.Storage/storageAccounts', variables('functionStorageName'))]",
       "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', variables('functionStorageName')), resourceId('Microsoft.Web/sites', variables('functionAppName')), 'StorageQueueDataContributor')]",
       "properties": {
         "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '974c5e8b-45b9-4653-ba55-5f855dd0fb88')]",
-        "principalId": "[reference(resourceId('Microsoft.Web/sites', variables('functionAppName')), '2023-12-01', 'full').identity.principalId]",
+        "principalId": "[reference('functionApp', '2023-12-01', 'full').identity.principalId]",
         "principalType": "ServicePrincipal"
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]",
-        "[resourceId('Microsoft.Storage/storageAccounts', variables('functionStorageName'))]"
+        "functionApp",
+        "functionStorage"
       ]
     },
-    {
+    "workerToFunctionStorageTableRole": {
+      "condition": "[not(variables('useExistingWorkerStorageAccount'))]",
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
       "scope": "[resourceId('Microsoft.Storage/storageAccounts', variables('functionStorageName'))]",
       "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', variables('functionStorageName')), resourceId('Microsoft.Web/sites', variables('functionAppName')), 'StorageTableDataContributor')]",
       "properties": {
         "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3')]",
-        "principalId": "[reference(resourceId('Microsoft.Web/sites', variables('functionAppName')), '2023-12-01', 'full').identity.principalId]",
+        "principalId": "[reference('functionApp', '2023-12-01', 'full').identity.principalId]",
         "principalType": "ServicePrincipal"
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]",
-        "[resourceId('Microsoft.Storage/storageAccounts', variables('functionStorageName'))]"
+        "functionApp",
+        "functionStorage"
       ]
     },
-    {
+    "existingSqlDatabaseModule": {
+      "condition": "[and(not(variables('useExistingSqlDatabase')), variables('useExistingSqlServer'))]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('existingSqlDatabaseModule-{0}', uniqueString('existingSqlDatabaseModule', deployment().name))]",
+      "resourceGroup": "[variables('effectiveSqlServerResourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "sqlServerName": {
+            "value": "[variables('effectiveSqlServerName')]"
+          },
+          "sqlDatabaseName": {
+            "value": "[variables('sqlDatabaseName')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "3743548973891542615"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Location for the database resource."
+              }
+            },
+            "sqlServerName": {
+              "type": "string",
+              "metadata": {
+                "description": "Existing Azure SQL server name in this resource group."
+              }
+            },
+            "sqlDatabaseName": {
+              "type": "string",
+              "metadata": {
+                "description": "Dashboard database name to create on the existing SQL server."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Sql/servers/databases",
+              "apiVersion": "2023-08-01-preview",
+              "name": "[format('{0}/{1}', parameters('sqlServerName'), parameters('sqlDatabaseName'))]",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "S0",
+                "tier": "Standard"
+              },
+              "properties": {
+                "collation": "SQL_Latin1_General_CP1_CI_AS"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "existingKeyVaultRoleAssignments": {
+      "condition": "[variables('useExistingKeyVault')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('existingKeyVaultRoleAssignments-{0}', uniqueString('existingKeyVaultRoleAssignments', deployment().name))]",
+      "resourceGroup": "[variables('effectiveKeyVaultResourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "keyVaultName": {
+            "value": "[variables('effectiveKeyVaultName')]"
+          },
+          "webPrincipalId": {
+            "value": "[reference('webApp', '2023-12-01', 'full').identity.principalId]"
+          },
+          "workerPrincipalId": {
+            "value": "[reference('functionApp', '2023-12-01', 'full').identity.principalId]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "9455170504716933192"
+            }
+          },
+          "parameters": {
+            "keyVaultName": {
+              "type": "string",
+              "metadata": {
+                "description": "Existing Key Vault name in this resource group."
+              }
+            },
+            "webPrincipalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Web app managed identity principal ID."
+              }
+            },
+            "workerPrincipalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Worker function app managed identity principal ID."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]",
+              "name": "[guid(resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName')), parameters('webPrincipalId'), 'KeyVaultSecretsUser')]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')]",
+                "principalId": "[parameters('webPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]",
+              "name": "[guid(resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName')), parameters('workerPrincipalId'), 'KeyVaultSecretsUser')]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')]",
+                "principalId": "[parameters('workerPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "functionApp",
+        "webApp"
+      ]
+    },
+    "existingWorkerStorageRoleAssignments": {
+      "condition": "[variables('useExistingWorkerStorageAccount')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('existingWorkerStorageRoleAssignments-{0}', uniqueString('existingWorkerStorageRoleAssignments', deployment().name))]",
+      "resourceGroup": "[variables('effectiveWorkerStorageAccountResourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "storageAccountName": {
+            "value": "[variables('effectiveWorkerStorageAccountName')]"
+          },
+          "workerPrincipalId": {
+            "value": "[reference('functionApp', '2023-12-01', 'full').identity.principalId]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "12310750176923804088"
+            }
+          },
+          "parameters": {
+            "storageAccountName": {
+              "type": "string",
+              "metadata": {
+                "description": "Existing storage account name in this resource group."
+              }
+            },
+            "workerPrincipalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Worker function app managed identity principal ID."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('workerPrincipalId'), 'StorageBlobDataOwner')]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b')]",
+                "principalId": "[parameters('workerPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('workerPrincipalId'), 'StorageQueueDataContributor')]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '974c5e8b-45b9-4653-ba55-5f855dd0fb88')]",
+                "principalId": "[parameters('workerPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('workerPrincipalId'), 'StorageTableDataContributor')]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3')]",
+                "principalId": "[parameters('workerPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "functionApp"
+      ]
+    },
+    "workerSubscriptionRbacAssignments": {
       "copy": {
         "name": "workerSubscriptionRbacAssignments",
         "count": "[length(parameters('workerSubscriptionRbacSubscriptionIds'))]"
@@ -846,7 +1179,7 @@
         "mode": "Incremental",
         "parameters": {
           "principalId": {
-            "value": "[reference(resourceId('Microsoft.Web/sites', variables('functionAppName')), '2023-12-01', 'full').identity.principalId]"
+            "value": "[reference('functionApp', '2023-12-01', 'full').identity.principalId]"
           },
           "assignComputeRecommendationsRole": {
             "value": "[parameters('assignWorkerComputeRecommendationsRole')]"
@@ -936,10 +1269,10 @@
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]"
+        "functionApp"
       ]
     },
-    {
+    "workerManagementGroupRbacAssignments": {
       "copy": {
         "name": "workerManagementGroupRbacAssignments",
         "count": "[length(parameters('workerRbacManagementGroupNames'))]"
@@ -959,7 +1292,7 @@
             "value": "[parameters('workerRbacManagementGroupNames')[copyIndex()]]"
           },
           "principalId": {
-            "value": "[reference(resourceId('Microsoft.Web/sites', variables('functionAppName')), '2023-12-01', 'full').identity.principalId]"
+            "value": "[reference('functionApp', '2023-12-01', 'full').identity.principalId]"
           },
           "assignComputeRecommendationsRole": {
             "value": "[parameters('assignWorkerComputeRecommendationsRole')]"
@@ -1124,10 +1457,10 @@
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]"
+        "functionApp"
       ]
     },
-    {
+    "webSubscriptionReaderAssignments": {
       "copy": {
         "name": "webSubscriptionReaderAssignments",
         "count": "[length(parameters('webReaderSubscriptionIds'))]"
@@ -1144,7 +1477,7 @@
         "mode": "Incremental",
         "parameters": {
           "principalId": {
-            "value": "[reference(resourceId('Microsoft.Web/sites', variables('webAppName')), '2023-12-01', 'full').identity.principalId]"
+            "value": "[reference('webApp', '2023-12-01', 'full').identity.principalId]"
           }
         },
         "template": {
@@ -1180,10 +1513,10 @@
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Web/sites', variables('webAppName'))]"
+        "webApp"
       ]
     },
-    {
+    "webManagementGroupReaderAssignments": {
       "copy": {
         "name": "webManagementGroupReaderAssignments",
         "count": "[length(parameters('webReaderManagementGroupNames'))]"
@@ -1203,7 +1536,7 @@
             "value": "[parameters('webReaderManagementGroupNames')[copyIndex()]]"
           },
           "principalId": {
-            "value": "[reference(resourceId('Microsoft.Web/sites', variables('webAppName')), '2023-12-01', 'full').identity.principalId]"
+            "value": "[reference('webApp', '2023-12-01', 'full').identity.principalId]"
           }
         },
         "template": {
@@ -1284,10 +1617,10 @@
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Web/sites', variables('webAppName'))]"
+        "webApp"
       ]
     },
-    {
+    "webSubscriptionQuotaWriterAssignments": {
       "copy": {
         "name": "webSubscriptionQuotaWriterAssignments",
         "count": "[length(parameters('webQuotaWriterSubscriptionIds'))]"
@@ -1304,7 +1637,7 @@
         "mode": "Incremental",
         "parameters": {
           "principalId": {
-            "value": "[reference(resourceId('Microsoft.Web/sites', variables('webAppName')), '2023-12-01', 'full').identity.principalId]"
+            "value": "[reference('webApp', '2023-12-01', 'full').identity.principalId]"
           }
         },
         "template": {
@@ -1340,10 +1673,10 @@
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Web/sites', variables('webAppName'))]"
+        "webApp"
       ]
     },
-    {
+    "webManagementGroupQuotaWriterAssignments": {
       "copy": {
         "name": "webManagementGroupQuotaWriterAssignments",
         "count": "[length(parameters('webQuotaWriterManagementGroupNames'))]"
@@ -1363,7 +1696,7 @@
             "value": "[parameters('webQuotaWriterManagementGroupNames')[copyIndex()]]"
           },
           "principalId": {
-            "value": "[reference(resourceId('Microsoft.Web/sites', variables('webAppName')), '2023-12-01', 'full').identity.principalId]"
+            "value": "[reference('webApp', '2023-12-01', 'full').identity.principalId]"
           }
         },
         "template": {
@@ -1444,10 +1777,10 @@
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Web/sites', variables('webAppName'))]"
+        "webApp"
       ]
     }
-  ],
+  },
   "outputs": {
     "webAppName": {
       "type": "string",
@@ -1455,11 +1788,11 @@
     },
     "webAppUrl": {
       "type": "string",
-      "value": "[format('https://{0}', reference(resourceId('Microsoft.Web/sites', variables('webAppName')), '2023-12-01').defaultHostName)]"
+      "value": "[format('https://{0}', reference('webApp').defaultHostName)]"
     },
     "managedIdentityPrincipalId": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.Web/sites', variables('webAppName')), '2023-12-01', 'full').identity.principalId]"
+      "value": "[reference('webApp', '2023-12-01', 'full').identity.principalId]"
     },
     "functionAppName": {
       "type": "string",
@@ -1467,27 +1800,27 @@
     },
     "functionAppUrl": {
       "type": "string",
-      "value": "[format('https://{0}', reference(resourceId('Microsoft.Web/sites', variables('functionAppName')), '2023-12-01').defaultHostName)]"
+      "value": "[format('https://{0}', reference('functionApp').defaultHostName)]"
     },
     "functionManagedIdentityPrincipalId": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.Web/sites', variables('functionAppName')), '2023-12-01', 'full').identity.principalId]"
+      "value": "[reference('functionApp', '2023-12-01', 'full').identity.principalId]"
     },
     "sqlServerFqdn": {
       "type": "string",
-      "value": "[format('{0}{1}', variables('sqlServerName'), environment().suffixes.sqlServerHostname)]"
+      "value": "[variables('effectiveSqlServerFqdn')]"
     },
     "sqlServerName": {
       "type": "string",
-      "value": "[variables('sqlServerName')]"
+      "value": "[variables('effectiveSqlServerName')]"
     },
     "sqlDatabaseName": {
       "type": "string",
-      "value": "[variables('sqlDatabaseName')]"
+      "value": "[variables('effectiveSqlDatabaseName')]"
     },
     "keyVaultName": {
       "type": "string",
-      "value": "[variables('keyVaultName')]"
+      "value": "[variables('effectiveKeyVaultName')]"
     },
     "virtualNetworkName": {
       "type": "string",
@@ -1495,11 +1828,11 @@
     },
     "sqlPrivateEndpointName": {
       "type": "string",
-      "value": "[variables('sqlPrivateEndpointName')]"
+      "value": "[if(variables('useExistingSqlServer'), '', variables('sqlPrivateEndpointName'))]"
     },
     "keyVaultPrivateEndpointName": {
       "type": "string",
-      "value": "[variables('keyVaultPrivateEndpointName')]"
+      "value": "[if(variables('useExistingKeyVault'), '', variables('keyVaultPrivateEndpointName'))]"
     }
   }
 }

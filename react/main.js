@@ -2713,6 +2713,7 @@ function QuotaWorkbenchView(props) {
     return [];
   }, [managementGroups, selectedManagementGroup]);
   const shareableRows = Array.isArray(shareableReport?.rows) ? shareableReport.rows : [];
+  const shareableSummary = shareableReport?.summary || { rowCount: 0, subscriptionCount: 0, regionCount: 0, skuCount: 0, totalShareableQuota: 0, totalAllocatedQuota: 0 };
   const shareableSubtitle = shareableReport?.generatedAtUtc
     ? `Only rows with a quota deficit are shown. Values are absolute deficit magnitudes. Generated ${formatTimestamp(shareableReport.generatedAtUtc)}.`
     : 'Only rows with a quota deficit are shown. Values are absolute deficit magnitudes. This report is read-only.';
@@ -3563,16 +3564,28 @@ function App() {
         const authContext = authPayload.auth;
         setAuth(authContext);
 
-        const requests = [fetchJson('/api/subscriptions?limit=500')];
+        const subscriptionPayload = await fetchJson('/api/subscriptions?limit=500');
+        let managementGroupPayload = { groups: [], defaultManagementGroupId: '' };
+        let uiSettingsPayload = { settings: { showSqlPreview: false } };
+        let bootstrapWarning = '';
+
         if (authContext && authContext.canAccessAdmin) {
-          requests.push(fetchJson('/api/quota/management-groups'));
-          requests.push(fetchJson('/api/admin/ui-settings'));
+          const adminResponses = await Promise.allSettled([
+            fetchJson('/api/quota/management-groups'),
+            fetchJson('/api/admin/ui-settings')
+          ]);
+
+          if (adminResponses[0]?.status === 'fulfilled') {
+            managementGroupPayload = adminResponses[0].value || managementGroupPayload;
+          } else {
+            bootstrapWarning = adminResponses[0]?.reason?.message || 'Quota Workbench management-group scope could not be loaded automatically.';
+          }
+
+          if (adminResponses[1]?.status === 'fulfilled') {
+            uiSettingsPayload = adminResponses[1].value || uiSettingsPayload;
+          }
         }
 
-        const responses = await Promise.all(requests);
-        const subscriptionPayload = responses[0] || { rows: [] };
-        const managementGroupPayload = responses[1] || { groups: [], defaultManagementGroupId: '' };
-        const uiSettingsPayload = responses[2] || { settings: { showSqlPreview: false } };
         const subscriptions = Array.isArray(subscriptionPayload.rows) ? subscriptionPayload.rows : [];
         setSubscriptionOptions(subscriptions);
         setSelectedSubscriptionIds(subscriptions.map((row) => row.subscriptionId).filter(Boolean));
@@ -3582,7 +3595,9 @@ function App() {
           : (managementGroups[0] ? managementGroups[0].id : '');
         setQuotaState((current) => ({ ...current, managementGroups, selectedManagementGroup }));
         setShowSqlPreview(Boolean(uiSettingsPayload.settings && uiSettingsPayload.settings.showSqlPreview));
-        setAppStatus({ tone: 'success', message: 'React v2 loaded. Use the right-side flyout to manage large filter sets.' });
+        setAppStatus(bootstrapWarning
+          ? { tone: 'warning', message: bootstrapWarning }
+          : { tone: 'success', message: 'React v2 loaded. Use the right-side flyout to manage large filter sets.' });
       } catch (error) {
         setAppStatus({ tone: 'error', message: error.message || 'Failed to initialize React experience.' });
       } finally {

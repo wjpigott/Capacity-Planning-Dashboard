@@ -3,6 +3,25 @@ const assert = require('node:assert/strict');
 
 const { __testHooks } = require('../src/services/quotaDiscoveryService');
 
+test('getConfiguredManagementGroupFallbacks prefers QUOTA_MANAGEMENT_GROUP_ID and adds unique ingest management groups', () => {
+  const originalQuotaManagementGroupId = process.env.QUOTA_MANAGEMENT_GROUP_ID;
+  const originalIngestManagementGroupNames = process.env.INGEST_MANAGEMENT_GROUP_NAMES;
+
+  process.env.QUOTA_MANAGEMENT_GROUP_ID = 'Demo-MG';
+  process.env.INGEST_MANAGEMENT_GROUP_NAMES = 'Demo-MG, Child-MG , child-mg , Another-MG';
+
+  try {
+    assert.deepEqual(__testHooks.getConfiguredManagementGroupFallbacks(), [
+      'Demo-MG',
+      'Child-MG',
+      'Another-MG'
+    ]);
+  } finally {
+    process.env.QUOTA_MANAGEMENT_GROUP_ID = originalQuotaManagementGroupId;
+    process.env.INGEST_MANAGEMENT_GROUP_NAMES = originalIngestManagementGroupNames;
+  }
+});
+
 test('normalizeShareableQuotaRow maps a quota allocation entry into report shape', () => {
   const row = __testHooks.normalizeShareableQuotaRow({
     managementGroupId: 'demo-mg',

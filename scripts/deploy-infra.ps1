@@ -14,12 +14,19 @@ param(
     [Parameter(Mandatory = $false)][string[]]$WebQuotaWriterManagementGroupNames = @(),
     [Parameter(Mandatory = $false)][string]$QuotaManagementGroupId,
     [Parameter(Mandatory = $false)][string]$KeyVaultNameOverride,
+    [Parameter(Mandatory = $false)][string]$ExistingSqlServerName,
+    [Parameter(Mandatory = $false)][string]$ExistingSqlServerResourceGroupName,
+    [Parameter(Mandatory = $false)][string]$ExistingSqlDatabaseName,
+    [Parameter(Mandatory = $false)][string]$ExistingKeyVaultName,
+    [Parameter(Mandatory = $false)][string]$ExistingKeyVaultResourceGroupName,
+    [Parameter(Mandatory = $false)][string]$ExistingWorkerStorageAccountName,
+    [Parameter(Mandatory = $false)][string]$ExistingWorkerStorageResourceGroupName,
     [Parameter(Mandatory = $false)][string[]]$WorkerRbacSubscriptionIds = @(),
     [Parameter(Mandatory = $false)][string[]]$WorkerRbacManagementGroupNames = @(),
     [Parameter(Mandatory = $false)][bool]$AssignWorkerComputeRecommendationsRole = $true,
     [Parameter(Mandatory = $false)][bool]$AssignWorkerCostManagementReaderRole = $true,
     [Parameter(Mandatory = $false)][bool]$AssignWorkerBillingReaderRole = $true,
-    [Parameter(Mandatory = $false)][AllowNull()][Nullable[bool]]$AuthEnabled = $null,
+    [Parameter(Mandatory = $false)][bool]$AuthEnabled = $true,
     [Parameter(Mandatory = $false)][string]$EntraTenantId,
     [Parameter(Mandatory = $false)][string]$EntraClientId,
     [Parameter(Mandatory = $false)][string]$EntraClientSecret,
@@ -40,9 +47,46 @@ $deployWebAppScript = Join-Path $repoRoot 'deploy-web-app.ps1'
 $deployWorkerScript = Join-Path $repoRoot 'scripts' 'deploy-worker.ps1'
 $webAppName = "app-capdash-$Environment-$WorkloadSuffix"
 $functionAppName = "func-capdash-$Environment-$WorkloadSuffix-appsvc"
-$sqlServerName = "sql-capdash-$Environment-$WorkloadSuffix.database.windows.net"
-$sqlDatabaseName = "sqldb-capdash-$Environment"
-$manualDatabaseInitializeCommand = ".\scripts\initialize-database.ps1 -SqlServer `"$sqlServerName`" -SqlDatabase `"$sqlDatabaseName`" -AppIdentityName `"$webAppName`""
+
+function Resolve-SqlServerHostName([string]$ServerName) {
+    if ([string]::IsNullOrWhiteSpace($ServerName)) {
+        return ''
+    }
+
+    if ($ServerName.Contains('.')) {
+        return $ServerName.Trim()
+    }
+
+    return "$($ServerName.Trim()).database.windows.net"
+}
+
+$useExistingSqlServer = -not [string]::IsNullOrWhiteSpace($ExistingSqlServerName)
+$useExistingSqlDatabase = -not [string]::IsNullOrWhiteSpace($ExistingSqlDatabaseName)
+$useExistingKeyVault = -not [string]::IsNullOrWhiteSpace($ExistingKeyVaultName)
+$useExistingWorkerStorageAccount = -not [string]::IsNullOrWhiteSpace($ExistingWorkerStorageAccountName)
+if ($useExistingSqlDatabase -and -not $useExistingSqlServer) {
+    throw '-ExistingSqlDatabaseName requires -ExistingSqlServerName because an existing Azure SQL database must hang off an existing SQL server.'
+}
+
+if ([string]::IsNullOrWhiteSpace($ExistingSqlServerResourceGroupName)) {
+    $ExistingSqlServerResourceGroupName = $ResourceGroupName
+}
+
+if ([string]::IsNullOrWhiteSpace($ExistingKeyVaultResourceGroupName)) {
+    $ExistingKeyVaultResourceGroupName = $ResourceGroupName
+}
+
+if ([string]::IsNullOrWhiteSpace($ExistingWorkerStorageResourceGroupName)) {
+    $ExistingWorkerStorageResourceGroupName = $ResourceGroupName
+}
+
+$effectiveSqlServerHostName = if ($useExistingSqlServer) {
+    Resolve-SqlServerHostName -ServerName $ExistingSqlServerName
+} else {
+    Resolve-SqlServerHostName -ServerName "sql-capdash-$Environment-$WorkloadSuffix"
+}
+$effectiveSqlDatabaseName = if ($useExistingSqlDatabase) { $ExistingSqlDatabaseName } else { "sqldb-capdash-$Environment" }
+$manualDatabaseInitializeCommand = ".\scripts\initialize-database.ps1 -SqlServer `"$effectiveSqlServerHostName`" -SqlDatabase `"$effectiveSqlDatabaseName`" -AppIdentityName `"$webAppName`""
 
 function New-GeneratedSecret([int]$ByteCount = 32) {
     $bytes = New-Object byte[] $ByteCount
@@ -210,13 +254,18 @@ function Deploy-Terraform {
 
         if (-not [string]::IsNullOrWhiteSpace($IngestApiKey))        { $tfVars += "-var=ingest_api_key=$IngestApiKey" }
         if (-not [string]::IsNullOrWhiteSpace($SessionSecret))       { $tfVars += "-var=session_secret=$SessionSecret" }
-        if ($PSBoundParameters.ContainsKey('AuthEnabled') -and $null -ne $AuthEnabled) {
-            $tfVars += "-var=auth_enabled=$($AuthEnabled.ToString().ToLowerInvariant())"
-        }
+        $tfVars += "-var=auth_enabled=$($AuthEnabled.ToString().ToLowerInvariant())"
 
         if (-not [string]::IsNullOrWhiteSpace($WorkerSharedSecret))    { $tfVars += "-var=worker_shared_secret=$WorkerSharedSecret" }
         if (-not [string]::IsNullOrWhiteSpace($KeyVaultNameOverride))  { $tfVars += "-var=key_vault_name_override=$KeyVaultNameOverride" }
         if (-not [string]::IsNullOrWhiteSpace($QuotaManagementGroupId)){ $tfVars += "-var=quota_management_group_id=$QuotaManagementGroupId" }
+        $tfVars += "-var=existing_sql_server_name=$ExistingSqlServerName"
+        $tfVars += "-var=existing_sql_server_resource_group_name=$ExistingSqlServerResourceGroupName"
+        $tfVars += "-var=existing_sql_database_name=$ExistingSqlDatabaseName"
+        $tfVars += "-var=existing_key_vault_name=$ExistingKeyVaultName"
+        $tfVars += "-var=existing_key_vault_resource_group_name=$ExistingKeyVaultResourceGroupName"
+        $tfVars += "-var=existing_worker_storage_account_name=$ExistingWorkerStorageAccountName"
+        $tfVars += "-var=existing_worker_storage_account_resource_group_name=$ExistingWorkerStorageResourceGroupName"
         if (-not [string]::IsNullOrWhiteSpace($EntraTenantId))         { $tfVars += "-var=entra_tenant_id=$EntraTenantId" }
         if (-not [string]::IsNullOrWhiteSpace($EntraClientId))         { $tfVars += "-var=entra_client_id=$EntraClientId" }
         if (-not [string]::IsNullOrWhiteSpace($EntraClientSecret))     { $tfVars += "-var=entra_client_secret=$EntraClientSecret" }
@@ -276,9 +325,15 @@ if (-not [string]::IsNullOrWhiteSpace($QuotaManagementGroupId)) {
     $deploymentArgs += @('--parameters', "quotaManagementGroupId=$QuotaManagementGroupId")
 }
 
-if ($PSBoundParameters.ContainsKey('AuthEnabled') -and $null -ne $AuthEnabled) {
-    $deploymentArgs += @('--parameters', "authEnabled=$($AuthEnabled.ToString().ToLowerInvariant())")
-}
+$deploymentArgs += @('--parameters', "existingSqlServerName=$ExistingSqlServerName")
+$deploymentArgs += @('--parameters', "existingSqlServerResourceGroupName=$ExistingSqlServerResourceGroupName")
+$deploymentArgs += @('--parameters', "existingSqlDatabaseName=$ExistingSqlDatabaseName")
+$deploymentArgs += @('--parameters', "existingKeyVaultName=$ExistingKeyVaultName")
+$deploymentArgs += @('--parameters', "existingKeyVaultResourceGroupName=$ExistingKeyVaultResourceGroupName")
+$deploymentArgs += @('--parameters', "existingWorkerStorageAccountName=$ExistingWorkerStorageAccountName")
+$deploymentArgs += @('--parameters', "existingWorkerStorageAccountResourceGroupName=$ExistingWorkerStorageResourceGroupName")
+
+$deploymentArgs += @('--parameters', "authEnabled=$($AuthEnabled.ToString().ToLowerInvariant())")
 
 if (-not [string]::IsNullOrWhiteSpace($EntraTenantId)) {
     $deploymentArgs += @('--parameters', "entraTenantId=$EntraTenantId")

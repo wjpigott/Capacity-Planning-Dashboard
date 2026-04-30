@@ -1,4 +1,8 @@
 locals {
+  use_existing_sql_server              = trimspace(var.existing_sql_server_name) != ""
+  use_existing_sql_database            = trimspace(var.existing_sql_database_name) != ""
+  use_existing_key_vault               = trimspace(var.existing_key_vault_name) != ""
+  use_existing_worker_storage_account  = trimspace(var.existing_worker_storage_account_name) != ""
   app_service_plan_name              = "asp-capdash-${var.environment}-${var.workload_suffix}"
   worker_plan_name                   = "asp-capdash-worker-${var.environment}-${var.workload_suffix}"
   web_app_name                       = "app-capdash-${var.environment}-${var.workload_suffix}"
@@ -19,8 +23,14 @@ locals {
   kv_private_dns_zone_name           = "privatelink.vaultcore.azure.net"
   kv_private_dns_zone_vnet_link      = "pdz-link-kv-capdash-${var.environment}-${var.workload_suffix}"
   effective_auth_redirect_uri        = var.auth_redirect_uri != "" ? var.auth_redirect_uri : "https://${local.web_app_name}.azurewebsites.net/auth/callback"
-  existing_entra_web_redirect_uris   = try(tolist(data.azuread_application.dashboard[0].web[0].redirect_uris), [])
-  managed_entra_web_redirect_uris    = distinct(concat(local.existing_entra_web_redirect_uris, var.extra_entra_web_redirect_uris, [local.effective_auth_redirect_uri]))
+  effective_sql_server_resource_group_name = var.existing_sql_server_resource_group_name != "" ? var.existing_sql_server_resource_group_name : azurerm_resource_group.rg.name
+  effective_sql_server_name                = local.use_existing_sql_server ? var.existing_sql_server_name : local.sql_server_name
+  effective_sql_server_fqdn                = endswith(local.effective_sql_server_name, ".database.windows.net") ? local.effective_sql_server_name : "${local.effective_sql_server_name}.database.windows.net"
+  effective_sql_database_name              = local.use_existing_sql_database ? var.existing_sql_database_name : local.sql_database_name
+  effective_key_vault_resource_group_name  = var.existing_key_vault_resource_group_name != "" ? var.existing_key_vault_resource_group_name : azurerm_resource_group.rg.name
+  effective_key_vault_name                 = local.use_existing_key_vault ? var.existing_key_vault_name : local.key_vault_name
+  effective_worker_storage_resource_group_name = var.existing_worker_storage_account_resource_group_name != "" ? var.existing_worker_storage_account_resource_group_name : azurerm_resource_group.rg.name
+  effective_worker_storage_name                = local.use_existing_worker_storage_account ? var.existing_worker_storage_account_name : local.function_storage_name
 }
 
 resource "random_string" "storage_suffix" {
@@ -35,11 +45,6 @@ resource "azurerm_resource_group" "rg" {
 }
 
 data "azurerm_client_config" "current" {}
-
-data "azuread_application" "dashboard" {
-  count     = var.manage_entra_web_redirect_uri && var.auth_enabled && var.entra_client_id != "" ? 1 : 0
-  client_id = var.entra_client_id
-}
 
 # ──────────────────────────────────────────────
 # Virtual Network
@@ -96,6 +101,7 @@ resource "azurerm_application_insights" "ai" {
 # Storage Account (Function App)
 # ──────────────────────────────────────────────
 resource "azurerm_storage_account" "function_storage" {
+  count                           = local.use_existing_worker_storage_account ? 0 : 1
   name                            = local.function_storage_name
   location                        = var.location
   resource_group_name             = azurerm_resource_group.rg.name
@@ -107,6 +113,12 @@ resource "azurerm_storage_account" "function_storage" {
   allow_nested_items_to_be_public = false
   shared_access_key_enabled       = false
   access_tier                     = "Hot"
+}
+
+data "azurerm_storage_account" "function_storage" {
+  count               = local.use_existing_worker_storage_account ? 1 : 0
+  name                = local.effective_worker_storage_name
+  resource_group_name = local.effective_worker_storage_resource_group_name
 }
 
 # ──────────────────────────────────────────────
@@ -153,8 +165,8 @@ resource "azurerm_windows_web_app" "web" {
   app_settings = {
     "APPLICATIONINSIGHTS_CONNECTION_STRING" = azurerm_application_insights.ai.connection_string
     "Dashboard__Mode"                       = "MVP"
-    "SQL_SERVER"                            = "${local.sql_server_name}.database.windows.net"
-    "SQL_DATABASE"                          = local.sql_database_name
+    "SQL_SERVER"                            = local.effective_sql_server_fqdn
+    "SQL_DATABASE"                          = local.effective_sql_database_name
     "SQL_AUTH_MODE"                         = "managed-identity"
     "CAPACITY_WORKER_BASE_URL"              = "https://${azurerm_windows_function_app.worker.default_hostname}"
     "CAPACITY_WORKER_SHARED_SECRET"         = var.worker_shared_secret
@@ -176,11 +188,13 @@ resource "azurerm_windows_web_app" "web" {
   }
 }
 
-resource "azuread_application_redirect_uris" "dashboard_web" {
-  count          = var.manage_entra_web_redirect_uri && var.auth_enabled && var.entra_client_id != "" ? 1 : 0
-  application_id = data.azuread_application.dashboard[0].id
-  type           = "Web"
-  redirect_uris  = local.managed_entra_web_redirect_uris
+module "dashboard_web_redirect_uris" {
+  count  = var.manage_entra_web_redirect_uri && var.auth_enabled && var.entra_client_id != "" ? 1 : 0
+  source = "./modules/dashboard-web-redirect-uris"
+
+  client_id             = var.entra_client_id
+  generated_redirect_uri = local.effective_auth_redirect_uri
+  extra_redirect_uris   = var.extra_entra_web_redirect_uris
 
   depends_on = [azurerm_windows_web_app.web]
 }
@@ -193,7 +207,7 @@ resource "azurerm_windows_function_app" "worker" {
   location                   = var.location
   resource_group_name        = azurerm_resource_group.rg.name
   service_plan_id            = azurerm_service_plan.worker.id
-  storage_account_name       = azurerm_storage_account.function_storage.name
+  storage_account_name       = local.effective_worker_storage_name
   storage_uses_managed_identity = true
   https_only                 = true
   virtual_network_subnet_id  = azurerm_subnet.app_service_integration.id
@@ -227,6 +241,7 @@ resource "azurerm_windows_function_app" "worker" {
 # Key Vault
 # ──────────────────────────────────────────────
 resource "azurerm_key_vault" "kv" {
+  count                         = local.use_existing_key_vault ? 0 : 1
   name                          = local.key_vault_name
   location                      = var.location
   resource_group_name           = azurerm_resource_group.rg.name
@@ -238,10 +253,17 @@ resource "azurerm_key_vault" "kv" {
   public_network_access_enabled = var.key_vault_public_network_access == "Enabled"
 }
 
+data "azurerm_key_vault" "kv" {
+  count               = local.use_existing_key_vault ? 1 : 0
+  name                = local.effective_key_vault_name
+  resource_group_name = local.effective_key_vault_resource_group_name
+}
+
 # ──────────────────────────────────────────────
 # SQL Server & Database
 # ──────────────────────────────────────────────
 resource "azurerm_mssql_server" "sql" {
+  count                          = local.use_existing_sql_server ? 0 : 1
   name                         = local.sql_server_name
   resource_group_name          = azurerm_resource_group.rg.name
   location                     = var.location
@@ -257,9 +279,16 @@ resource "azurerm_mssql_server" "sql" {
   }
 }
 
+data "azurerm_mssql_server" "sql" {
+  count               = local.use_existing_sql_server ? 1 : 0
+  name                = local.effective_sql_server_name
+  resource_group_name = local.effective_sql_server_resource_group_name
+}
+
 resource "azurerm_mssql_database" "db" {
+  count     = local.use_existing_sql_database ? 0 : 1
   name      = local.sql_database_name
-  server_id = azurerm_mssql_server.sql.id
+  server_id = local.use_existing_sql_server ? data.azurerm_mssql_server.sql[0].id : azurerm_mssql_server.sql[0].id
   sku_name  = "S0"
   collation = "SQL_Latin1_General_CP1_CI_AS"
 }
@@ -268,19 +297,22 @@ resource "azurerm_mssql_database" "db" {
 # SQL Private Endpoint & DNS
 # ──────────────────────────────────────────────
 resource "azurerm_private_dns_zone" "sql" {
+  count               = local.use_existing_sql_server ? 0 : 1
   name                = local.sql_private_dns_zone_name
   resource_group_name = azurerm_resource_group.rg.name
 }
 
 resource "azurerm_private_dns_zone_virtual_network_link" "sql" {
+  count                 = local.use_existing_sql_server ? 0 : 1
   name                  = local.sql_private_dns_zone_vnet_link
   resource_group_name   = azurerm_resource_group.rg.name
-  private_dns_zone_name = azurerm_private_dns_zone.sql.name
+  private_dns_zone_name = azurerm_private_dns_zone.sql[0].name
   virtual_network_id    = azurerm_virtual_network.vnet.id
   registration_enabled  = false
 }
 
 resource "azurerm_private_endpoint" "sql" {
+  count               = local.use_existing_sql_server ? 0 : 1
   name                = local.sql_private_endpoint_name
   location            = var.location
   resource_group_name = azurerm_resource_group.rg.name
@@ -288,14 +320,14 @@ resource "azurerm_private_endpoint" "sql" {
 
   private_service_connection {
     name                           = "sqlServerConnection"
-    private_connection_resource_id = azurerm_mssql_server.sql.id
+    private_connection_resource_id = azurerm_mssql_server.sql[0].id
     subresource_names              = ["sqlServer"]
     is_manual_connection           = false
   }
 
   private_dns_zone_group {
     name                 = "default"
-    private_dns_zone_ids = [azurerm_private_dns_zone.sql.id]
+    private_dns_zone_ids = [azurerm_private_dns_zone.sql[0].id]
   }
 }
 
@@ -303,19 +335,22 @@ resource "azurerm_private_endpoint" "sql" {
 # Key Vault Private Endpoint & DNS
 # ──────────────────────────────────────────────
 resource "azurerm_private_dns_zone" "kv" {
+  count               = local.use_existing_key_vault ? 0 : 1
   name                = local.kv_private_dns_zone_name
   resource_group_name = azurerm_resource_group.rg.name
 }
 
 resource "azurerm_private_dns_zone_virtual_network_link" "kv" {
+  count                 = local.use_existing_key_vault ? 0 : 1
   name                  = local.kv_private_dns_zone_vnet_link
   resource_group_name   = azurerm_resource_group.rg.name
-  private_dns_zone_name = azurerm_private_dns_zone.kv.name
+  private_dns_zone_name = azurerm_private_dns_zone.kv[0].name
   virtual_network_id    = azurerm_virtual_network.vnet.id
   registration_enabled  = false
 }
 
 resource "azurerm_private_endpoint" "kv" {
+  count               = local.use_existing_key_vault ? 0 : 1
   name                = local.kv_private_endpoint_name
   location            = var.location
   resource_group_name = azurerm_resource_group.rg.name
@@ -323,14 +358,14 @@ resource "azurerm_private_endpoint" "kv" {
 
   private_service_connection {
     name                           = "keyVaultConnection"
-    private_connection_resource_id = azurerm_key_vault.kv.id
+    private_connection_resource_id = azurerm_key_vault.kv[0].id
     subresource_names              = ["vault"]
     is_manual_connection           = false
   }
 
   private_dns_zone_group {
     name                 = "default"
-    private_dns_zone_ids = [azurerm_private_dns_zone.kv.id]
+    private_dns_zone_ids = [azurerm_private_dns_zone.kv[0].id]
   }
 }
 
@@ -338,14 +373,14 @@ resource "azurerm_private_endpoint" "kv" {
 # Role Assignments – Key Vault Secrets User
 # ──────────────────────────────────────────────
 resource "azurerm_role_assignment" "web_to_kv" {
-  scope                = azurerm_key_vault.kv.id
+  scope                = local.use_existing_key_vault ? data.azurerm_key_vault.kv[0].id : azurerm_key_vault.kv[0].id
   role_definition_name = "Key Vault Secrets User"
   principal_id         = azurerm_windows_web_app.web.identity[0].principal_id
   principal_type       = "ServicePrincipal"
 }
 
 resource "azurerm_role_assignment" "worker_to_kv" {
-  scope                = azurerm_key_vault.kv.id
+  scope                = local.use_existing_key_vault ? data.azurerm_key_vault.kv[0].id : azurerm_key_vault.kv[0].id
   role_definition_name = "Key Vault Secrets User"
   principal_id         = azurerm_windows_function_app.worker.identity[0].principal_id
   principal_type       = "ServicePrincipal"
@@ -355,21 +390,21 @@ resource "azurerm_role_assignment" "worker_to_kv" {
 # Role Assignments – Function Storage (Blob, Queue, Table)
 # ──────────────────────────────────────────────
 resource "azurerm_role_assignment" "worker_storage_blob" {
-  scope                = azurerm_storage_account.function_storage.id
+  scope                = local.use_existing_worker_storage_account ? data.azurerm_storage_account.function_storage[0].id : azurerm_storage_account.function_storage[0].id
   role_definition_name = "Storage Blob Data Owner"
   principal_id         = azurerm_windows_function_app.worker.identity[0].principal_id
   principal_type       = "ServicePrincipal"
 }
 
 resource "azurerm_role_assignment" "worker_storage_queue" {
-  scope                = azurerm_storage_account.function_storage.id
+  scope                = local.use_existing_worker_storage_account ? data.azurerm_storage_account.function_storage[0].id : azurerm_storage_account.function_storage[0].id
   role_definition_name = "Storage Queue Data Contributor"
   principal_id         = azurerm_windows_function_app.worker.identity[0].principal_id
   principal_type       = "ServicePrincipal"
 }
 
 resource "azurerm_role_assignment" "worker_storage_table" {
-  scope                = azurerm_storage_account.function_storage.id
+  scope                = local.use_existing_worker_storage_account ? data.azurerm_storage_account.function_storage[0].id : azurerm_storage_account.function_storage[0].id
   role_definition_name = "Storage Table Data Contributor"
   principal_id         = azurerm_windows_function_app.worker.identity[0].principal_id
   principal_type       = "ServicePrincipal"

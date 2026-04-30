@@ -17,6 +17,27 @@ function getManagementGroupId() {
   return process.env.QUOTA_MANAGEMENT_GROUP_ID || '';
 }
 
+function getConfiguredManagementGroupFallbacks() {
+  const configured = [];
+  const directId = String(process.env.QUOTA_MANAGEMENT_GROUP_ID || '').trim();
+  const ingestNames = String(process.env.INGEST_MANAGEMENT_GROUP_NAMES || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  if (directId) {
+    configured.push(directId);
+  }
+
+  for (const name of ingestNames) {
+    if (!configured.some((existing) => existing.toLowerCase() === name.toLowerCase())) {
+      configured.push(name);
+    }
+  }
+
+  return configured;
+}
+
 async function getToken() {
   const credential = getCredential();
   return (await credential.getToken(ARM_SCOPE)).token;
@@ -360,7 +381,7 @@ async function listSubscriptionLocations(subscriptionId, token) {
 async function listManagementGroups() {
   const token = await getToken();
   const groupsUrl = `${ARM_BASE}/providers/Microsoft.Management/managementGroups?api-version=${MANAGEMENT_API_VERSION}`;
-  const fallbackManagementGroupId = getManagementGroupId();
+  const fallbackManagementGroupIds = getConfiguredManagementGroupFallbacks();
 
   try {
     const groups = await armGetAll(groupsUrl, token);
@@ -370,25 +391,35 @@ async function listManagementGroups() {
       tenantId: group?.properties?.tenantId || null
     }));
 
-    if (!mappedGroups.length && fallbackManagementGroupId) {
-      return [{
-        id: fallbackManagementGroupId,
-        displayName: fallbackManagementGroupId,
+    for (const fallbackId of fallbackManagementGroupIds) {
+      if (!mappedGroups.some((group) => group.id.toLowerCase() === fallbackId.toLowerCase())) {
+        mappedGroups.push({
+          id: fallbackId,
+          displayName: fallbackId,
+          tenantId: null
+        });
+      }
+    }
+
+    if (!mappedGroups.length && fallbackManagementGroupIds.length > 0) {
+      return fallbackManagementGroupIds.map((fallbackId) => ({
+        id: fallbackId,
+        displayName: fallbackId,
         tenantId: null
-      }];
+      }));
     }
 
     return mappedGroups;
   } catch (error) {
-    if (!fallbackManagementGroupId || !error.message.includes('AuthorizationFailed')) {
+    if (fallbackManagementGroupIds.length === 0) {
       throw error;
     }
 
-    return [{
-      id: fallbackManagementGroupId,
-      displayName: fallbackManagementGroupId,
+    return fallbackManagementGroupIds.map((fallbackId) => ({
+      id: fallbackId,
+      displayName: fallbackId,
       tenantId: null
-    }];
+    }));
   }
 }
 
@@ -527,6 +558,7 @@ module.exports = {
   listQuotaGroupShareableQuota,
   __testHooks: {
     armGetNestedQuotaAllocations,
+    getConfiguredManagementGroupFallbacks,
     normalizeShareableQuotaRow,
     filterShareableQuotaRows,
     summarizeShareableQuotaRows,

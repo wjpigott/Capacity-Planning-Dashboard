@@ -449,6 +449,14 @@ By default, `./scripts/deploy-infra.ps1` now does both steps:
 - provisions the Azure resources from `infra/bicep/main.bicep`
 - publishes the dashboard web package, including `react/`, to the target App Service
 
+Existing shared-service reuse:
+
+- If the customer already has Azure SQL, Key Vault, or the worker storage account in place, pass the new `deploy-infra.ps1` reuse switches instead of forcing the template to create duplicates.
+- Supported switches are `-ExistingSqlServerName`, `-ExistingSqlDatabaseName`, `-ExistingKeyVaultName`, and `-ExistingWorkerStorageAccountName`.
+- Providing an existing resource name is enough to switch that dependency into reuse mode. `-ExistingSqlDatabaseName` is optional and only applies when `-ExistingSqlServerName` is also set.
+- Optional resource-group overrides are also available when the reused dependency lives outside the dashboard resource group: `-ExistingSqlServerResourceGroupName`, `-ExistingKeyVaultResourceGroupName`, and `-ExistingWorkerStorageResourceGroupName`.
+- When reusing an existing SQL server or Key Vault, the infra templates assume the customer-managed private endpoint and DNS path already exists and do not create a new SQL or Key Vault private endpoint for that dependency.
+
 Use `-DeployWebApp $false` only when you explicitly want an infra-only run.
 
 Stable demo environment:

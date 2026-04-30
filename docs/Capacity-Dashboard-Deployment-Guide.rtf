@@ -3,7 +3,7 @@
 \paperw12240\paperh15840\margl1440\margr1440\margt1440\margb1440
 \fs24
 \b Capacity Dashboard Deployment Guide\b0\par
-\i Word-friendly operator guide for Bicep and Terraform deployments\i0\par
+\i Word-friendly operator guide for Bicep and Terraform deployments with existing-resource reuse and management-group-first RBAC\i0\par
 \par
 This guide is written for someone who is comfortable following a checklist, even if they do not work with Azure deployments every day. It explains the safest order to do the work:\par
 \par
@@ -14,7 +14,7 @@ This guide is written for someone who is comfortable following a checklist, even
 \par
 \b 1. What This Deployment Creates\b0\par
 \par
-Both the Bicep and Terraform paths create the same main Azure resources:\par
+Both the Bicep and Terraform paths create the same main Azure resources by default:\par
 \par
 - Web App for the dashboard\par
 - Function App for the worker\par
@@ -24,6 +24,12 @@ Both the Bicep and Terraform paths create the same main Azure resources:\par
 - Virtual network, private endpoints, and DNS links\par
 - Application Insights and Log Analytics\par
 - Managed identities and the main RBAC assignments\par
+\par
+Both paths can also attach to existing customer-managed shared services instead of creating duplicates for:\par
+\par
+- Azure SQL Server and optionally the Azure SQL Database\par
+- Azure Key Vault\par
+- Worker host Storage Account\par
 \par
 \b 2. Safest Deployment Order\b0\par
 \par
@@ -51,7 +57,8 @@ You will need these items before either deployment method:\par
 - A session secret\par
 - Optional worker shared secret\par
 - Optional Entra app registration values if sign-in should be enabled\par
-- Optional management group names if the tenant uses management groups\par
+- Preferred management group names if the tenant uses management groups\par
+- Optional explicit subscription lists for fallback RBAC when management groups are not used\par
 \par
 \b 4. Install The Required Tools\b0\par
 \par
@@ -60,7 +67,7 @@ Install these tools on the machine that will run the deployment:\par
 - Azure CLI\par
 - PowerShell 7\par
 - For Bicep: Azure CLI with Bicep support\par
-- For Terraform: Terraform 1.6 or newer\par
+- For Terraform: Terraform 1.5.x, specifically 1.5.0 or newer and lower than 1.6.0\par
 - For manual database initialization: sqlcmd\par
 \par
 Recommended checks:\par
@@ -132,26 +139,44 @@ The guide mentions three application secrets. These are not Azure resources you 
 \par
 Use one generated value for \f1 INGEST_API_KEY\f0, a different one for \f1 SESSION_SECRET\f0, and optionally a third one for \f1 WORKER_SHARED_SECRET\f0. Do not reuse the same string for all three.\par
 \par
-\b 7. Important Rule About Existing Resources\b0\par
+\b 7. Existing Resource Reuse and RBAC Strategy\b0\par
 \par
 This is the most important section for non-standard customer environments.\par
 \par
-\b Supported today:\b0\par
+\b Supported directly by the current deployment inputs:\b0\par
 - Existing resource group with Terraform, as long as you import it before first apply\par
 - Different resource group region with Terraform, using \f1 resource_group_location\f0\par
 - Key Vault naming conflict with Terraform, using \f1 key_vault_name_override\f0\par
+- Reusing an existing Azure SQL server with \f1 ExistingSqlServerName\f0 or \f1 existing_sql_server_name\f0\par
+- Reusing an existing Azure SQL database with \f1 ExistingSqlDatabaseName\f0 or \f1 existing_sql_database_name\f0\par
+- Reusing an existing Key Vault with \f1 ExistingKeyVaultName\f0 or \f1 existing_key_vault_name\f0\par
+- Reusing an existing worker storage account with \f1 ExistingWorkerStorageAccountName\f0 or \f1 existing_worker_storage_account_name\f0\par
 - Manual database initialization against customer-provided SQL names after the app is deployed\par
 \par
-\b Not a first-class reuse mode today:\b0\par
-- Reusing a pre-existing storage account instead of the worker storage account created by the templates\par
-- Reusing a pre-existing Key Vault as the deployed application vault\par
-- Reusing a pre-existing SQL server or SQL database directly through a dedicated Bicep or Terraform switch\par
+\b Important behavior when reusing shared services:\b0\par
+- Existing resource names are the switch. If you provide the existing resource name, deployment moves that dependency into reuse mode.\par
+- \f1 ExistingSqlDatabaseName\f0 requires \f1 ExistingSqlServerName\f0 because the reused database must hang off a reused server.\par
+- When you reuse an existing SQL server or Key Vault, the templates do not create a new private endpoint or private DNS path for that dependency. They assume the customer-managed private connectivity path already exists.\par
+- If the reused dependency lives in a different resource group, use the matching resource-group override input.\par
 \par
-If the customer already has a database, storage account, or Key Vault and expects those exact resources to be reused, treat that as a custom onboarding case. The safest current approach is:\par
+\b Preferred RBAC approach for larger estates:\b0\par
+1. Use management-group inputs first so access inherits to descendant subscriptions.\par
+2. Use explicit subscription lists only as the fallback path for smaller estates or tightly curated environments.\par
+3. Set \f1 quota_management_group_id\f0 or \f1 -QuotaManagementGroupId\f0 when Quota Workbench should default to a known management group or when tenant-wide management-group enumeration is restricted.\par
+\par
+The key roles that can be assigned through deployment are:\par
+\par
+- Web App identity: \f1 Reader\f0 for subscription discovery and read-only ARM queries\par
+- Web App identity: \f1 GroupQuota Request Operator\f0 for quota apply and movement workflows\par
+- Worker identity: \f1 Compute Recommendations Role\f0 for capacity recommendation APIs\par
+- Worker identity: \f1 Cost Management Reader\f0 for pricing and cost lookups\par
+- Worker identity: \f1 Billing Reader\f0 for billing meter and offer data\par
+\par
+The safest current approach is:\par
 \par
 1. Deploy the application and supporting resources first.\par
 2. Disable automatic database bootstrap if needed.\par
-3. Run the manual database initialization command against the customer's actual SQL server and database names.\par
+3. Run the manual database initialization command against the effective SQL server and database names.\par
 4. Document any extra secret, DNS, firewall, or RBAC mapping needed for that customer.\par
 \par
 \b 8. Bicep Runbook\b0\par
@@ -173,7 +198,11 @@ If the customer already has a database, storage account, or Key Vault and expect
 - \f1 -WebQuotaWriterManagementGroupNames @("<management-group-name>")\f0\par
 - \f1 -WorkerRbacManagementGroupNames @("<management-group-name>")\f0\par
 - \f1 -UseAllAccessibleManagementGroups\f0 if the operator should use every non-root management group they can see\par
-- \f1 -AuthEnabled $true\f0 plus tenant, client, secret, and admin group values if sign-in should be enabled\par
+- \f1 -AuthEnabled $true\f0 plus tenant, client, secret, and admin group values if sign-in should be enabled. This is already the deployment default now.\par
+- \f1 -ExistingSqlServerName "<sql-server-name>"\f0 to reuse an existing SQL server\par
+- \f1 -ExistingSqlDatabaseName "<sql-database-name>"\f0 to reuse an existing SQL database on that server\par
+- \f1 -ExistingKeyVaultName "<key-vault-name>"\f0 to reuse an existing Key Vault\par
+- \f1 -ExistingWorkerStorageAccountName "<storage-account-name>"\f0 to reuse an existing worker storage account\par
 - \f1 -ApplyDatabaseBootstrap $false\f0 if the database must be initialized separately\par
 \par
 \b When to use test.bicepparam:\b0\par
@@ -209,6 +238,8 @@ terraform apply -var-file="terraform.tfvars"\f0\par
 - \f1 resource_group_location\f0 if the existing resource group is in a different region\par
 - \f1 key_vault_name_override\f0 if the default Key Vault name cannot be used\par
 - \f1 manage_entra_web_redirect_uri = true\f0 if Terraform should add the generated callback URL to an existing Entra app registration\par
+- \f1 existing_sql_server_name\f0, \f1 existing_sql_database_name\f0, \f1 existing_key_vault_name\f0, and \f1 existing_worker_storage_account_name\f0 to reuse customer-managed shared services\par
+- \f1 web_reader_management_group_names\f0, \f1 web_quota_writer_management_group_names\f0, and \f1 worker_rbac_management_group_names\f0 for management-group-first RBAC\par
 \par
 \b 10. Database Step Second\b0\par
 \par
@@ -238,28 +269,35 @@ If the customer says, "We already have the SQL server and database," use this ch
 \par
 1. Confirm the real SQL server FQDN and database name.\par
 2. Confirm who is the Azure SQL Entra admin.\par
-3. Deploy the app and supporting Azure resources first.\par
+3. Pass \f1 ExistingSqlServerName\f0 and optionally \f1 ExistingSqlDatabaseName\f0 during deployment.\par
 4. Skip automatic database bootstrap if the customer wants a separate DBA step.\par
-5. Run \f1 scripts/initialize-database.ps1\f0 with the customer SQL names.\par
+5. Run \f1 scripts/initialize-database.ps1\f0 with the customer SQL names if schema bootstrap still needs to be applied.\par
 6. Confirm the app identity only keeps the intended runtime roles afterward.\par
 \par
 \b 12. When The Customer Already Has A Key Vault\b0\par
 \par
-The current templates do not provide a simple "use this existing Key Vault as-is" operator switch.\par
+The current templates now provide a direct reuse switch for an existing Key Vault.\par
 \par
 What is supported today:\par
 \par
 - If Terraform only needs a different vault name because the default name is blocked, use \f1 key_vault_name_override\f0.\par
+- If the customer wants to reuse an existing Key Vault, use \f1 ExistingKeyVaultName\f0 or \f1 existing_key_vault_name\f0.\par
 \par
-What to do if the customer insists on using their own existing Key Vault:\par
+What to still confirm when reusing a customer-owned Key Vault:\par
 \par
-1. Treat it as a customer-specific design decision.\par
-2. Expect extra work for secret placement, RBAC, naming, and possibly private endpoint or DNS alignment.\par
-3. Do not assume the default deployment command alone is enough.\par
+1. Confirm the customer-managed private endpoint and DNS path already exists if the vault is private-only.\par
+2. Confirm the web app and worker identities can receive \f1 Key Vault Secrets User\f0 on that vault.\par
+3. Confirm the expected secrets live in that vault and use the expected names.\par
 \par
 \b 13. When The Customer Already Has A Storage Account\b0\par
 \par
-The current deployment creates a dedicated worker storage account. Reusing a customer-owned pre-existing storage account is not a simple operator parameter today. Treat that as a custom engineering follow-up, not a normal runbook step.\par
+The current deployment can reuse a customer-owned worker storage account through \f1 ExistingWorkerStorageAccountName\f0 or \f1 existing_worker_storage_account_name\f0.\par
+\par
+What to still confirm:\par
+\par
+1. The worker managed identity can receive the required storage data-plane roles.\par
+2. The storage account is appropriate for Azure Functions host storage.\par
+3. The account lives in the expected resource group, or you pass the resource-group override input.\par
 \par
 \b 14. Basic Validation Checklist\b0\par
 \par
@@ -274,6 +312,8 @@ After deployment and database initialization, check these items:\par
 - The SQL database is initialized\par
 - Key Vault references resolve\par
 - Management-group or subscription RBAC is in place\par
+- Quota Workbench can load its management-group default or fallback without a blank page\par
+- Existing-resource reuse settings match the intended SQL, Key Vault, and worker storage dependencies\par
 \par
 \b 15. Simple Decision Guide\b0\par
 \par
@@ -282,7 +322,7 @@ If the person following this guide wants the least surprising path, tell them to
 1. Choose Bicep unless the customer requires Terraform.\par
 2. Use the deployment script, not raw template commands.\par
 3. Treat the database step as second, not first.\par
-4. If the customer already owns SQL, Key Vault, or storage, stop and confirm whether this is a normal deployment or a custom onboarding case.\par
+4. If the customer already owns SQL, Key Vault, or storage, use the existing-resource inputs and verify private connectivity and RBAC assumptions before deployment.\par
 \par
 \b 16. File References In This Repo\b0\par
 \par
@@ -297,5 +337,5 @@ If the person following this guide wants the least surprising path, tell them to
 \par
 If you need to hand this to a customer or internal operator, use this short message:\par
 \par
-"First deploy the application and Azure resources. Second, complete the database initialization. If the customer wants to reuse an existing SQL server, Key Vault, or storage account, confirm that up front because only some of those cases are directly supported by the current deployment inputs."\par
+"First deploy the application and Azure resources. Second, complete the database initialization. Prefer management-group-based RBAC for larger estates. If the customer wants to reuse an existing SQL server, Key Vault, or worker storage account, pass the existing-resource inputs up front and confirm the private connectivity and RBAC assumptions before deployment."\par
 }

@@ -143,6 +143,24 @@ variable "sql_public_network_access" {
   }
 }
 
+variable "existing_sql_server_name" {
+  type        = string
+  description = "Existing Azure SQL server name to reuse"
+  default     = ""
+}
+
+variable "existing_sql_server_resource_group_name" {
+  type        = string
+  description = "Resource group that contains the existing Azure SQL server; defaults to the deployment resource group when empty"
+  default     = ""
+}
+
+variable "existing_sql_database_name" {
+  type        = string
+  description = "Existing Azure SQL database name to reuse when attaching to an existing database on the existing SQL server"
+  default     = ""
+}
+
 # ──────────────────────────────────────────────
 # Key Vault
 # ──────────────────────────────────────────────
@@ -159,6 +177,18 @@ variable "key_vault_public_network_access" {
 variable "key_vault_name_override" {
   type        = string
   description = "Optional explicit Key Vault name override. Use this when the default name is blocked by Azure soft-delete retention."
+  default     = ""
+}
+
+variable "existing_key_vault_name" {
+  type        = string
+  description = "Existing Key Vault name to reuse"
+  default     = ""
+}
+
+variable "existing_key_vault_resource_group_name" {
+  type        = string
+  description = "Resource group that contains the existing Key Vault; defaults to the deployment resource group when empty"
   default     = ""
 }
 
@@ -191,7 +221,7 @@ variable "quota_management_group_id" {
 variable "auth_enabled" {
   type        = bool
   description = "Enable Microsoft Entra sign-in for the dashboard app routes"
-  default     = false
+  default     = true
 }
 
 variable "entra_tenant_id" {
@@ -245,6 +275,18 @@ variable "worker_shared_secret" {
   description = "Optional shared secret between dashboard web app and worker function app"
   default     = ""
   sensitive   = true
+}
+
+variable "existing_worker_storage_account_name" {
+  type        = string
+  description = "Existing storage account name to reuse for the worker host"
+  default     = ""
+}
+
+variable "existing_worker_storage_account_resource_group_name" {
+  type        = string
+  description = "Resource group that contains the existing worker storage account; defaults to the deployment resource group when empty"
+  default     = ""
 }
 
 # ──────────────────────────────────────────────

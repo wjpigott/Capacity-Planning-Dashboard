@@ -30,22 +30,22 @@ output "function_managed_identity_principal_id" {
 
 output "sql_server_fqdn" {
   description = "SQL Server fully qualified domain name"
-  value       = azurerm_mssql_server.sql.fully_qualified_domain_name
+  value       = local.effective_sql_server_fqdn
 }
 
 output "sql_server_name" {
   description = "SQL Server resource name"
-  value       = azurerm_mssql_server.sql.name
+  value       = local.effective_sql_server_name
 }
 
 output "sql_database_name" {
   description = "SQL Database name"
-  value       = azurerm_mssql_database.db.name
+  value       = local.effective_sql_database_name
 }
 
 output "key_vault_name" {
   description = "Key Vault resource name"
-  value       = azurerm_key_vault.kv.name
+  value       = local.effective_key_vault_name
 }
 
 output "virtual_network_name" {
@@ -55,10 +55,10 @@ output "virtual_network_name" {
 
 output "sql_private_endpoint_name" {
   description = "SQL private endpoint resource name"
-  value       = azurerm_private_endpoint.sql.name
+  value       = local.use_existing_sql_server ? null : azurerm_private_endpoint.sql[0].name
 }
 
 output "key_vault_private_endpoint_name" {
   description = "Key Vault private endpoint resource name"
-  value       = azurerm_private_endpoint.kv.name
+  value       = local.use_existing_key_vault ? null : azurerm_private_endpoint.kv[0].name
 }

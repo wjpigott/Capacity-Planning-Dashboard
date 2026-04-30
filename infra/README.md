@@ -9,7 +9,7 @@ This directory contains two equivalent infrastructure-as-code implementations th
 | [`bicep/`](bicep/) | Azure Bicep | Azure-native deployments; integrated with `scripts/deploy-infra.ps1` for end-to-end provisioning + web app publish + SQL bootstrap |
 | [`terraform/`](terraform/) | Terraform | Multi-tenant, multi-cloud, or state-managed workflows; standalone `terraform apply` with local or remote backend, including the same management-group-first RBAC path used by Bicep |
 
-Both implementations provision the same set of resources:
+Both implementations provision the same set of resources by default:
 
 - App Service Plan + Web App (P1v3)
 - Dedicated App Service Plan + Function App + Storage Account (PowerShell 7.4 worker)
@@ -21,6 +21,12 @@ Both implementations provision the same set of resources:
 - Application Insights + Log Analytics
 - Role Assignments (Key Vault Secrets User, Storage Blob/Queue/Table)
 - Cross-scope RBAC modules (worker RBAC, web Reader, web GroupQuota Request Operator at management-group or subscription scope)
+
+Both implementations can also reuse existing shared platform dependencies instead of creating new ones for:
+
+- Azure SQL Server and optionally the Azure SQL Database
+- Azure Key Vault
+- Worker host Storage Account
 
 ## Design principles
 
@@ -35,6 +41,8 @@ Both implementations provision the same set of resources:
 - Web App and Function App set `WEBSITE_DNS_SERVER=168.63.129.16` and `WEBSITE_VNET_ROUTE_ALL=1` for private endpoint name resolution and routing.
 - SQL defaults to private-access mode (`sqlPublicNetworkAccess = 'Disabled'`) and is reachable from App Service/Function App via VNet integration and private endpoint.
 - Key Vault defaults to private-access mode (`keyVaultPublicNetworkAccess = 'Disabled'`) and is reachable from App Service/Function App via VNet integration and private endpoint.
+- Customer-managed shared services can now be attached instead of created by passing the existing-resource parameters through `scripts/deploy-infra.ps1` or the raw Bicep/Terraform inputs.
+- When an existing SQL server or Key Vault is reused, the dashboard templates stop creating a new private endpoint and DNS zone for that dependency and assume the customer-managed private connectivity path already exists.
 - Live placement and pricing RBAC can now be assigned automatically during infra deployment by passing `workerRbacManagementGroupNames` for larger estates, with `workerSubscriptionRbacSubscriptionIds` kept as the fallback for customers without management groups.
 - Dashboard subscription discovery RBAC can now be assigned automatically during infra deployment by passing `webReaderManagementGroupNames` for larger estates, with `webReaderSubscriptionIds` kept as the fallback for customers without management groups.
 - Dashboard quota-apply RBAC can now be assigned automatically during infra deployment by passing `webQuotaWriterManagementGroupNames` for larger estates, with `webQuotaWriterSubscriptionIds` kept as the fallback for customers without management groups.
@@ -65,6 +73,32 @@ The deploy script handles infra provisioning, web app publish, and SQL bootstrap
   -SubscriptionId "<subscription-id>"
 ```
 
+### Reuse existing shared services
+
+Use these deploy-script switches when the customer already has shared Azure dependencies in place:
+
+- `-ExistingSqlServerName "<sql-server-name>"`
+- `-ExistingSqlDatabaseName "<sql-database-name>"`
+- `-ExistingKeyVaultName "<key-vault-name>"`
+- `-ExistingWorkerStorageAccountName "<storage-account-name>"`
+
+Providing an existing resource name is enough to switch that dependency into reuse mode. `-ExistingSqlDatabaseName` is optional and only applies when you also pass `-ExistingSqlServerName`.
+
+Example:
+
+```powershell
+./scripts/deploy-infra.ps1 `
+  -ResourceGroupName "CapacityDashboard-Test" `
+  -Environment test `
+  -WorkloadSuffix "cap001" `
+  -SqlEntraAdminLogin "<entra-upn>" `
+  -SqlEntraAdminObjectId "<entra-object-id>" `
+  -ExistingSqlServerName "sql-shared-test" `
+  -ExistingSqlDatabaseName "sqldb-shared-capdash" `
+  -ExistingKeyVaultName "kv-shared-test" `
+  -ExistingWorkerStorageAccountName "stsharedworker01"
+```
+
 ### Raw Bicep deploy (infra only)
 
 ```powershell
@@ -83,7 +117,7 @@ See [`bicep/README.md`](bicep/README.md) for full parameter reference, RBAC at s
 
 ### Prerequisites
 
-- Terraform >= 1.6.0
+- Terraform >= 1.5.0 and < 1.6.0
 - Azure CLI authenticated (`az login`) with Contributor + User Access Administrator
 - State is local by default; update `backend.tf` to use a remote backend if needed
 

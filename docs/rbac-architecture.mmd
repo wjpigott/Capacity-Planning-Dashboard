@@ -1,0 +1,52 @@
+flowchart LR
+    classDef group fill:#FFF7CC,stroke:#C9A227,stroke-width:1.5px,color:#332B00;
+    classDef identity fill:#E8FFF4,stroke:#1F7A4D,stroke-width:1.5px,color:#103222;
+    classDef scope fill:#EAF4FF,stroke:#2B6CB0,stroke-width:1.5px,color:#0F2A43;
+    classDef role fill:#FFF0F0,stroke:#C53030,stroke-width:1.5px,color:#4A1111;
+    classDef note fill:#F6F3FF,stroke:#6B46C1,stroke-width:1.5px,color:#2D1B69;
+
+    subgraph Identities[Managed Identities]
+        direction TB
+        Web[Web App identity\nSubscription discovery + quota workflows]
+        Worker[Worker Function identity\nLive placement + pricing lookups]
+    end
+
+    subgraph Hierarchy[Scope Hierarchy]
+        direction TB
+        Mg[Management group scope\nPreferred for larger estates]
+        Subs[Participating subscriptions\nFallback explicit assignment path]
+    end
+
+    subgraph WebRoles[Web App roles]
+        direction TB
+        ReaderRole[Reader\nSubscription discovery\nRead-only ARM queries]
+        QuotaRole[GroupQuota Request Operator\nQuota movement and apply actions]
+    end
+
+    subgraph WorkerRoles[Worker roles]
+        direction TB
+        ComputeRole[Compute Recommendations Role\nCapacity recommendation APIs]
+        CostRole[Cost Management Reader\nPricing and cost data]
+        BillingRole[Billing Reader\nBilling meters and offer data]
+    end
+
+    Settings[Deployment inputs\nwebReaderManagementGroupNames\nwebQuotaWriterManagementGroupNames\nworkerRbacManagementGroupNames\nquotaManagementGroupId]
+    Fallback[Fallback inputs\nwebReaderSubscriptionIds\nwebQuotaWriterSubscriptionIds\nworkerSubscriptionRbacSubscriptionIds]
+
+    Web --> ReaderRole --> Mg
+    Web --> QuotaRole --> Mg
+    Worker --> ComputeRole --> Mg
+    Worker --> CostRole --> Mg
+    Worker --> BillingRole --> Mg
+
+    Mg -->|Inherited access| Subs
+    Fallback --> Subs
+    Settings --> Mg
+
+    Web -. quota default / UI fallback .-> Settings
+
+    class Identities,Hierarchy,WebRoles,WorkerRoles group;
+    class Web,Worker identity;
+    class Mg,Subs scope;
+    class ReaderRole,QuotaRole,ComputeRole,CostRole,BillingRole role;
+    class Settings,Fallback note;

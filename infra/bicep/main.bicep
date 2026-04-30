@@ -72,6 +72,27 @@ param webQuotaWriterManagementGroupNames array = []
 @description('Optional management group ID used by the dashboard quota discovery UI when tenant-wide management group enumeration is not permitted.')
 param quotaManagementGroupId string = ''
 
+@description('Existing Azure SQL server name to reuse. Provide the short resource name, not the FQDN.')
+param existingSqlServerName string = ''
+
+@description('Resource group that contains the existing Azure SQL server. Defaults to the deployment resource group when empty.')
+param existingSqlServerResourceGroupName string = ''
+
+@description('Existing Azure SQL database name to reuse when the dashboard should attach to an existing database on the existing SQL server.')
+param existingSqlDatabaseName string = ''
+
+@description('Existing Key Vault name to reuse.')
+param existingKeyVaultName string = ''
+
+@description('Resource group that contains the existing Key Vault. Defaults to the deployment resource group when empty.')
+param existingKeyVaultResourceGroupName string = ''
+
+@description('Existing storage account name to reuse for the worker host.')
+param existingWorkerStorageAccountName string = ''
+
+@description('Resource group that contains the existing worker storage account. Defaults to the deployment resource group when empty.')
+param existingWorkerStorageAccountResourceGroupName string = ''
+
 @description('Optional subscription IDs where the worker managed identity should receive subscription-level RBAC roles for live placement and pricing lookups.')
 param workerSubscriptionRbacSubscriptionIds array = []
 
@@ -88,7 +109,7 @@ param assignWorkerCostManagementReaderRole bool = true
 param assignWorkerBillingReaderRole bool = true
 
 @description('Enable Microsoft Entra sign-in for the dashboard app routes.')
-param authEnabled bool = false
+param authEnabled bool = true
 
 @description('Microsoft Entra tenant ID used by the dashboard auth flow.')
 param entraTenantId string = ''
@@ -132,6 +153,18 @@ var keyVaultPrivateDnsZoneVnetLinkName = 'pdz-link-kv-capdash-${environment}-${w
 var effectiveAuthRedirectUri = empty(authRedirectUri)
   ? 'https://${webAppName}.azurewebsites.net/auth/callback'
   : authRedirectUri
+var useExistingSqlServer = !empty(existingSqlServerName)
+var useExistingSqlDatabase = !empty(existingSqlDatabaseName)
+var useExistingKeyVault = !empty(existingKeyVaultName)
+var useExistingWorkerStorageAccount = !empty(existingWorkerStorageAccountName)
+var effectiveSqlServerResourceGroupName = empty(existingSqlServerResourceGroupName) ? resourceGroup().name : existingSqlServerResourceGroupName
+var effectiveSqlServerName = useExistingSqlServer ? existingSqlServerName : sqlServerName
+var effectiveSqlDatabaseName = useExistingSqlDatabase ? existingSqlDatabaseName : sqlDatabaseName
+var effectiveSqlServerFqdn = contains(effectiveSqlServerName, '.') ? effectiveSqlServerName : '${effectiveSqlServerName}${az.environment().suffixes.sqlServerHostname}'
+var effectiveKeyVaultResourceGroupName = empty(existingKeyVaultResourceGroupName) ? resourceGroup().name : existingKeyVaultResourceGroupName
+var effectiveKeyVaultName = useExistingKeyVault ? existingKeyVaultName : keyVaultName
+var effectiveWorkerStorageAccountResourceGroupName = empty(existingWorkerStorageAccountResourceGroupName) ? resourceGroup().name : existingWorkerStorageAccountResourceGroupName
+var effectiveWorkerStorageAccountName = useExistingWorkerStorageAccount ? existingWorkerStorageAccountName : functionStorageName
 
 resource vnet 'Microsoft.Network/virtualNetworks@2023-09-01' = {
   name: vnetName
@@ -199,7 +232,7 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   }
 }
 
-resource functionStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+resource functionStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = if (!useExistingWorkerStorageAccount) {
   name: functionStorageName
   location: location
   sku: {
@@ -268,11 +301,11 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
         }
         {
           name: 'SQL_SERVER'
-          value: '${sqlServerName}${az.environment().suffixes.sqlServerHostname}'
+          value: effectiveSqlServerFqdn
         }
         {
           name: 'SQL_DATABASE'
-          value: sqlDatabaseName
+          value: effectiveSqlDatabaseName
         }
         {
           name: 'SQL_AUTH_MODE'
@@ -388,7 +421,7 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         }
         {
           name: 'AzureWebJobsStorage__accountName'
-          value: functionStorage.name
+          value: effectiveWorkerStorageAccountName
         }
         {
           name: 'AzureWebJobsStorage__credential'
@@ -432,7 +465,7 @@ resource functionAppVnetIntegration 'Microsoft.Web/sites/networkConfig@2023-12-0
   }
 }
 
-resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
+resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = if (!useExistingKeyVault) {
   name: keyVaultName
   location: location
   properties: {
@@ -448,7 +481,7 @@ resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
   }
 }
 
-resource sqlServer 'Microsoft.Sql/servers@2023-08-01-preview' = {
+resource sqlServer 'Microsoft.Sql/servers@2023-08-01-preview' = if (!useExistingSqlServer) {
   name: sqlServerName
   location: location
   properties: {
@@ -466,12 +499,12 @@ resource sqlServer 'Microsoft.Sql/servers@2023-08-01-preview' = {
   }
 }
 
-resource sqlPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
+resource sqlPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = if (!useExistingSqlServer) {
   name: sqlPrivateDnsZoneName
   location: 'global'
 }
 
-resource sqlPrivateDnsZoneVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
+resource sqlPrivateDnsZoneVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = if (!useExistingSqlServer) {
   parent: sqlPrivateDnsZone
   name: sqlPrivateDnsZoneVnetLinkName
   location: 'global'
@@ -483,7 +516,7 @@ resource sqlPrivateDnsZoneVnetLink 'Microsoft.Network/privateDnsZones/virtualNet
   }
 }
 
-resource sqlPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01' = {
+resource sqlPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01' = if (!useExistingSqlServer) {
   name: sqlPrivateEndpointName
   location: location
   properties: {
@@ -504,7 +537,7 @@ resource sqlPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01' = {
   }
 }
 
-resource sqlPrivateEndpointDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-09-01' = {
+resource sqlPrivateEndpointDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-09-01' = if (!useExistingSqlServer) {
   parent: sqlPrivateEndpoint
   name: 'default'
   properties: {
@@ -519,12 +552,12 @@ resource sqlPrivateEndpointDnsZoneGroup 'Microsoft.Network/privateEndpoints/priv
   }
 }
 
-resource keyVaultPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
+resource keyVaultPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = if (!useExistingKeyVault) {
   name: keyVaultPrivateDnsZoneName
   location: 'global'
 }
 
-resource keyVaultPrivateDnsZoneVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
+resource keyVaultPrivateDnsZoneVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = if (!useExistingKeyVault) {
   parent: keyVaultPrivateDnsZone
   name: keyVaultPrivateDnsZoneVnetLinkName
   location: 'global'
@@ -536,7 +569,7 @@ resource keyVaultPrivateDnsZoneVnetLink 'Microsoft.Network/privateDnsZones/virtu
   }
 }
 
-resource keyVaultPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01' = {
+resource keyVaultPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01' = if (!useExistingKeyVault) {
   name: keyVaultPrivateEndpointName
   location: location
   properties: {
@@ -557,7 +590,7 @@ resource keyVaultPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01'
   }
 }
 
-resource keyVaultPrivateEndpointDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-09-01' = {
+resource keyVaultPrivateEndpointDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-09-01' = if (!useExistingKeyVault) {
   parent: keyVaultPrivateEndpoint
   name: 'default'
   properties: {
@@ -572,7 +605,7 @@ resource keyVaultPrivateEndpointDnsZoneGroup 'Microsoft.Network/privateEndpoints
   }
 }
 
-resource sqlDatabase 'Microsoft.Sql/servers/databases@2023-08-01-preview' = {
+resource sqlDatabase 'Microsoft.Sql/servers/databases@2023-08-01-preview' = if (!useExistingSqlDatabase && !useExistingSqlServer) {
   parent: sqlServer
   name: sqlDatabaseName
   location: location
@@ -585,7 +618,7 @@ resource sqlDatabase 'Microsoft.Sql/servers/databases@2023-08-01-preview' = {
   }
 }
 
-resource webToKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource webToKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!useExistingKeyVault) {
   name: guid(kv.id, webApp.id, 'KeyVaultSecretsUser')
   scope: kv
   properties: {
@@ -595,7 +628,7 @@ resource webToKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-resource workerToKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource workerToKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!useExistingKeyVault) {
   name: guid(kv.id, functionApp.id, 'KeyVaultSecretsUser')
   scope: kv
   properties: {
@@ -605,7 +638,7 @@ resource workerToKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-resource workerToFunctionStorageBlobRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource workerToFunctionStorageBlobRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!useExistingWorkerStorageAccount) {
   name: guid(functionStorage.id, functionApp.id, 'StorageBlobDataOwner')
   scope: functionStorage
   properties: {
@@ -615,7 +648,7 @@ resource workerToFunctionStorageBlobRole 'Microsoft.Authorization/roleAssignment
   }
 }
 
-resource workerToFunctionStorageQueueRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource workerToFunctionStorageQueueRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!useExistingWorkerStorageAccount) {
   name: guid(functionStorage.id, functionApp.id, 'StorageQueueDataContributor')
   scope: functionStorage
   properties: {
@@ -625,13 +658,39 @@ resource workerToFunctionStorageQueueRole 'Microsoft.Authorization/roleAssignmen
   }
 }
 
-resource workerToFunctionStorageTableRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource workerToFunctionStorageTableRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!useExistingWorkerStorageAccount) {
   name: guid(functionStorage.id, functionApp.id, 'StorageTableDataContributor')
   scope: functionStorage
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3')
     principalId: functionApp.identity.principalId
     principalType: 'ServicePrincipal'
+  }
+}
+
+module existingSqlDatabaseModule './modules/existing-sql-database.bicep' = if (!useExistingSqlDatabase && useExistingSqlServer) {
+  scope: resourceGroup(effectiveSqlServerResourceGroupName)
+  params: {
+    location: location
+    sqlServerName: effectiveSqlServerName
+    sqlDatabaseName: sqlDatabaseName
+  }
+}
+
+module existingKeyVaultRoleAssignments './modules/existing-keyvault-role-assignments.bicep' = if (useExistingKeyVault) {
+  scope: resourceGroup(effectiveKeyVaultResourceGroupName)
+  params: {
+    keyVaultName: effectiveKeyVaultName
+    webPrincipalId: webApp.identity.principalId
+    workerPrincipalId: functionApp.identity.principalId
+  }
+}
+
+module existingWorkerStorageRoleAssignments './modules/existing-storage-role-assignments.bicep' = if (useExistingWorkerStorageAccount) {
+  scope: resourceGroup(effectiveWorkerStorageAccountResourceGroupName)
+  params: {
+    storageAccountName: effectiveWorkerStorageAccountName
+    workerPrincipalId: functionApp.identity.principalId
   }
 }
 
@@ -698,10 +757,10 @@ output managedIdentityPrincipalId string = webApp.identity.principalId
 output functionAppName string = functionApp.name
 output functionAppUrl string = 'https://${functionApp.properties.defaultHostName}'
 output functionManagedIdentityPrincipalId string = functionApp.identity.principalId
-output sqlServerFqdn string = '${sqlServer.name}${az.environment().suffixes.sqlServerHostname}'
-output sqlServerName string = sqlServer.name
-output sqlDatabaseName string = sqlDatabase.name
-output keyVaultName string = kv.name
+output sqlServerFqdn string = effectiveSqlServerFqdn
+output sqlServerName string = effectiveSqlServerName
+output sqlDatabaseName string = effectiveSqlDatabaseName
+output keyVaultName string = effectiveKeyVaultName
 output virtualNetworkName string = vnet.name
-output sqlPrivateEndpointName string = sqlPrivateEndpoint.name
-output keyVaultPrivateEndpointName string = keyVaultPrivateEndpoint.name
+output sqlPrivateEndpointName string = useExistingSqlServer ? '' : sqlPrivateEndpoint.name
+output keyVaultPrivateEndpointName string = useExistingKeyVault ? '' : keyVaultPrivateEndpoint.name

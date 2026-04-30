@@ -44,7 +44,7 @@ infra/terraform/
 
 ## Prerequisites
 
-- Terraform >= 1.6.0
+- Terraform >= 1.5.0 and < 1.6.0
 - Azure CLI authenticated (`az login`) with **Contributor** + **User Access Administrator** on the target subscription
 - State is stored locally in `terraform.tfstate` (update `backend.tf` to use a remote backend if needed)
 
@@ -75,6 +75,8 @@ Have these values ready before you create `terraform.tfvars` or run `terraform a
     - `worker_subscription_rbac_subscription_ids`
 
 If you want dashboard sign-in enabled, create the Microsoft Entra app registration first. Terraform does not create the app registration for you.
+
+`auth_enabled` now defaults to `true` for deployed environments.
 
 Required app registration inputs when `auth_enabled = true`:
 
@@ -207,6 +209,9 @@ All variables have defaults and can be overridden via tfvars or CLI flags.
 | `resource_group_name` | `CapacityDashboard-Dev` | Resource group name (created by Terraform) |
 | `sql_entra_admin_login` | *(set in defaults)* | Entra admin UPN for SQL Server |
 | `sql_entra_admin_object_id` | *(set in defaults)* | Entra admin object ID for SQL Server |
+| `existing_sql_server_name` | `""` | Existing Azure SQL server name to reuse |
+| `existing_sql_server_resource_group_name` | `""` | Optional resource group override for the existing Azure SQL server |
+| `existing_sql_database_name` | `""` | Existing Azure SQL database name to reuse; requires `existing_sql_server_name` |
 | `ingest_api_key` | `change-me-ingest-key` | Shared secret for ingestion routes (sensitive) |
 | `session_secret` | `change-me-session-secret` | Session middleware secret (sensitive) |
 | `vnet_address_prefix` | `10.90.0.0/16` | VNet address space |
@@ -214,9 +219,13 @@ All variables have defaults and can be overridden via tfvars or CLI flags.
 | `private_endpoint_subnet_prefix` | `10.90.2.0/24` | Private endpoint subnet |
 | `sql_public_network_access` | `Disabled` | SQL Server public access |
 | `key_vault_public_network_access` | `Disabled` | Key Vault public access |
+| `existing_key_vault_name` | `""` | Existing Key Vault name to reuse |
+| `existing_key_vault_resource_group_name` | `""` | Optional resource group override for the existing Key Vault |
 | `worker_shared_secret` | `""` | Shared secret between web app and worker (sensitive) |
+| `existing_worker_storage_account_name` | `""` | Existing worker storage account name to reuse |
+| `existing_worker_storage_account_resource_group_name` | `""` | Optional resource group override for the existing worker storage account |
 | `quota_management_group_id` | `""` | Management group ID for quota discovery |
-| `auth_enabled` | `false` | Enable Entra sign-in |
+| `auth_enabled` | `true` | Enable Entra sign-in |
 | `entra_tenant_id` | `""` | Entra tenant ID |
 | `entra_client_id` | `""` | Entra app client ID |
 | `entra_client_secret` | `""` | Entra app client secret (sensitive) |
@@ -238,6 +247,12 @@ All variables have defaults and can be overridden via tfvars or CLI flags.
 Quota management-group note:
 
 - Set `quota_management_group_id` when you expect the Admin quota experience to default to a known management group, or when tenant-wide management-group enumeration is restricted and the UI needs a fallback management group to return.
+
+Existing shared-service reuse note:
+
+- Set `existing_sql_server_name`, `existing_key_vault_name`, or `existing_worker_storage_account_name` when the customer already owns those Azure dependencies.
+- Set `existing_sql_database_name` only when the dashboard should attach to an existing database on that existing SQL server.
+- When `existing_sql_server_name` or `existing_key_vault_name` is set, Terraform assumes the customer-managed private endpoint and DNS path already exists for that dependency and will not create a new SQL or Key Vault private endpoint for it.
 - Without this value, `/api/quota/management-groups` depends entirely on the web app identity being able to enumerate management groups through `Microsoft.Management/managementGroups`.
 
 Management-group RBAC note:

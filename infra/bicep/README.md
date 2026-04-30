@@ -1,6 +1,6 @@
 # Capacity Dashboard Azure Infrastructure (MVP)
 
-This template provisions a native Azure baseline for the dashboard solution.
+This template provisions a native Azure baseline for the dashboard solution and can optionally reuse customer-managed shared dependencies.
 
 ## Resources
 
@@ -15,6 +15,12 @@ This template provisions a native Azure baseline for the dashboard solution.
 - Azure Key Vault (RBAC authorization)
 - Application Insights + Log Analytics
 
+Existing shared-service reuse is supported for:
+
+- Azure SQL Server and optionally the Azure SQL Database
+- Azure Key Vault
+- Worker host Storage Account
+
 ## Security design
 
 - No subscription IDs, tenant IDs, resource group names, or secrets are stored in this repo.
@@ -27,6 +33,8 @@ This template provisions a native Azure baseline for the dashboard solution.
 - Web App and Function App set `WEBSITE_DNS_SERVER=168.63.129.16` and `WEBSITE_VNET_ROUTE_ALL=1` for private endpoint name resolution and routing.
 - SQL defaults to private-access mode (`sqlPublicNetworkAccess = 'Disabled'`) and is reachable from App Service/Function App via VNet integration and private endpoint.
 - Key Vault defaults to private-access mode (`keyVaultPublicNetworkAccess = 'Disabled'`) and is reachable from App Service/Function App via VNet integration and private endpoint.
+- Existing SQL, Key Vault, and worker storage can now be reused by passing the matching `existing*Name` parameters.
+- When `existingSqlServerName` or `existingKeyVaultName` is set, the template assumes customer-managed private connectivity already exists for that dependency and does not create a new private endpoint or private DNS zone for it.
 - Live placement and pricing RBAC can now be assigned automatically during infra deployment by passing `workerSubscriptionRbacSubscriptionIds` (and optional role toggles) to apply `Compute Recommendations Role`, `Cost Management Reader`, and `Billing Reader` on those subscriptions.
 - Dashboard subscription discovery RBAC can now be assigned automatically during infra deployment by passing `webReaderSubscriptionIds` to apply `Reader` on those subscriptions.
 - Dashboard quota-apply RBAC can now be assigned automatically during infra deployment by passing `webQuotaWriterSubscriptionIds` to apply `GroupQuota Request Operator` on those subscriptions.
@@ -40,6 +48,19 @@ This template provisions a native Azure baseline for the dashboard solution.
 - `privateEndpointSubnetPrefix` (default `10.90.2.0/24`)
 - `sqlPublicNetworkAccess` (`Disabled` by default; set `Enabled` only for temporary break-glass access)
 - `keyVaultPublicNetworkAccess` (`Disabled` by default; set `Enabled` only for temporary break-glass access)
+
+## Existing resource parameters
+
+- `existingSqlServerName`
+- `existingSqlDatabaseName` (optional; requires `existingSqlServerName`)
+- `existingKeyVaultName`
+- `existingWorkerStorageAccountName`
+
+Optional resource-group overrides are also available for reuse scenarios:
+
+- `existingSqlServerResourceGroupName`
+- `existingKeyVaultResourceGroupName`
+- `existingWorkerStorageAccountResourceGroupName`
 
 ## Environment strategy
 
@@ -112,6 +133,19 @@ az deployment group create \
   --template-file ./infra/bicep/main.bicep \
   --parameters ./infra/bicep/test.bicepparam \
   --parameters sqlEntraAdminLogin="<entra-upn>" sqlEntraAdminObjectId="<entra-object-id>"
+```
+
+Example reusing existing shared services:
+
+```powershell
+az deployment group create \
+  --resource-group <resource-group-name> \
+  --template-file ./infra/bicep/main.bicep \
+  --parameters sqlEntraAdminLogin="<entra-upn>" sqlEntraAdminObjectId="<entra-object-id>" \
+  --parameters existingSqlServerName="sql-shared-test" \
+  --parameters existingSqlDatabaseName="sqldb-shared-capdash" \
+  --parameters existingKeyVaultName="kv-shared-test" \
+  --parameters existingWorkerStorageAccountName="stsharedworker01"
 ```
 
 ## RBAC At Scale

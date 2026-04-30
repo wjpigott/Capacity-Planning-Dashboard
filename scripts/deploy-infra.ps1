@@ -104,16 +104,52 @@ function Get-SqlAdminAccessToken() {
 }
 
 function Resolve-WebAppIngestApiKey([string]$ResourceGroupName, [string]$WebAppName, [string]$CurrentIngestApiKey) {
-    if (-not [string]::IsNullOrWhiteSpace($CurrentIngestApiKey)) {
-        return $CurrentIngestApiKey
+    return Resolve-WebAppSecretSettingValue -ResourceGroupName $ResourceGroupName -WebAppName $WebAppName -SettingName 'INGEST_API_KEY' -CurrentValue $CurrentIngestApiKey -Required
+}
+
+function Resolve-KeyVaultReferenceSecretValue([string]$SettingValue) {
+    if ([string]::IsNullOrWhiteSpace($SettingValue)) {
+        return $SettingValue
     }
 
-    $resolvedKey = az webapp config appsettings list --resource-group $ResourceGroupName --name $WebAppName --query "[?name=='INGEST_API_KEY'].value | [0]" --output tsv 2>$null
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($resolvedKey)) {
-        throw 'Could not resolve INGEST_API_KEY from the deployed web app settings. Pass -IngestApiKey explicitly or verify the app setting exists.'
+    if ($SettingValue -notmatch '^@Microsoft\.KeyVault\((.+)\)$') {
+        return $SettingValue
     }
 
-    return $resolvedKey.Trim()
+    if ($SettingValue -notmatch 'SecretUri\s*=\s*([^,\)]+)') {
+        throw 'The deployed app setting uses an unsupported Key Vault reference format. Expected SecretUri=...'
+    }
+
+    $secretUri = $matches[1].Trim().Trim("'").Trim('"')
+    $resolvedValue = az keyvault secret show --id $secretUri --query value --output tsv 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($resolvedValue)) {
+        throw "Could not resolve the Key Vault secret referenced by $secretUri."
+    }
+
+    return $resolvedValue.Trim()
+}
+
+function Resolve-WebAppSecretSettingValue(
+    [string]$ResourceGroupName,
+    [string]$WebAppName,
+    [string]$SettingName,
+    [string]$CurrentValue,
+    [switch]$Required
+) {
+    if (-not [string]::IsNullOrWhiteSpace($CurrentValue)) {
+        return $CurrentValue
+    }
+
+    $resolvedSetting = az webapp config appsettings list --resource-group $ResourceGroupName --name $WebAppName --query "[?name=='$SettingName'].value | [0]" --output tsv 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($resolvedSetting)) {
+        if ($Required) {
+            throw "Could not resolve $SettingName from the deployed web app settings. Pass -$($SettingName.Replace('_', '')) explicitly or verify the app setting exists."
+        }
+
+        return $CurrentValue
+    }
+
+    return Resolve-KeyVaultReferenceSecretValue -SettingValue $resolvedSetting.Trim()
 }
 
 function Resolve-TerraformCommand() {
@@ -206,6 +242,22 @@ if ($UseAllAccessibleManagementGroups) {
     }
 
     Write-Host "Using accessible management groups for deployment: $($accessibleManagementGroupNames -join ', ')"
+}
+
+if ([string]::IsNullOrWhiteSpace($IngestApiKey)) {
+    $IngestApiKey = Resolve-WebAppSecretSettingValue -ResourceGroupName $ResourceGroupName -WebAppName $webAppName -SettingName 'INGEST_API_KEY' -CurrentValue $IngestApiKey
+}
+
+if ([string]::IsNullOrWhiteSpace($SessionSecret)) {
+    $SessionSecret = Resolve-WebAppSecretSettingValue -ResourceGroupName $ResourceGroupName -WebAppName $webAppName -SettingName 'SESSION_SECRET' -CurrentValue $SessionSecret
+}
+
+if ([string]::IsNullOrWhiteSpace($WorkerSharedSecret)) {
+    $WorkerSharedSecret = Resolve-WebAppSecretSettingValue -ResourceGroupName $ResourceGroupName -WebAppName $webAppName -SettingName 'CAPACITY_WORKER_SHARED_SECRET' -CurrentValue $WorkerSharedSecret
+}
+
+if ([string]::IsNullOrWhiteSpace($EntraClientSecret)) {
+    $EntraClientSecret = Resolve-WebAppSecretSettingValue -ResourceGroupName $ResourceGroupName -WebAppName $webAppName -SettingName 'ENTRA_CLIENT_SECRET' -CurrentValue $EntraClientSecret
 }
 
 if ($Provider -ne 'Terraform') {

@@ -29,8 +29,18 @@ locals {
   effective_sql_database_name              = local.use_existing_sql_database ? var.existing_sql_database_name : local.sql_database_name
   effective_key_vault_resource_group_name  = var.existing_key_vault_resource_group_name != "" ? var.existing_key_vault_resource_group_name : azurerm_resource_group.rg.name
   effective_key_vault_name                 = local.use_existing_key_vault ? var.existing_key_vault_name : local.key_vault_name
+  effective_key_vault_id                   = local.use_existing_key_vault ? data.azurerm_key_vault.kv[0].id : azurerm_key_vault.kv[0].id
+  effective_key_vault_uri                  = local.use_existing_key_vault ? data.azurerm_key_vault.kv[0].vault_uri : azurerm_key_vault.kv[0].vault_uri
   effective_worker_storage_resource_group_name = var.existing_worker_storage_account_resource_group_name != "" ? var.existing_worker_storage_account_resource_group_name : azurerm_resource_group.rg.name
   effective_worker_storage_name                = local.use_existing_worker_storage_account ? var.existing_worker_storage_account_name : local.function_storage_name
+  ingest_api_key_secret_name                   = "capdash-ingest-api-key"
+  session_secret_secret_name                   = "capdash-session-secret"
+  worker_shared_secret_secret_name             = "capdash-worker-shared-secret"
+  entra_client_secret_secret_name              = "capdash-entra-client-secret"
+  ingest_api_key_key_vault_reference           = "@Microsoft.KeyVault(SecretUri=${local.effective_key_vault_uri}secrets/${local.ingest_api_key_secret_name})"
+  session_secret_key_vault_reference           = "@Microsoft.KeyVault(SecretUri=${local.effective_key_vault_uri}secrets/${local.session_secret_secret_name})"
+  worker_shared_secret_key_vault_reference     = var.worker_shared_secret != "" ? "@Microsoft.KeyVault(SecretUri=${local.effective_key_vault_uri}secrets/${local.worker_shared_secret_secret_name})" : ""
+  entra_client_secret_key_vault_reference      = var.entra_client_secret != "" ? "@Microsoft.KeyVault(SecretUri=${local.effective_key_vault_uri}secrets/${local.entra_client_secret_secret_name})" : ""
 }
 
 resource "random_string" "storage_suffix" {
@@ -162,6 +172,13 @@ resource "azurerm_windows_web_app" "web" {
     vnet_route_all_enabled = true
   }
 
+  depends_on = [
+    azurerm_key_vault_secret.ingest_api_key,
+    azurerm_key_vault_secret.session_secret,
+    azurerm_key_vault_secret.worker_shared_secret,
+    azurerm_key_vault_secret.entra_client_secret,
+  ]
+
   app_settings = {
     "APPLICATIONINSIGHTS_CONNECTION_STRING" = azurerm_application_insights.ai.connection_string
     "Dashboard__Mode"                       = "MVP"
@@ -169,9 +186,9 @@ resource "azurerm_windows_web_app" "web" {
     "SQL_DATABASE"                          = local.effective_sql_database_name
     "SQL_AUTH_MODE"                         = "managed-identity"
     "CAPACITY_WORKER_BASE_URL"              = "https://${azurerm_windows_function_app.worker.default_hostname}"
-    "CAPACITY_WORKER_SHARED_SECRET"         = var.worker_shared_secret
-    "INGEST_API_KEY"                        = var.ingest_api_key
-    "SESSION_SECRET"                        = var.session_secret
+    "CAPACITY_WORKER_SHARED_SECRET"         = local.worker_shared_secret_key_vault_reference
+    "INGEST_API_KEY"                        = local.ingest_api_key_key_vault_reference
+    "SESSION_SECRET"                        = local.session_secret_key_vault_reference
     "QUOTA_MANAGEMENT_GROUP_ID"             = var.quota_management_group_id
     "INGEST_MANAGEMENT_GROUP_NAMES"         = join(",", var.web_reader_management_group_names)
     "NODE_ENV"                              = "production"
@@ -180,7 +197,7 @@ resource "azurerm_windows_web_app" "web" {
     "AUTH_ENABLED"                          = tostring(var.auth_enabled)
     "ENTRA_TENANT_ID"                       = var.entra_tenant_id
     "ENTRA_CLIENT_ID"                       = var.entra_client_id
-    "ENTRA_CLIENT_SECRET"                   = var.entra_client_secret
+    "ENTRA_CLIENT_SECRET"                   = local.entra_client_secret_key_vault_reference
     "AUTH_REDIRECT_URI"                     = local.effective_auth_redirect_uri
     "ADMIN_GROUP_ID"                        = var.admin_group_id
     "SESSION_STORE_SQL_ENABLED"             = var.auth_enabled ? "true" : "false"
@@ -227,13 +244,17 @@ resource "azurerm_windows_function_app" "worker" {
     vnet_route_all_enabled  = true
   }
 
+  depends_on = [
+    azurerm_key_vault_secret.worker_shared_secret,
+  ]
+
   app_settings = {
     "APPLICATIONINSIGHTS_CONNECTION_STRING" = azurerm_application_insights.ai.connection_string
     "FUNCTIONS_EXTENSION_VERSION"           = "~4"
     "FUNCTIONS_WORKER_RUNTIME"             = "powershell"
     "WEBSITE_RUN_FROM_PACKAGE"             = "1"
     "WEBSITE_DNS_SERVER"                   = "168.63.129.16"
-    "WORKER_SHARED_SECRET"                 = var.worker_shared_secret
+    "WORKER_SHARED_SECRET"                 = local.worker_shared_secret_key_vault_reference
   }
 }
 
@@ -257,6 +278,32 @@ data "azurerm_key_vault" "kv" {
   count               = local.use_existing_key_vault ? 1 : 0
   name                = local.effective_key_vault_name
   resource_group_name = local.effective_key_vault_resource_group_name
+}
+
+resource "azurerm_key_vault_secret" "ingest_api_key" {
+  name         = local.ingest_api_key_secret_name
+  value        = var.ingest_api_key
+  key_vault_id = local.effective_key_vault_id
+}
+
+resource "azurerm_key_vault_secret" "session_secret" {
+  name         = local.session_secret_secret_name
+  value        = var.session_secret
+  key_vault_id = local.effective_key_vault_id
+}
+
+resource "azurerm_key_vault_secret" "worker_shared_secret" {
+  count        = var.worker_shared_secret != "" ? 1 : 0
+  name         = local.worker_shared_secret_secret_name
+  value        = var.worker_shared_secret
+  key_vault_id = local.effective_key_vault_id
+}
+
+resource "azurerm_key_vault_secret" "entra_client_secret" {
+  count        = var.entra_client_secret != "" ? 1 : 0
+  name         = local.entra_client_secret_secret_name
+  value        = var.entra_client_secret
+  key_vault_id = local.effective_key_vault_id
 }
 
 # ──────────────────────────────────────────────

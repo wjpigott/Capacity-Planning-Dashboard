@@ -163,8 +163,17 @@ var effectiveSqlDatabaseName = useExistingSqlDatabase ? existingSqlDatabaseName 
 var effectiveSqlServerFqdn = contains(effectiveSqlServerName, '.') ? effectiveSqlServerName : '${effectiveSqlServerName}${az.environment().suffixes.sqlServerHostname}'
 var effectiveKeyVaultResourceGroupName = empty(existingKeyVaultResourceGroupName) ? resourceGroup().name : existingKeyVaultResourceGroupName
 var effectiveKeyVaultName = useExistingKeyVault ? existingKeyVaultName : keyVaultName
+var effectiveKeyVaultUri = 'https://${effectiveKeyVaultName}.${keyVaultDnsSuffix}/'
 var effectiveWorkerStorageAccountResourceGroupName = empty(existingWorkerStorageAccountResourceGroupName) ? resourceGroup().name : existingWorkerStorageAccountResourceGroupName
 var effectiveWorkerStorageAccountName = useExistingWorkerStorageAccount ? existingWorkerStorageAccountName : functionStorageName
+var ingestApiKeySecretName = 'capdash-ingest-api-key'
+var sessionSecretSecretName = 'capdash-session-secret'
+var workerSharedSecretSecretName = 'capdash-worker-shared-secret'
+var entraClientSecretSecretName = 'capdash-entra-client-secret'
+var ingestApiKeyKeyVaultReference = '@Microsoft.KeyVault(SecretUri=${effectiveKeyVaultUri}secrets/${ingestApiKeySecretName})'
+var sessionSecretKeyVaultReference = '@Microsoft.KeyVault(SecretUri=${effectiveKeyVaultUri}secrets/${sessionSecretSecretName})'
+var workerSharedSecretKeyVaultReference = empty(workerSharedSecret) ? '' : '@Microsoft.KeyVault(SecretUri=${effectiveKeyVaultUri}secrets/${workerSharedSecretSecretName})'
+var entraClientSecretKeyVaultReference = empty(entraClientSecret) ? '' : '@Microsoft.KeyVault(SecretUri=${effectiveKeyVaultUri}secrets/${entraClientSecretSecretName})'
 
 resource vnet 'Microsoft.Network/virtualNetworks@2023-09-01' = {
   name: vnetName
@@ -317,15 +326,15 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
         }
         {
           name: 'CAPACITY_WORKER_SHARED_SECRET'
-          value: workerSharedSecret
+          value: workerSharedSecretKeyVaultReference
         }
         {
           name: 'INGEST_API_KEY'
-          value: ingestApiKey
+          value: ingestApiKeyKeyVaultReference
         }
         {
           name: 'SESSION_SECRET'
-          value: sessionSecret
+          value: sessionSecretKeyVaultReference
         }
         {
           name: 'QUOTA_MANAGEMENT_GROUP_ID'
@@ -357,7 +366,7 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
         }
         {
           name: 'ENTRA_CLIENT_SECRET'
-          value: entraClientSecret
+          value: entraClientSecretKeyVaultReference
         }
         {
           name: 'AUTH_REDIRECT_URI'
@@ -441,7 +450,7 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         }
         {
           name: 'WORKER_SHARED_SECRET'
-          value: workerSharedSecret
+          value: workerSharedSecretKeyVaultReference
         }
         {
           name: 'WEBSITE_DNS_SERVER'
@@ -478,6 +487,32 @@ resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = if (!useExistingKeyVault) {
     enableSoftDelete: true
     softDeleteRetentionInDays: 90
     publicNetworkAccess: keyVaultPublicNetworkAccess
+  }
+}
+
+module keyVaultSecrets './modules/keyvault-secrets.bicep' = if (!useExistingKeyVault) {
+  name: 'keyVaultSecrets-${uniqueString(effectiveKeyVaultName, deployment().name)}'
+  params: {
+    keyVaultName: effectiveKeyVaultName
+    ingestApiKey: ingestApiKey
+    sessionSecret: sessionSecret
+    workerSharedSecret: workerSharedSecret
+    entraClientSecret: entraClientSecret
+  }
+  dependsOn: [
+    kv
+  ]
+}
+
+module existingKeyVaultSecrets './modules/keyvault-secrets.bicep' = if (useExistingKeyVault) {
+  name: 'existingKeyVaultSecrets-${uniqueString(effectiveKeyVaultName, deployment().name)}'
+  scope: resourceGroup(effectiveKeyVaultResourceGroupName)
+  params: {
+    keyVaultName: effectiveKeyVaultName
+    ingestApiKey: ingestApiKey
+    sessionSecret: sessionSecret
+    workerSharedSecret: workerSharedSecret
+    entraClientSecret: entraClientSecret
   }
 }
 

@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.42.1.51946",
-      "templateHash": "2514981402947223731"
+      "templateHash": "3312965050892631690"
     }
   },
   "parameters": {
@@ -306,8 +306,17 @@
     "effectiveSqlServerFqdn": "[if(contains(variables('effectiveSqlServerName'), '.'), variables('effectiveSqlServerName'), format('{0}{1}', variables('effectiveSqlServerName'), environment().suffixes.sqlServerHostname))]",
     "effectiveKeyVaultResourceGroupName": "[if(empty(parameters('existingKeyVaultResourceGroupName')), resourceGroup().name, parameters('existingKeyVaultResourceGroupName'))]",
     "effectiveKeyVaultName": "[if(variables('useExistingKeyVault'), parameters('existingKeyVaultName'), variables('keyVaultName'))]",
+    "effectiveKeyVaultUri": "[format('https://{0}.{1}/', variables('effectiveKeyVaultName'), variables('keyVaultDnsSuffix'))]",
     "effectiveWorkerStorageAccountResourceGroupName": "[if(empty(parameters('existingWorkerStorageAccountResourceGroupName')), resourceGroup().name, parameters('existingWorkerStorageAccountResourceGroupName'))]",
-    "effectiveWorkerStorageAccountName": "[if(variables('useExistingWorkerStorageAccount'), parameters('existingWorkerStorageAccountName'), variables('functionStorageName'))]"
+    "effectiveWorkerStorageAccountName": "[if(variables('useExistingWorkerStorageAccount'), parameters('existingWorkerStorageAccountName'), variables('functionStorageName'))]",
+    "ingestApiKeySecretName": "capdash-ingest-api-key",
+    "sessionSecretSecretName": "capdash-session-secret",
+    "workerSharedSecretSecretName": "capdash-worker-shared-secret",
+    "entraClientSecretSecretName": "capdash-entra-client-secret",
+    "ingestApiKeyKeyVaultReference": "[format('@Microsoft.KeyVault(SecretUri={0}secrets/{1})', variables('effectiveKeyVaultUri'), variables('ingestApiKeySecretName'))]",
+    "sessionSecretKeyVaultReference": "[format('@Microsoft.KeyVault(SecretUri={0}secrets/{1})', variables('effectiveKeyVaultUri'), variables('sessionSecretSecretName'))]",
+    "workerSharedSecretKeyVaultReference": "[if(empty(parameters('workerSharedSecret')), '', format('@Microsoft.KeyVault(SecretUri={0}secrets/{1})', variables('effectiveKeyVaultUri'), variables('workerSharedSecretSecretName')))]",
+    "entraClientSecretKeyVaultReference": "[if(empty(parameters('entraClientSecret')), '', format('@Microsoft.KeyVault(SecretUri={0}secrets/{1})', variables('effectiveKeyVaultUri'), variables('entraClientSecretSecretName')))]"
   },
   "resources": {
     "vnet": {
@@ -481,15 +490,15 @@
             },
             {
               "name": "CAPACITY_WORKER_SHARED_SECRET",
-              "value": "[parameters('workerSharedSecret')]"
+              "value": "[variables('workerSharedSecretKeyVaultReference')]"
             },
             {
               "name": "INGEST_API_KEY",
-              "value": "[parameters('ingestApiKey')]"
+              "value": "[variables('ingestApiKeyKeyVaultReference')]"
             },
             {
               "name": "SESSION_SECRET",
-              "value": "[parameters('sessionSecret')]"
+              "value": "[variables('sessionSecretKeyVaultReference')]"
             },
             {
               "name": "QUOTA_MANAGEMENT_GROUP_ID",
@@ -521,7 +530,7 @@
             },
             {
               "name": "ENTRA_CLIENT_SECRET",
-              "value": "[parameters('entraClientSecret')]"
+              "value": "[variables('entraClientSecretKeyVaultReference')]"
             },
             {
               "name": "AUTH_REDIRECT_URI",
@@ -616,7 +625,7 @@
             },
             {
               "name": "WORKER_SHARED_SECRET",
-              "value": "[parameters('workerSharedSecret')]"
+              "value": "[variables('workerSharedSecretKeyVaultReference')]"
             },
             {
               "name": "WEBSITE_DNS_SERVER",
@@ -924,6 +933,242 @@
         "functionApp",
         "functionStorage"
       ]
+    },
+    "keyVaultSecrets": {
+      "condition": "[not(variables('useExistingKeyVault'))]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('keyVaultSecrets-{0}', uniqueString(variables('effectiveKeyVaultName'), deployment().name))]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "keyVaultName": {
+            "value": "[variables('effectiveKeyVaultName')]"
+          },
+          "ingestApiKey": {
+            "value": "[parameters('ingestApiKey')]"
+          },
+          "sessionSecret": {
+            "value": "[parameters('sessionSecret')]"
+          },
+          "workerSharedSecret": {
+            "value": "[parameters('workerSharedSecret')]"
+          },
+          "entraClientSecret": {
+            "value": "[parameters('entraClientSecret')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "9045602917321687391"
+            }
+          },
+          "parameters": {
+            "keyVaultName": {
+              "type": "string",
+              "metadata": {
+                "description": "Target Key Vault name."
+              }
+            },
+            "ingestApiKey": {
+              "type": "securestring",
+              "metadata": {
+                "description": "Shared secret used to authorize internal bootstrap and ingestion routes on the dashboard web app."
+              }
+            },
+            "sessionSecret": {
+              "type": "securestring",
+              "metadata": {
+                "description": "Session secret used by the dashboard web app session middleware."
+              }
+            },
+            "workerSharedSecret": {
+              "type": "securestring",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Optional shared secret used between the dashboard web app and the worker function app."
+              }
+            },
+            "entraClientSecret": {
+              "type": "securestring",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Optional Microsoft Entra application client secret used by the dashboard auth flow."
+              }
+            }
+          },
+          "variables": {
+            "ingestApiKeySecretName": "capdash-ingest-api-key",
+            "sessionSecretSecretName": "capdash-session-secret",
+            "workerSharedSecretSecretName": "capdash-worker-shared-secret",
+            "entraClientSecretSecretName": "capdash-entra-client-secret"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('keyVaultName'), variables('ingestApiKeySecretName'))]",
+              "properties": {
+                "value": "[parameters('ingestApiKey')]"
+              }
+            },
+            {
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('keyVaultName'), variables('sessionSecretSecretName'))]",
+              "properties": {
+                "value": "[parameters('sessionSecret')]"
+              }
+            },
+            {
+              "condition": "[not(empty(parameters('workerSharedSecret')))]",
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('keyVaultName'), variables('workerSharedSecretSecretName'))]",
+              "properties": {
+                "value": "[parameters('workerSharedSecret')]"
+              }
+            },
+            {
+              "condition": "[not(empty(parameters('entraClientSecret')))]",
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('keyVaultName'), variables('entraClientSecretSecretName'))]",
+              "properties": {
+                "value": "[parameters('entraClientSecret')]"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "kv"
+      ]
+    },
+    "existingKeyVaultSecrets": {
+      "condition": "[variables('useExistingKeyVault')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('existingKeyVaultSecrets-{0}', uniqueString(variables('effectiveKeyVaultName'), deployment().name))]",
+      "resourceGroup": "[variables('effectiveKeyVaultResourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "keyVaultName": {
+            "value": "[variables('effectiveKeyVaultName')]"
+          },
+          "ingestApiKey": {
+            "value": "[parameters('ingestApiKey')]"
+          },
+          "sessionSecret": {
+            "value": "[parameters('sessionSecret')]"
+          },
+          "workerSharedSecret": {
+            "value": "[parameters('workerSharedSecret')]"
+          },
+          "entraClientSecret": {
+            "value": "[parameters('entraClientSecret')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "9045602917321687391"
+            }
+          },
+          "parameters": {
+            "keyVaultName": {
+              "type": "string",
+              "metadata": {
+                "description": "Target Key Vault name."
+              }
+            },
+            "ingestApiKey": {
+              "type": "securestring",
+              "metadata": {
+                "description": "Shared secret used to authorize internal bootstrap and ingestion routes on the dashboard web app."
+              }
+            },
+            "sessionSecret": {
+              "type": "securestring",
+              "metadata": {
+                "description": "Session secret used by the dashboard web app session middleware."
+              }
+            },
+            "workerSharedSecret": {
+              "type": "securestring",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Optional shared secret used between the dashboard web app and the worker function app."
+              }
+            },
+            "entraClientSecret": {
+              "type": "securestring",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Optional Microsoft Entra application client secret used by the dashboard auth flow."
+              }
+            }
+          },
+          "variables": {
+            "ingestApiKeySecretName": "capdash-ingest-api-key",
+            "sessionSecretSecretName": "capdash-session-secret",
+            "workerSharedSecretSecretName": "capdash-worker-shared-secret",
+            "entraClientSecretSecretName": "capdash-entra-client-secret"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('keyVaultName'), variables('ingestApiKeySecretName'))]",
+              "properties": {
+                "value": "[parameters('ingestApiKey')]"
+              }
+            },
+            {
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('keyVaultName'), variables('sessionSecretSecretName'))]",
+              "properties": {
+                "value": "[parameters('sessionSecret')]"
+              }
+            },
+            {
+              "condition": "[not(empty(parameters('workerSharedSecret')))]",
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('keyVaultName'), variables('workerSharedSecretSecretName'))]",
+              "properties": {
+                "value": "[parameters('workerSharedSecret')]"
+              }
+            },
+            {
+              "condition": "[not(empty(parameters('entraClientSecret')))]",
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('keyVaultName'), variables('entraClientSecretSecretName'))]",
+              "properties": {
+                "value": "[parameters('entraClientSecret')]"
+              }
+            }
+          ]
+        }
+      }
     },
     "existingSqlDatabaseModule": {
       "condition": "[and(not(variables('useExistingSqlDatabase')), variables('useExistingSqlServer'))]",

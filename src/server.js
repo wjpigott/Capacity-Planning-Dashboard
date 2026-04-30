@@ -2220,6 +2220,7 @@ app.get('/api/capacity/trends', async (req, res) => {
   try {
     const rows = await getCapacityTrends({
       days: req.query.days,
+      granularity: req.query.granularity,
       regionPreset: req.query.regionPreset,
       subscriptionIds: req.query.subscriptionIds,
       region: req.query.region,

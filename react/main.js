@@ -1569,23 +1569,32 @@ function formatCompactNumber(value) {
   }).format(numeric);
 }
 
-function formatShortDay(value) {
+function formatTrendBucket(value, granularity = 'daily') {
   if (!value) {
     return 'n/a';
   }
 
-  const date = new Date(`${value}T00:00:00Z`);
+  const normalizedGranularity = granularity === 'hourly' ? 'hourly' : 'daily';
+  const date = normalizedGranularity === 'hourly'
+    ? new Date(value)
+    : new Date(`${value}T00:00:00Z`);
   if (Number.isNaN(date.getTime())) {
     return value;
   }
 
-  return date.toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric'
-  });
+  return normalizedGranularity === 'hourly'
+    ? date.toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric'
+    })
+    : date.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric'
+    });
 }
 
-function TrendLineChart({ title, subtitle, rows, series, emptyMessage }) {
+function TrendLineChart({ title, subtitle, rows, series, emptyMessage, granularity = 'daily' }) {
   const scopedRows = Array.isArray(rows) ? rows : [];
   const chartSeries = Array.isArray(series) ? series : [];
 
@@ -1616,6 +1625,7 @@ function TrendLineChart({ title, subtitle, rows, series, emptyMessage }) {
     return { value, y };
   });
   const xStep = scopedRows.length > 1 ? innerWidth / (scopedRows.length - 1) : 0;
+  const xLabelInterval = Math.max(1, Math.ceil(scopedRows.length / 8));
 
   return (
     <section className="rx-panel rx-panel--compact">
@@ -1662,16 +1672,19 @@ function TrendLineChart({ title, subtitle, rows, series, emptyMessage }) {
                 {points.map((point) => (
                   <g key={`${item.key}-${point.day}`}>
                     <circle cx={point.x} cy={point.y} r="4" fill={item.color}></circle>
-                    <title>{`${item.label}: ${item.formatValue ? item.formatValue(point.value) : formatNumber(point.value)} on ${point.day}`}</title>
+                    <title>{`${item.label}: ${item.formatValue ? item.formatValue(point.value) : formatNumber(point.value)} on ${formatTrendBucket(point.day, granularity)}`}</title>
                   </g>
                 ))}
               </g>
             );
           })}
           {scopedRows.map((row, index) => {
+            if (index % xLabelInterval !== 0 && index !== scopedRows.length - 1) {
+              return null;
+            }
             const x = margin.left + (scopedRows.length === 1 ? innerWidth / 2 : xStep * index);
             return (
-              <text key={row.day} className="rx-trend-chart__tick rx-trend-chart__tick--x" x={x} y={height - 10} textAnchor="middle">{formatShortDay(row.day)}</text>
+              <text key={row.day} className="rx-trend-chart__tick rx-trend-chart__tick--x" x={x} y={height - 10} textAnchor="middle">{formatTrendBucket(row.day, granularity)}</text>
             );
           })}
         </svg>
@@ -1680,12 +1693,17 @@ function TrendLineChart({ title, subtitle, rows, series, emptyMessage }) {
   );
 }
 
-function TrendReport({ rows, filters, selectedSubscriptionCount, totalSubscriptionCount }) {
+function TrendReport({ rows, filters, selectedSubscriptionCount, totalSubscriptionCount, granularity, onGranularityChange }) {
   const scopedRows = Array.isArray(rows) ? rows : [];
   const latestRow = scopedRows[scopedRows.length - 1] || null;
   const firstRow = scopedRows[0] || null;
   const quotaDelta = latestRow && firstRow ? Number(latestRow.totalQuotaAvailable || 0) - Number(firstRow.totalQuotaAvailable || 0) : 0;
   const observationDelta = latestRow && firstRow ? Number(latestRow.totalRows || 0) - Number(firstRow.totalRows || 0) : 0;
+  const normalizedGranularity = granularity === 'hourly' ? 'hourly' : 'daily';
+  const bucketLabel = normalizedGranularity === 'hourly' ? 'hour' : 'day';
+  const peakLabel = normalizedGranularity === 'hourly' ? 'Observed Hourly Peak' : 'Observed Daily Peak';
+  const rolling7Label = normalizedGranularity === 'hourly' ? 'Trailing 7-Hour Peak' : 'Rolling 7-Day Peak';
+  const rolling14Label = normalizedGranularity === 'hourly' ? 'Trailing 14-Hour Peak' : 'Rolling 14-Day Peak';
   const subscriptionLabel = selectedSubscriptionCount === totalSubscriptionCount
     ? `All ${formatNumber(totalSubscriptionCount)} subscriptions`
     : `${formatNumber(selectedSubscriptionCount)} selected subscriptions`;
@@ -1705,8 +1723,15 @@ function TrendReport({ rows, filters, selectedSubscriptionCount, totalSubscripti
         <div className="rx-panel__header">
           <div>
             <h2>Trend Calculation</h2>
-            <p>The server groups `dbo.CapacitySnapshot` by capture date after applying the active region preset, specific region, selected subscriptions, family, SKU, and availability filters.</p>
+            <p>The server groups `dbo.CapacitySnapshot` by capture {bucketLabel} after applying the active region preset, specific region, selected subscriptions, family, SKU, and availability filters.</p>
           </div>
+          <label className="rx-field">
+            <span>Granularity</span>
+            <select value={normalizedGranularity} onChange={(event) => onGranularityChange(event.target.value)}>
+              <option value="daily">Daily</option>
+              <option value="hourly">Hourly</option>
+            </select>
+          </label>
         </div>
         <div className="rx-trend-summary">
           <div className="rx-trend-summary__item">
@@ -1717,53 +1742,56 @@ function TrendReport({ rows, filters, selectedSubscriptionCount, totalSubscripti
           <div className="rx-trend-summary__item">
             <span>Latest Quota Available</span>
             <strong>{latestRow ? formatNumber(latestRow.totalQuotaAvailable) : 'n/a'}</strong>
-            <small>{firstRow ? `${quotaDelta >= 0 ? '+' : ''}${formatNumber(quotaDelta)} vs first day` : 'Waiting for history'}</small>
+            <small>{firstRow ? `${quotaDelta >= 0 ? '+' : ''}${formatNumber(quotaDelta)} vs first ${bucketLabel}` : 'Waiting for history'}</small>
           </div>
           <div className="rx-trend-summary__item">
             <span>Latest SKU Observations</span>
             <strong>{latestRow ? formatNumber(latestRow.totalRows) : 'n/a'}</strong>
-            <small>{firstRow ? `${observationDelta >= 0 ? '+' : ''}${formatNumber(observationDelta)} vs first day` : 'Waiting for history'}</small>
+            <small>{firstRow ? `${observationDelta >= 0 ? '+' : ''}${formatNumber(observationDelta)} vs first ${bucketLabel}` : 'Waiting for history'}</small>
           </div>
           <div className="rx-trend-summary__item">
-            <span>Observed Daily Peak</span>
+            <span>{peakLabel}</span>
             <strong>{latestRow ? formatPercent(latestRow.peakUtilizationPct) : 'n/a'}</strong>
-            <small>Highest sampled quota utilization on the latest day</small>
+            <small>{`Highest sampled quota utilization in the latest ${bucketLabel}`}</small>
           </div>
           <div className="rx-trend-summary__item">
-            <span>Rolling 7-Day Peak</span>
+            <span>{rolling7Label}</span>
             <strong>{latestRow ? formatPercent(latestRow.rolling7DayPeakUtilizationPct) : 'n/a'}</strong>
-            <small>Highest sampled peak across the trailing 7 days</small>
+            <small>{`Highest sampled peak across the trailing 7 ${normalizedGranularity === 'hourly' ? 'hours' : 'days'}`}</small>
           </div>
           <div className="rx-trend-summary__item">
-            <span>Rolling 14-Day Peak</span>
+            <span>{rolling14Label}</span>
             <strong>{latestRow ? formatPercent(latestRow.rolling14DayPeakUtilizationPct) : 'n/a'}</strong>
-            <small>Highest sampled peak across the trailing 14 days</small>
+            <small>{`Highest sampled peak across the trailing 14 ${normalizedGranularity === 'hourly' ? 'hours' : 'days'}`}</small>
           </div>
         </div>
-        <p className="rx-trend-note">Peak utilization is based on the highest sampled quota usage saved that day. With twice-daily ingestion, this is the peak observed in your captures, not a guaranteed true intraday maximum between runs.</p>
+        <p className="rx-trend-note">Peak utilization is based on the highest sampled quota usage saved in each {bucketLabel}. It reflects your captured runs, not any unseen spike between scheduler executions.</p>
       </section>
       <TrendLineChart
         title="Peak Utilization Over Time"
-        subtitle="Daily sampled peak utilization plus trailing 7-day and 14-day peak overlays for the current scope."
+        subtitle={normalizedGranularity === 'hourly'
+          ? 'Hourly sampled peak utilization plus trailing 7-hour and 14-hour peak overlays for the current scope.'
+          : 'Daily sampled peak utilization plus trailing 7-day and 14-day peak overlays for the current scope.'}
         rows={scopedRows}
+        granularity={normalizedGranularity}
         series={[
           {
             key: 'peakUtilizationPct',
-            label: 'Daily Peak Utilization',
+            label: normalizedGranularity === 'hourly' ? 'Hourly Peak Utilization' : 'Daily Peak Utilization',
             color: '#7c3aed',
             getValue: (row) => row.peakUtilizationPct,
             formatValue: formatPercent
           },
           {
             key: 'rolling7DayPeakUtilizationPct',
-            label: '7-Day Rolling Peak',
+            label: normalizedGranularity === 'hourly' ? '7-Hour Rolling Peak' : '7-Day Rolling Peak',
             color: '#d97706',
             getValue: (row) => row.rolling7DayPeakUtilizationPct,
             formatValue: formatPercent
           },
           {
             key: 'rolling14DayPeakUtilizationPct',
-            label: '14-Day Rolling Peak',
+            label: normalizedGranularity === 'hourly' ? '14-Hour Rolling Peak' : '14-Day Rolling Peak',
             color: '#0f766e',
             getValue: (row) => row.rolling14DayPeakUtilizationPct,
             formatValue: formatPercent
@@ -1775,15 +1803,18 @@ function TrendReport({ rows, filters, selectedSubscriptionCount, totalSubscripti
         <div className="rx-panel__header">
           <div>
             <h2>Headroom Context</h2>
-            <p>These daily totals are still useful, but they answer a different question than peak utilization.</p>
+            <p>{normalizedGranularity === 'hourly' ? 'These hourly totals are useful for spotting same-day spikes.' : 'These daily totals are still useful, but they answer a different question than peak utilization.'}</p>
           </div>
         </div>
-        <p className="rx-trend-note">Large swings usually mean more or fewer snapshot rows were captured on that day. React is only rendering the result; the region, subscription, family, and SKU filters are applied by the API before the daily totals are calculated.</p>
+        <p className="rx-trend-note">Large swings usually mean more or fewer snapshot rows were captured in that {bucketLabel}. React is only rendering the result; the region, subscription, family, and SKU filters are applied by the API before the aggregates are calculated.</p>
       </section>
       <TrendLineChart
         title="Quota Available Over Time"
-        subtitle="Daily summed headroom across the current filter scope. Use subscription filters when you want one subscription trend instead of the whole cohort."
+        subtitle={normalizedGranularity === 'hourly'
+          ? 'Hourly summed headroom across the current filter scope. Use subscription filters when you want one subscription trend instead of the whole cohort.'
+          : 'Daily summed headroom across the current filter scope. Use subscription filters when you want one subscription trend instead of the whole cohort.'}
         rows={scopedRows}
+        granularity={normalizedGranularity}
         series={[
           {
             key: 'quota',
@@ -1796,8 +1827,11 @@ function TrendReport({ rows, filters, selectedSubscriptionCount, totalSubscripti
       />
       <TrendLineChart
         title="Snapshot Volume Context"
-        subtitle="These counts explain why quota totals can jump: fewer captured rows usually means a smaller daily aggregate even with the same filters."
+        subtitle={normalizedGranularity === 'hourly'
+          ? 'These counts explain why quota totals can jump: fewer captured rows usually means a smaller hourly aggregate even with the same filters.'
+          : 'These counts explain why quota totals can jump: fewer captured rows usually means a smaller daily aggregate even with the same filters.'}
         rows={scopedRows}
+        granularity={normalizedGranularity}
         series={[
           {
             key: 'totalRows',
@@ -1816,16 +1850,16 @@ function TrendReport({ rows, filters, selectedSubscriptionCount, totalSubscripti
       />
       <DataTable
         key="trend"
-        title="Daily Trend Rows"
-        subtitle="Raw daily aggregates behind the charts."
+        title={normalizedGranularity === 'hourly' ? 'Hourly Trend Rows' : 'Daily Trend Rows'}
+        subtitle={normalizedGranularity === 'hourly' ? 'Raw hourly aggregates behind the charts.' : 'Raw daily aggregates behind the charts.'}
         columns={[
-          { key: 'day', label: 'Day' },
+          { key: 'day', label: normalizedGranularity === 'hourly' ? 'Hour' : 'Day', render: (row) => formatTrendBucket(row.day, normalizedGranularity) },
           { key: 'totalRows', label: 'Total Rows', render: (row) => formatNumber(row.totalRows) },
           { key: 'constrainedRows', label: 'Constrained Rows', render: (row) => formatNumber(row.constrainedRows) },
           { key: 'totalQuotaAvailable', label: 'Total Quota Available', render: (row) => formatNumber(row.totalQuotaAvailable) },
-          { key: 'peakUtilizationPct', label: 'Daily Peak Utilization', render: (row) => formatPercent(row.peakUtilizationPct) },
-          { key: 'rolling7DayPeakUtilizationPct', label: '7-Day Peak', render: (row) => formatPercent(row.rolling7DayPeakUtilizationPct) },
-          { key: 'rolling14DayPeakUtilizationPct', label: '14-Day Peak', render: (row) => formatPercent(row.rolling14DayPeakUtilizationPct) }
+          { key: 'peakUtilizationPct', label: normalizedGranularity === 'hourly' ? 'Hourly Peak Utilization' : 'Daily Peak Utilization', render: (row) => formatPercent(row.peakUtilizationPct) },
+          { key: 'rolling7DayPeakUtilizationPct', label: normalizedGranularity === 'hourly' ? '7-Hour Peak' : '7-Day Peak', render: (row) => formatPercent(row.rolling7DayPeakUtilizationPct) },
+          { key: 'rolling14DayPeakUtilizationPct', label: normalizedGranularity === 'hourly' ? '14-Hour Peak' : '14-Day Peak', render: (row) => formatPercent(row.rolling14DayPeakUtilizationPct) }
         ]}
         rows={scopedRows}
         emptyMessage="No trend history rows available."
@@ -2927,6 +2961,7 @@ function App() {
   const [computeFamilyCatalogOptions, setComputeFamilyCatalogOptions] = useState([]);
   const [capacityAnalytics, setCapacityAnalytics] = useState({ regionHealth: [], topSkus: [], matrix: { regions: [], rows: [] }, recommendedTargetSku: '', aiQuotaProviderOptions: [] });
   const [trendRows, setTrendRows] = useState([]);
+  const [trendGranularity, setTrendGranularity] = useState('daily');
   const [familyRows, setFamilyRows] = useState([]);
   const [capacityScores, setCapacityScores] = useState({ rows: [], pagination: { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false }, subscriptionSummary: [], desiredCount: '1', status: { tone: 'info', message: 'Load or refresh live placement to populate saved capacity score snapshots.', detail: '' }, busy: false });
   const [aiModelState, setAiModelState] = useState({ rows: [], regions: [], loading: false, status: { tone: 'info', message: 'AI model availability report ready.', detail: 'Open the sidebar report to review Azure AI model and provider coverage.' } });
@@ -3854,7 +3889,7 @@ function App() {
 
     async function loadAnalytics() {
       const query = new URLSearchParams(queryFilters);
-      const trendQuery = new URLSearchParams({ ...queryFilters, days: '7' }).toString();
+      const trendQuery = new URLSearchParams({ ...queryFilters, days: '7', granularity: trendGranularity }).toString();
 
       fetchJsonWithRetry(`/api/capacity/trends?${trendQuery}`)
         .then((payload) => {
@@ -3925,7 +3960,7 @@ function App() {
       }
     }
     loadAnalytics();
-  }, [queryFilters]);
+  }, [queryFilters, trendGranularity]);
 
   useEffect(() => {
     const requestId = capacityScoreRequestRef.current + 1;
@@ -4726,7 +4761,7 @@ function App() {
       return <div className="rx-view-stack"><section className="rx-panel rx-panel--compact rx-panel--muted"><div className="rx-panel__header"><div><h2>Region Matrix</h2><p>Family-by-region readiness with row rollups and a deployment-status key.</p></div></div><div className="rx-matrix-key"><div className="rx-matrix-key__group"><h3>Row Color</h3><div className="rx-matrix-key__item"><span className="rx-row-swatch rx-row-swatch--ok"></span><div><strong>Green</strong><p>At least one SKU in this family is fully available.</p></div></div><div className="rx-matrix-key__item"><span className="rx-row-swatch rx-row-swatch--caution"></span><div><strong>Yellow</strong><p>Some SKUs may work, but there are constraints.</p></div></div><div className="rx-matrix-key__item"><span className="rx-row-swatch rx-row-swatch--blocked"></span><div><strong>Gray</strong><p>No SKUs from this family available in scanned regions.</p></div></div></div><div className="rx-matrix-key__group"><h3>Cell Status</h3>{['OK', 'CONSTRAINED', 'LIMITED', 'PARTIAL', 'BLOCKED'].map((status) => { const meta = matrixStatusMeta(status); return <div key={status} className="rx-matrix-key__item"><StatusPill value={status} /><div><strong>{meta.short}</strong><p>{meta.description}</p></div></div>; })}</div></div></section><SortableMatrixTable title="Region Matrix Report" subtitle="Rows are highlighted by family-level readiness across the selected region scope." tableClassName="rx-matrix-table" primaryColumn={{ key: 'family', label: 'Family' }} statusColumn={{ key: 'rowStatus', label: 'Key', render: (row) => <StatusPill value={row.rowStatus === 'CAUTION' ? 'PARTIAL' : row.rowStatus} />, sortValue: (row) => getStatusSortValue(row.rowStatus) }} readyColumn={{ key: 'readyRegionCount', label: 'Ready', render: (row) => formatNumber(row.readyRegionCount) }} dynamicColumns={matrix.regions.map((region) => ({ key: region, label: region }))} rows={matrix.rows} emptyMessage="No matrix rows available." rowKey={(row) => row.family} getRowClassName={(row) => `rx-matrix-row rx-matrix-row--${String(row.rowStatus || 'blocked').toLowerCase()}`} getDynamicSortValue={(row, region) => getStatusSortValue(matrix.resolveCellStatus(row.regionMap[region]))} renderDynamicCell={(row, region) => { const status = matrix.resolveCellStatus(row.regionMap[region]); const meta = matrixStatusMeta(status); return <div className="rx-matrix-cell" title={meta.description}><StatusPill value={status} /></div>; }} /></div>;
     }
     if (activeView === 'trend') {
-      return <TrendReport rows={trendRows} filters={filters} selectedSubscriptionCount={selectedSubscriptionIds.length} totalSubscriptionCount={subscriptionOptions.length} />;
+      return <TrendReport rows={trendRows} filters={filters} selectedSubscriptionCount={selectedSubscriptionIds.length} totalSubscriptionCount={subscriptionOptions.length} granularity={trendGranularity} onGranularityChange={setTrendGranularity} />;
     }
     if (activeView === 'quota-workbench') {
       return <QuotaWorkbenchView managementGroups={quotaState.managementGroups} selectedManagementGroup={quotaState.selectedManagementGroup} onManagementGroupChange={(value) => setQuotaState({ ...quotaState, selectedManagementGroup: value, selectedQuotaGroup: 'all', shareableReport: { rows: [], summary: { rowCount: 0, subscriptionCount: 0, regionCount: 0, skuCount: 0, totalShareableQuota: 0 }, generatedAtUtc: null }, selectedAnalysisRunId: '', selectedDonorSubscriptionId: '', selectedMoveCandidate: null, requestedTransferAmount: 0, planRows: [], impactRows: [], applyResults: [], planSummary: {} })} quotaGroups={quotaState.quotaGroups} selectedQuotaGroup={quotaState.selectedQuotaGroup} onQuotaGroupChange={(value) => setQuotaState({ ...quotaState, selectedQuotaGroup: value, shareableReport: { rows: [], summary: { rowCount: 0, subscriptionCount: 0, regionCount: 0, skuCount: 0, totalShareableQuota: 0 }, generatedAtUtc: null }, selectedAnalysisRunId: '', selectedDonorSubscriptionId: '', selectedMoveCandidate: null, requestedTransferAmount: 0, planRows: [], impactRows: [], applyResults: [], planSummary: {} })} shareableReport={quotaState.shareableReport} candidates={quotaState.candidates} candidateFilters={quotaState.candidateFilters} setCandidateFilters={(value) => setQuotaState({ ...quotaState, candidateFilters: value })} selectedMoveCandidate={quotaState.selectedMoveCandidate} onSelectMoveCandidate={(row) => { const skuOptions = normalizeSkuList(row.skuList); const recipientNeed = getQuotaRecipientNeed(row); const movableQuota = Number(row.movableQuota || row.suggestedMovable || 0); const mode = movableQuota > 0 ? 'donor' : 'recipient'; const requestedTransferAmount = mode === 'donor' ? movableQuota : recipientNeed; setQuotaState((current) => ({ ...current, selectedMoveCandidate: { subscriptionId: row.subscriptionId, subscriptionName: row.subscriptionName || row.subscriptionId, donorSubscriptionId: mode === 'donor' ? row.subscriptionId : '', recipientSubscriptionId: mode === 'recipient' ? row.subscriptionId : '', recipientSubscriptionName: row.subscriptionName || row.subscriptionId, region: row.region, quotaName: row.family || row.quotaName, skuList: skuOptions, selectedSku: '', quotaAvailable: row.quotaAvailable, safetyBuffer: row.safetyBuffer, availability: row.availability, movableQuota, mode }, selectedDonorSubscriptionId: mode === 'donor' ? row.subscriptionId : '', requestedTransferAmount, planRows: [], impactRows: [], applyResults: [], planSummary: {}, status: { tone: 'success', message: `Selected ${row.subscriptionName || row.subscriptionId} as a ${mode} quota row. Continue to Step 3 to build the move.` } })); }} quotaRuns={quotaState.quotaRuns} selectedAnalysisRunId={quotaState.selectedAnalysisRunId} donorOptions={donorOptions} selectedDonorSubscriptionId={quotaState.selectedDonorSubscriptionId} onSelectedSkuChange={(value) => setQuotaState({ ...quotaState, selectedMoveCandidate: quotaState.selectedMoveCandidate ? { ...quotaState.selectedMoveCandidate, selectedSku: value } : null, selectedDonorSubscriptionId: '', planRows: [], impactRows: [], applyResults: [], planSummary: {} })} requestedTransferAmount={quotaState.requestedTransferAmount} onRequestedTransferAmountChange={(value) => setQuotaState({ ...quotaState, requestedTransferAmount: Math.max(0, Number(value || 0)), planRows: [], impactRows: [], applyResults: [], planSummary: {} })} onAnalysisRunChange={(value) => setQuotaState({ ...quotaState, selectedAnalysisRunId: value, selectedDonorSubscriptionId: '', planRows: [], impactRows: [], applyResults: [], planSummary: {} })} onDonorSubscriptionChange={(value) => setQuotaState({ ...quotaState, selectedDonorSubscriptionId: value, planRows: [], impactRows: [], applyResults: [], planSummary: {} })} planRows={quotaState.planRows} impactRows={quotaState.impactRows} applyResults={quotaState.applyResults} summary={quotaState.planSummary} actions={quotaActions} busy={quotaState.busy} status={quotaState.status} />;

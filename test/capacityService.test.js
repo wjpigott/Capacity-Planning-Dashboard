@@ -58,6 +58,49 @@ test('deriveCapacityTrendRows calculates daily and rolling peak utilization perc
   });
 });
 
+test('deriveCapacityTrendRows supports hourly buckets', () => {
+  const rows = deriveCapacityTrendRows([
+    {
+      capturedAtUtc: '2026-04-21T08:15:00Z',
+      availability: 'OK',
+      quotaLimit: 10,
+      quotaCurrent: 3
+    },
+    {
+      capturedAtUtc: '2026-04-21T08:45:00Z',
+      availability: 'LIMITED',
+      quotaLimit: 10,
+      quotaCurrent: 8
+    },
+    {
+      capturedAtUtc: '2026-04-21T09:10:00Z',
+      availability: 'CONSTRAINED',
+      quotaLimit: 10,
+      quotaCurrent: 9
+    }
+  ], { granularity: 'hourly' });
+
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows[0], {
+    day: '2026-04-21T08:00:00Z',
+    totalRows: 2,
+    constrainedRows: 0,
+    totalQuotaAvailable: 9,
+    peakUtilizationPct: 80,
+    rolling7DayPeakUtilizationPct: 80,
+    rolling14DayPeakUtilizationPct: 80
+  });
+  assert.deepEqual(rows[1], {
+    day: '2026-04-21T09:00:00Z',
+    totalRows: 1,
+    constrainedRows: 1,
+    totalQuotaAvailable: 1,
+    peakUtilizationPct: 90,
+    rolling7DayPeakUtilizationPct: 90,
+    rolling14DayPeakUtilizationPct: 90
+  });
+});
+
 test('deriveCapacityScoreRows aggregates subscription rows into a High score entry', () => {
   const rows = deriveCapacityScoreRows([
     {

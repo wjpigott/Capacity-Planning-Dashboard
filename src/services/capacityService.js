@@ -719,6 +719,9 @@ async function getSubscriptionSummary(filters) {
 
 async function getCapacityTrends(filters) {
   const days = Math.max(1, Math.min(30, Number(filters.days || 7)));
+  const granularity = String(filters.granularity || 'daily').trim().toLowerCase() === 'hourly'
+    ? 'hourly'
+    : 'daily';
   const pool = await getSqlPool();
 
   if (!pool) {
@@ -726,7 +729,7 @@ async function getCapacityTrends(filters) {
       ...row,
       capturedAtUtc: row.capturedAtUtc || new Date().toISOString()
     }));
-    return deriveCapacityTrendRows(scoped);
+    return deriveCapacityTrendRows(scoped, { granularity });
   }
 
   const hasScopedFamilyBase = Boolean(filters.familyBase && String(filters.familyBase).trim().toLowerCase() !== 'all');
@@ -735,9 +738,11 @@ async function getCapacityTrends(filters) {
     request.input('daysBack', days);
 
     let query = `
-      WITH Daily AS (
+      WITH Bucketed AS (
         SELECT
-          CONVERT(varchar(10), CAST(capturedAtUtc AS date), 23) AS [day],
+          ${granularity === 'hourly'
+            ? "CONVERT(varchar(13), capturedAtUtc, 120) + ':00:00Z' AS [bucket]"
+            : "CONVERT(varchar(10), CAST(capturedAtUtc AS date), 23) AS [bucket]"},
           COUNT(1) AS totalRows,
           SUM(CASE WHEN availabilityState IN ('CONSTRAINED', 'RESTRICTED') THEN 1 ELSE 0 END) AS constrainedRows,
           SUM(quotaLimit - quotaCurrent) AS totalQuotaAvailable,
@@ -751,23 +756,25 @@ async function getCapacityTrends(filters) {
 
     query += buildCapacityAnalyticsSqlFilters(filters, request);
     query += `
-        GROUP BY CAST(capturedAtUtc AS date)
+        GROUP BY ${granularity === 'hourly'
+          ? "CONVERT(varchar(13), capturedAtUtc, 120)"
+          : 'CAST(capturedAtUtc AS date)'}
       )
       SELECT
-        [day],
+        [bucket],
         totalRows,
         constrainedRows,
         totalQuotaAvailable,
         peakUtilizationPct,
-        MAX(peakUtilizationPct) OVER (ORDER BY [day] ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS rolling7DayPeakUtilizationPct,
-        MAX(peakUtilizationPct) OVER (ORDER BY [day] ROWS BETWEEN 13 PRECEDING AND CURRENT ROW) AS rolling14DayPeakUtilizationPct
-      FROM Daily
-      ORDER BY [day] ASC
+        MAX(peakUtilizationPct) OVER (ORDER BY [bucket] ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS rolling7DayPeakUtilizationPct,
+        MAX(peakUtilizationPct) OVER (ORDER BY [bucket] ROWS BETWEEN 13 PRECEDING AND CURRENT ROW) AS rolling14DayPeakUtilizationPct
+      FROM Bucketed
+      ORDER BY [bucket] ASC
     `;
 
     const result = await request.query(query);
     return result.recordset.map((row) => ({
-      day: row.day,
+      day: row.bucket,
       totalRows: Number(row.totalRows || 0),
       constrainedRows: Number(row.constrainedRows || 0),
       totalQuotaAvailable: Number(row.totalQuotaAvailable || 0),
@@ -805,18 +812,21 @@ async function getCapacityTrends(filters) {
     region: record.region,
     subscriptionId: record.subscriptionId
   }));
-  return deriveCapacityTrendRows(rows);
+  return deriveCapacityTrendRows(rows, { granularity });
 }
 
-function deriveCapacityTrendRows(rows) {
+function deriveCapacityTrendRows(rows, options = {}) {
   const scopedRows = Array.isArray(rows) ? rows : [];
+  const granularity = String(options.granularity || 'daily').trim().toLowerCase() === 'hourly'
+    ? 'hourly'
+    : 'daily';
   const grouped = new Map();
-  const today = new Date().toISOString().slice(0, 10);
+  const now = new Date().toISOString();
 
   scopedRows.forEach((row) => {
-    const day = String(row?.day || row?.capturedAtUtc || today).slice(0, 10);
-    const current = grouped.get(day) || {
-      day,
+    const bucket = normalizeTrendBucket(row?.day || row?.capturedAtUtc || now, granularity);
+    const current = grouped.get(bucket) || {
+      day: bucket,
       totalRows: 0,
       constrainedRows: 0,
       totalQuotaAvailable: 0,
@@ -836,7 +846,7 @@ function deriveCapacityTrendRows(rows) {
       current.peakUtilizationPct = Math.max(current.peakUtilizationPct, utilizationPct);
     }
 
-    grouped.set(day, current);
+    grouped.set(bucket, current);
   });
 
   const ordered = [...grouped.values()]
@@ -855,6 +865,46 @@ function deriveCapacityTrendRows(rows) {
       rolling14DayPeakUtilizationPct: Math.max(0, ...trailing14.map((entry) => Number(entry.peakUtilizationPct || 0)))
     };
   });
+}
+
+function normalizeTrendBucket(value, granularity) {
+  const normalizedGranularity = String(granularity || 'daily').trim().toLowerCase() === 'hourly'
+    ? 'hourly'
+    : 'daily';
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return normalizedGranularity === 'hourly'
+      ? new Date().toISOString().slice(0, 13) + ':00:00Z'
+      : new Date().toISOString().slice(0, 10);
+  }
+
+  if (normalizedGranularity === 'hourly') {
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:00:00Z$/.test(raw)) {
+      return raw;
+    }
+
+    if (/^\d{4}-\d{2}-\d{2} \d{2}$/.test(raw)) {
+      return raw.replace(' ', 'T') + ':00:00Z';
+    }
+
+    const parsed = new Date(raw);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString().slice(0, 13) + ':00:00Z';
+    }
+
+    return raw.slice(0, 13).replace(' ', 'T') + ':00:00Z';
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    return raw;
+  }
+
+  const parsed = new Date(raw);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toISOString().slice(0, 10);
+  }
+
+  return raw.slice(0, 10);
 }
 
 function toFamilyLabel(familyName) {

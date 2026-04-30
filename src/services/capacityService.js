@@ -295,6 +295,10 @@ function buildCapacityAnalyticsSqlFilters(filters, request) {
 
 function sortCapacityAnalyticsSkuRows(rows = []) {
   return [...rows].sort((left, right) => {
+    if (Number(right.available || 0) !== Number(left.available || 0)) {
+      return Number(right.available || 0) - Number(left.available || 0);
+    }
+
     if (Number(right.recommendationWeight || 0) !== Number(left.recommendationWeight || 0)) {
       return Number(right.recommendationWeight || 0) - Number(left.recommendationWeight || 0);
     }

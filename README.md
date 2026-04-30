@@ -81,7 +81,7 @@ Status legend:
 - [x] `GET /api/subscriptions` (subscription search/paging source for multi-select UX)
 - [x] `GET /api/capacity/families` (quota-style family summary)
 - [x] `GET /api/capacity/subscriptions` (masked subscription summary)
-- [x] `GET /api/capacity/trends` (daily trend rollups)
+- [x] `GET /api/capacity/trends` (daily or hourly trend rollups)
 - [x] `GET /api/capacity/scores` (derived capacity score view with desired-count-aware live snapshot reads)
 - [x] `POST /api/capacity/scores/live` (scoped live placement refresh for one subscription + one family)
 - [x] `POST /api/capacity/recommendations` (worker-first recommendation flow with diagnostics and fallback handling)
@@ -740,7 +740,7 @@ Read APIs for analytics:
 
 - `GET /api/subscriptions?search=<text>&limit=<n>` (subscription catalog for scalable filtering)
 - `GET /api/capacity/subscriptions` (masked subscription summary)
-- `GET /api/capacity/trends?days=7` (daily trend rollup)
+- `GET /api/capacity/trends?days=7&granularity=daily` (daily trend rollup; the React hourly view requests `days=2&granularity=hourly` for the trailing 48 hours)
 - `GET /api/capacity/families` (quota-style family summary)
 - `GET /api/ai/quota` (latest AI quota rows sourced from `dbo.CapacitySnapshot`; supports optional `provider` filtering once Phase 2B provider quota is enabled)
 - `GET /api/ai/quota/providers` (distinct providers present in the latest AI quota capture)

@@ -1700,6 +1700,7 @@ function TrendReport({ rows, filters, selectedSubscriptionCount, totalSubscripti
   const quotaDelta = latestRow && firstRow ? Number(latestRow.totalQuotaAvailable || 0) - Number(firstRow.totalQuotaAvailable || 0) : 0;
   const observationDelta = latestRow && firstRow ? Number(latestRow.totalRows || 0) - Number(firstRow.totalRows || 0) : 0;
   const normalizedGranularity = granularity === 'hourly' ? 'hourly' : 'daily';
+  const trendWindowLabel = normalizedGranularity === 'hourly' ? 'trailing 48 hours' : 'trailing 7 days';
   const bucketLabel = normalizedGranularity === 'hourly' ? 'hour' : 'day';
   const peakLabel = normalizedGranularity === 'hourly' ? 'Observed Hourly Peak' : 'Observed Daily Peak';
   const rolling7Label = normalizedGranularity === 'hourly' ? 'Trailing 7-Hour Peak' : 'Rolling 7-Day Peak';
@@ -1851,7 +1852,7 @@ function TrendReport({ rows, filters, selectedSubscriptionCount, totalSubscripti
       <DataTable
         key="trend"
         title={normalizedGranularity === 'hourly' ? 'Hourly Trend Rows' : 'Daily Trend Rows'}
-        subtitle={normalizedGranularity === 'hourly' ? 'Raw hourly aggregates behind the charts.' : 'Raw daily aggregates behind the charts.'}
+        subtitle={normalizedGranularity === 'hourly' ? `Raw hourly aggregates for the ${trendWindowLabel}.` : 'Raw daily aggregates behind the charts.'}
         columns={[
           { key: 'day', label: normalizedGranularity === 'hourly' ? 'Hour' : 'Day', render: (row) => formatTrendBucket(row.day, normalizedGranularity) },
           { key: 'totalRows', label: 'Total Rows', render: (row) => formatNumber(row.totalRows) },
@@ -3889,7 +3890,8 @@ function App() {
 
     async function loadAnalytics() {
       const query = new URLSearchParams(queryFilters);
-      const trendQuery = new URLSearchParams({ ...queryFilters, days: '7', granularity: trendGranularity }).toString();
+      const trendLookbackDays = trendGranularity === 'hourly' ? '2' : '7';
+      const trendQuery = new URLSearchParams({ ...queryFilters, days: trendLookbackDays, granularity: trendGranularity }).toString();
 
       fetchJsonWithRetry(`/api/capacity/trends?${trendQuery}`)
         .then((payload) => {

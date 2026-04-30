@@ -1998,7 +1998,7 @@ app.get('/api/capacity/analytics', async (req, res) => {
   }
 });
 
-app.get('/api/quota/groups', requireAdmin, async (_, res) => {
+app.get('/api/quota/groups', requireAuth, async (_, res) => {
   try {
     const result = await listQuotaGroups(_.query.managementGroupId);
     res.json({ ok: true, ...result });
@@ -2008,7 +2008,7 @@ app.get('/api/quota/groups', requireAdmin, async (_, res) => {
   }
 });
 
-app.get('/api/quota/shareable-report', requireAdmin, async (req, res) => {
+app.get('/api/quota/shareable-report', requireAuth, async (req, res) => {
   try {
     const result = await listQuotaGroupShareableQuota(req.query.managementGroupId, req.query.groupQuotaName);
     res.json({ ok: true, ...result });
@@ -2034,7 +2034,7 @@ app.get('/api/quota/shareable-report', requireAdmin, async (req, res) => {
   }
 });
 
-app.get('/api/quota/management-groups', requireAdmin, async (_, res) => {
+app.get('/api/quota/management-groups', requireAuth, async (_, res) => {
   try {
     const groups = await listManagementGroups();
     res.json({ ok: true, groups, defaultManagementGroupId: process.env.QUOTA_MANAGEMENT_GROUP_ID || null });

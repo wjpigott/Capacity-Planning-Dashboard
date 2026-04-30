@@ -46,7 +46,7 @@ const REPORT_VIEWS = [
   { key: 'region-health', label: 'Region Health', adminOnly: false },
   { key: 'recommender', label: 'Capacity Recommender', adminOnly: false },
   { key: 'paas-availability', label: 'PaaS Availability', adminOnly: false },
-  { key: 'shareable-quota-report', label: 'Shareable Quota Report', adminOnly: true },
+  { key: 'shareable-quota-report', label: 'Shareable Quota Report', adminOnly: false },
   { key: 'sku-chart', label: 'Top SKUs', adminOnly: false },
   { key: 'capacity-score', label: 'Capacity Score', adminOnly: false },
   { key: 'family-summary', label: 'Family Summary', adminOnly: false },
@@ -3569,20 +3569,25 @@ function App() {
         let uiSettingsPayload = { settings: { showSqlPreview: false } };
         let bootstrapWarning = '';
 
+        if (authContext && authContext.isAuthenticated) {
+          const managementGroupResponse = await Promise.allSettled([
+            fetchJson('/api/quota/management-groups'),
+          ]);
+
+          if (managementGroupResponse[0]?.status === 'fulfilled') {
+            managementGroupPayload = managementGroupResponse[0].value || managementGroupPayload;
+          } else {
+            bootstrapWarning = managementGroupResponse[0]?.reason?.message || 'Quota report management-group scope could not be loaded automatically.';
+          }
+        }
+
         if (authContext && authContext.canAccessAdmin) {
           const adminResponses = await Promise.allSettled([
-            fetchJson('/api/quota/management-groups'),
             fetchJson('/api/admin/ui-settings')
           ]);
 
           if (adminResponses[0]?.status === 'fulfilled') {
-            managementGroupPayload = adminResponses[0].value || managementGroupPayload;
-          } else {
-            bootstrapWarning = adminResponses[0]?.reason?.message || 'Quota Workbench management-group scope could not be loaded automatically.';
-          }
-
-          if (adminResponses[1]?.status === 'fulfilled') {
-            uiSettingsPayload = adminResponses[1].value || uiSettingsPayload;
+            uiSettingsPayload = adminResponses[0].value || uiSettingsPayload;
           }
         }
 
@@ -4493,7 +4498,7 @@ function App() {
 
   const quotaActions = {
     discover: async () => {
-      if (!auth?.canAccessAdmin) return;
+      if (!auth?.isAuthenticated) return;
       setQuotaState((current) => ({ ...current, busy: { ...current.busy, discover: true } }));
       try {
         const payload = await fetchJson(`/api/quota/groups?managementGroupId=${encodeURIComponent(quotaState.selectedManagementGroup)}`);
@@ -4503,7 +4508,7 @@ function App() {
       }
     },
     loadShareableReport: async () => {
-      if (!auth?.canAccessAdmin || quotaState.selectedQuotaGroup === 'all') return;
+      if (!auth?.isAuthenticated || quotaState.selectedQuotaGroup === 'all') return;
       setQuotaState((current) => ({ ...current, busy: { ...current.busy, shareableReport: true } }));
       try {
         const payload = await fetchJson(`/api/quota/shareable-report?${new URLSearchParams({ managementGroupId: quotaState.selectedManagementGroup, groupQuotaName: quotaState.selectedQuotaGroup }).toString()}`);
@@ -4535,7 +4540,7 @@ function App() {
       }
     },
     refresh: async () => {
-      if (!auth?.canAccessAdmin) return;
+      if (!auth?.isAuthenticated) return;
       setQuotaState((current) => ({ ...current, busy: { ...current.busy, refresh: true } }));
       try {
         const [groupsPayload, runsPayload, shareablePayload] = await Promise.all([

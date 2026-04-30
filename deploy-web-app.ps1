@@ -46,9 +46,7 @@ $filesToCopy = @(
     'web.config',
     'styles.css',
     'package.json',
-    'package-lock.json',
-    'api-contract.md',
-    'README.md'
+    'package-lock.json'
 )
 
 foreach ($file in $filesToCopy) {
@@ -61,7 +59,7 @@ foreach ($file in $filesToCopy) {
 }
 
 # Copy directories recursively
-$dirsToCopy = @('src', 'sql', 'scripts', 'docs', 'tools', 'react')
+$dirsToCopy = @('src', 'sql', 'scripts', 'tools', 'react')
 
 foreach ($dir in $dirsToCopy) {
     $source = Join-Path $SourcePath $dir

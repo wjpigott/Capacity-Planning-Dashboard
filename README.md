@@ -327,13 +327,10 @@ $items = @(
 	'styles.css',
 	'package.json',
 	'package-lock.json',
-	'api-contract.md',
-	'README.md',
 	'react',
 	'src',
 	'sql',
 	'scripts',
-	'docs',
 	'tools'
 )
 
@@ -377,6 +374,7 @@ Notes:
 - The current `npm test` suite is read-only and logic-focused. It does not require on-prem SQL connectivity or Azure API access.
 - The deployment script already stages the correct runtime files and publishes them to the App Service name you pass in.
 - The deployment package stages the repo's `react/` folder, root `server.js`, and root `web.config`, so a fresh pull plus redeploy publishes the current React experience and keeps `/api/*` routed to Express on Windows App Service.
+- Runtime packages should not include repo documentation or design artifacts such as `docs/`, `README.md`, or `api-contract.md`.
 - Keep the package source-shaped. Do not ship local `node_modules`; App Service restores production dependencies during deployment.
 - `/react/` now sends `no-store` cache headers because the React shell uses stable filenames such as `react/main.js`; after a redeploy, the live environment should pick up the current React navigation without relying on a stale browser cache.
 - If `az webapp deploy` fails with `AuthorizationFailed`, refresh Azure credentials with `az login`, confirm the correct subscription with `az account show`, and make sure the signed-in identity has App Service access on the resource group that hosts the web app.

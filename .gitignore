@@ -56,6 +56,7 @@ tools/Get-AzVMAvailability/TEST_MARKER.txt
 # Terraform/Bicep local artifacts
 *.tfstate
 *.tfstate.*
+*.tfplan
 .terraform/
 .terraform.lock.hcl
 *.tfvars

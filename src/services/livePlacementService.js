@@ -1250,20 +1250,13 @@ function pickConsumptionPrice(items) {
   return candidate ? Number(candidate.retailPrice) : null;
 }
 
-function getRetailPriceUrl(region, skuName, includeSpot) {
+function getRetailPriceUrl(region, skuName) {
   const filters = [
     "serviceName eq 'Virtual Machines'",
     `armRegionName eq '${String(region || '').trim().toLowerCase()}'`,
     `armSkuName eq '${normalizeSkuName(skuName)}'`,
     "priceType eq 'Consumption'"
   ];
-
-  if (includeSpot) {
-    filters.push("contains(meterName, 'Spot')");
-  } else {
-    filters.push("contains(productName, 'Linux')");
-    filters.push('isPrimaryMeterRegion eq true');
-  }
 
   return `${RETAIL_PRICING_BASE}?$filter=${encodeURIComponent(filters.join(' and '))}`;
 }
@@ -1275,10 +1268,11 @@ async function getVmRetailPricing(region, skuName, cache) {
   }
 
   try {
-    const [regularItems, spotItems] = await Promise.all([
-      retailGetAll(getRetailPriceUrl(region, skuName, false)),
-      retailGetAll(getRetailPriceUrl(region, skuName, true))
-    ]);
+    const allItems = await retailGetAll(getRetailPriceUrl(region, skuName));
+    const primaryItems = allItems.filter((item) => item?.isPrimaryMeterRegion === true);
+    const linuxItems = primaryItems.filter((item) => !/windows/i.test(String(item?.productName || '')));
+    const regularItems = linuxItems.filter((item) => !/spot|low priority/i.test(String(item?.meterName || item?.skuName || '')));
+    const spotItems = linuxItems.filter((item) => /spot/i.test(String(item?.meterName || item?.skuName || '')));
     const hourly = pickConsumptionPrice(regularItems);
     const spotHourly = pickConsumptionPrice(spotItems);
     const pricing = {

@@ -2681,6 +2681,42 @@ function getLivePlacementSchedulerConfig() {
   return { ...livePlacementSchedulerConfig };
 }
 
+async function seedVmSkuCatalogIfEmpty({ region = process.env.SKU_CATALOG_SEED_REGION || 'eastus' } = {}) {
+  const { upsertVmSkuCatalogRows, getVmSkuCatalogFamilies } = require('../store/sql');
+  try {
+    const existing = await getVmSkuCatalogFamilies();
+    if (Array.isArray(existing) && existing.length > 0) {
+      return { seeded: false, reason: 'already-populated', count: existing.length };
+    }
+
+    const subscriptionId = await resolveRecommendationSubscriptionId();
+    const token = await getArmAccessToken();
+    const url = `${ARM_BASE}/subscriptions/${encodeURIComponent(subscriptionId)}/providers/Microsoft.Compute/skus?$filter=${encodeURIComponent(`location eq '${region}'`)}&api-version=${COMPUTE_SKUS_API_VERSION}`;
+    const skus = await armGetAll(url, token);
+    const rows = [];
+    for (const sku of skus) {
+      if (!sku || sku.resourceType !== 'virtualMachines') continue;
+      const family = String(sku.family || '').trim();
+      const name = String(sku.name || '').trim();
+      if (!family || !name) continue;
+      rows.push({
+        skuFamily: family,
+        skuName: name,
+        vCpu: Number(getCapabilityValue(sku.capabilities, 'vCPUs') || 0) || null,
+        memoryGB: Number(getCapabilityValue(sku.capabilities, 'MemoryGB') || 0) || null
+      });
+    }
+    if (rows.length === 0) {
+      return { seeded: false, reason: 'no-vm-skus' };
+    }
+    const result = await upsertVmSkuCatalogRows(rows);
+    return { seeded: true, count: result.upserted, region };
+  } catch (err) {
+    console.warn('[seedVmSkuCatalogIfEmpty] Skipping seed due to error:', err?.message || err);
+    return { seeded: false, reason: 'error', error: err?.message || String(err) };
+  }
+}
+
 module.exports = {
   getLivePlacementScoreRows,
   getCapacityRecommendations,
@@ -2692,6 +2728,7 @@ module.exports = {
   startLivePlacementScheduler,
   updateLivePlacementScheduler,
   getLivePlacementSchedulerConfig,
+  seedVmSkuCatalogIfEmpty,
   __testHooks: {
     normalizeSkuName,
     isAggregateSkuName,

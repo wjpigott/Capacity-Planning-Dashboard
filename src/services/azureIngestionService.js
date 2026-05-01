@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const https = require('https');
 const { getRegionsForPreset } = require('../config/regionPresets');
 const { deriveCapacityScoreRows } = require('./capacityService');
-const { insertCapacitySnapshots, insertCapacityScoreSnapshots } = require('../store/sql');
+const { insertCapacitySnapshots, insertCapacityScoreSnapshots, upsertVmSkuCatalogRows } = require('../store/sql');
 const {
   fetchAIUsages,
   fetchAIModelAvailability,
@@ -552,6 +552,27 @@ async function runCapacityIngestion(options = {}) {
             armGetAll(usageUrl, token),
             armGetAll(skusUrl, token)
           ]);
+
+          const catalogRows = [];
+          for (const sku of skus) {
+            if (!sku || sku.resourceType !== 'virtualMachines') continue;
+            const family = String(sku.family || '').trim();
+            const name = String(sku.name || '').trim();
+            if (!family || !name) continue;
+            catalogRows.push({
+              skuFamily: family,
+              skuName: name,
+              vCpu: Number(getCapabilityValue(sku.capabilities, 'vCPUs') || 0) || null,
+              memoryGB: Number(getCapabilityValue(sku.capabilities, 'MemoryGB') || 0) || null
+            });
+          }
+          if (catalogRows.length > 0) {
+            try {
+              await upsertVmSkuCatalogRows(catalogRows);
+            } catch (err) {
+              console.warn(`[ingest] VmSkuCatalog upsert failed for ${region}: ${err?.message || err}`);
+            }
+          }
 
           const familyUsages = usages.filter((item) => familyMatches(item?.name?.value, familyFilters));
           const localRows = [];

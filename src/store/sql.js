@@ -1507,6 +1507,101 @@ async function getLatestLivePlacementSnapshots(desiredCount = 1, maxAgeHours = 1
   }));
 }
 
+async function ensureVmSkuCatalogSchema(pool) {
+  await pool.request().query(`
+    IF OBJECT_ID('dbo.VmSkuCatalog', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.VmSkuCatalog (
+        skuFamily NVARCHAR(128) NOT NULL,
+        skuName NVARCHAR(128) NOT NULL,
+        vCpu INT NULL,
+        memoryGB DECIMAL(10,2) NULL,
+        firstSeenUtc DATETIME2 NOT NULL CONSTRAINT DF_VmSkuCatalog_FirstSeenUtc DEFAULT SYSUTCDATETIME(),
+        lastSeenUtc DATETIME2 NOT NULL CONSTRAINT DF_VmSkuCatalog_LastSeenUtc DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT PK_VmSkuCatalog PRIMARY KEY (skuFamily, skuName)
+      );
+    END;
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_VmSkuCatalog_Family' AND object_id = OBJECT_ID('dbo.VmSkuCatalog'))
+      CREATE NONCLUSTERED INDEX IX_VmSkuCatalog_Family ON dbo.VmSkuCatalog(skuFamily, skuName);
+  `);
+}
+
+async function upsertVmSkuCatalogRows(rows) {
+  const pool = await getSqlPool();
+  if (!pool || !Array.isArray(rows) || rows.length === 0) {
+    return { upserted: 0 };
+  }
+
+  await ensureVmSkuCatalogSchema(pool);
+
+  // Deduplicate by (family, name) within the batch.
+  const dedup = new Map();
+  rows.forEach((row) => {
+    const family = String(row?.skuFamily || '').trim();
+    const name = String(row?.skuName || '').trim();
+    if (!family || !name) return;
+    const key = `${family.toLowerCase()}|${name.toLowerCase()}`;
+    if (!dedup.has(key)) {
+      dedup.set(key, {
+        skuFamily: family,
+        skuName: name,
+        vCpu: row.vCpu == null ? null : Number(row.vCpu),
+        memoryGB: row.memoryGB == null ? null : Number(row.memoryGB)
+      });
+    }
+  });
+  const items = [...dedup.values()];
+  if (items.length === 0) {
+    return { upserted: 0 };
+  }
+
+  const json = JSON.stringify(items);
+  const request = pool.request();
+  request.input('payload', sql.NVarChar(sql.MAX), json);
+  await request.query(`
+    DECLARE @now DATETIME2 = SYSUTCDATETIME();
+    MERGE dbo.VmSkuCatalog AS target
+    USING (
+      SELECT
+        skuFamily,
+        skuName,
+        vCpu,
+        memoryGB
+      FROM OPENJSON(@payload)
+      WITH (
+        skuFamily NVARCHAR(128) '$.skuFamily',
+        skuName NVARCHAR(128) '$.skuName',
+        vCpu INT '$.vCpu',
+        memoryGB DECIMAL(10,2) '$.memoryGB'
+      )
+    ) AS source
+      ON target.skuFamily = source.skuFamily AND target.skuName = source.skuName
+    WHEN MATCHED THEN UPDATE SET
+      vCpu = COALESCE(source.vCpu, target.vCpu),
+      memoryGB = COALESCE(source.memoryGB, target.memoryGB),
+      lastSeenUtc = @now
+    WHEN NOT MATCHED THEN INSERT (skuFamily, skuName, vCpu, memoryGB, firstSeenUtc, lastSeenUtc)
+      VALUES (source.skuFamily, source.skuName, source.vCpu, source.memoryGB, @now, @now);
+  `);
+
+  return { upserted: items.length };
+}
+
+async function getVmSkuCatalogFamilies() {
+  const pool = await getSqlPool();
+  if (!pool) {
+    return null;
+  }
+  await ensureVmSkuCatalogSchema(pool);
+  const result = await pool.request().query(`
+    SELECT skuFamily, skuName, vCpu, memoryGB
+    FROM dbo.VmSkuCatalog
+    ORDER BY skuFamily, skuName
+  `);
+  return result.recordset || [];
+}
+
 async function ensurePhase3SchemaForPool(pool) {
   const alterScript = `
     IF COL_LENGTH('dbo.CapacitySnapshot', 'subscriptionKey') IS NULL
@@ -1800,6 +1895,7 @@ async function ensurePhase3SchemaForPool(pool) {
   await ensurePaaSAvailabilitySnapshotSchema(pool);
   await ensureDashboardErrorLogSchema(pool);
   await ensureDashboardOperationLogSchema(pool);
+  await ensureVmSkuCatalogSchema(pool);
   await pool.request().query(viewScript);
   await pool.request().query(aiSchemaScript);
   await pool.request().query(aiProviderMigrationScript);
@@ -1845,5 +1941,8 @@ module.exports = {
   getDashboardSettingsPersistence,
   upsertDashboardSettings,
   ensurePhase3SchemaForPool,
-  ensurePhase3Schema
+  ensurePhase3Schema,
+  ensureVmSkuCatalogSchema,
+  upsertVmSkuCatalogRows,
+  getVmSkuCatalogFamilies
 };

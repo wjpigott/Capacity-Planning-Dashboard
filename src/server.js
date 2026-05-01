@@ -35,7 +35,8 @@ const {
   getCapacityTrends,
   getFamilySummary,
   getCapacityScoreSummary,
-  getCapacityScoreSummaryPaginated
+  getCapacityScoreSummaryPaginated,
+  getSkuFamilyCatalog
 } = require('./services/capacityService');
 const { buildSqlPreviewForView } = require('./services/sqlPreviewService');
 const {
@@ -44,7 +45,8 @@ const {
   getRecommendationDiagnostics,
   startLivePlacementScheduler,
   updateLivePlacementScheduler,
-  getLivePlacementSchedulerConfig
+  getLivePlacementSchedulerConfig,
+  seedVmSkuCatalogIfEmpty
 } = require('./services/livePlacementService');
 const {
   runPaaSAvailabilityScan,
@@ -1474,6 +1476,7 @@ app.use('/auth', buildAuthRouter());
 // the frontend can check auth state before initiating a login redirect itself.
 app.use('/api', (req, res, next) => {
   if (req.path === '/auth/me') return next();
+  if (req.path === '/sku-catalog/families') return next();
   if (!AUTH_ENABLED) return next();
   if (getAccountFromSession(req)) return next();
   return res.status(401).json({ ok: false, error: 'Authentication required.' });
@@ -1979,6 +1982,22 @@ app.get('/api/capacity/paged', async (req, res) => {
       scope: 'api/capacity/paged',
       exposeMessage: process.env.NODE_ENV !== 'production'
     });
+  }
+});
+
+app.get('/api/sku-catalog/families', async (req, res) => {
+  try {
+    const forceRefresh = String(req.query?.refresh || '').toLowerCase() === 'true';
+    const payload = await getSkuFamilyCatalog({ forceRefresh });
+    const familyKeys = Object.keys(payload?.families || {});
+    const dsv6Key = familyKeys.find((k) => /sv6$/i.test(k) || /DSv6/i.test(k));
+    const dsv6Skus = dsv6Key ? (payload.families[dsv6Key] || []) : [];
+    console.log(`[api/sku-catalog/families] source=${payload?.source} families=${familyKeys.length} dsv6Key=${dsv6Key || 'none'} dsv6Count=${dsv6Skus.length} dsv6Sample=${dsv6Skus.slice(0, 5).join(',')}`);
+    res.set('Cache-Control', 'no-store');
+    res.json(payload);
+  } catch (err) {
+    console.error('[api/sku-catalog/families] Failed to load SKU family catalog:', err?.message || err);
+    res.status(503).json({ error: 'sku_catalog_unavailable', detail: err?.message || String(err) });
   }
 });
 
@@ -3184,7 +3203,7 @@ app.get('*', (req, res) => {
   return res.redirect('/react/');
 });
 
-async function startServer() {
+async function runStartupWarmup() {
   try {
     await ensureSessionStoreSchema();
     if (shouldUseSqlSessionStore()) {
@@ -3202,32 +3221,45 @@ async function startServer() {
     console.warn('⚠ Dashboard schema setup failed, continuing with existing SQL objects:', err.message);
   }
 
-  app.listen(port, () => {
-    getEffectiveSchedulerSettings()
-      .then((settings) => {
-        startIngestionScheduler(settings.ingest);
-        startLivePlacementScheduler(settings.livePlacement);
-      })
-      .catch((err) => {
-        console.warn('⚠ Failed to load DB scheduler settings; falling back to environment defaults:', err.message);
-        startIngestionScheduler();
-        startLivePlacementScheduler();
-      });
+  try {
+    const settings = await getEffectiveSchedulerSettings();
+    startIngestionScheduler(settings.ingest);
+    startLivePlacementScheduler(settings.livePlacement);
+  } catch (err) {
+    console.warn('⚠ Failed to load DB scheduler settings; falling back to environment defaults:', err.message);
+    startIngestionScheduler();
+    startLivePlacementScheduler();
+  }
 
-    // Apply performance indexes on startup (idempotent - safe to run multiple times)
-    if (process.env.SQL_SERVER) {
-      applyIndexes().then(success => {
-        if (success) {
-          console.log('✓ Performance indexes verified/created');
-        } else {
-          console.warn('⚠ Could not apply performance indexes - will retry on next startup');
-        }
-      }).catch(err => {
-        console.warn('⚠ Performance index setup failed (non-blocking):', err.message);
-      });
+  if (process.env.SQL_SERVER) {
+    try {
+      const success = await applyIndexes();
+      if (success) {
+        console.log('✓ Performance indexes verified/created');
+      } else {
+        console.warn('⚠ Could not apply performance indexes - will retry on next startup');
+      }
+    } catch (err) {
+      console.warn('⚠ Performance index setup failed (non-blocking):', err.message);
     }
+  }
 
+  try {
+    const seedResult = await seedVmSkuCatalogIfEmpty();
+    if (seedResult.seeded) {
+      console.log(`[VmSkuCatalog] Seeded ${seedResult.count} VM SKU catalog rows from ARM (region=${seedResult.region}).`);
+    }
+  } catch (err) {
+    console.warn('⚠ VmSkuCatalog seed failed (non-blocking):', err?.message || err);
+  }
+}
+
+async function startServer() {
+  app.listen(port, () => {
     console.log(`Capacity dashboard listening on port ${port}`);
+    runStartupWarmup().catch((err) => {
+      console.warn('⚠ Startup warmup encountered an error (non-blocking):', err?.message || err);
+    });
   });
 }
 

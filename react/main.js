@@ -2992,6 +2992,37 @@ function App() {
   const [sqlPreviewState, setSqlPreviewState] = useState({ loading: false, error: '', rows: [] });
   const [uiSettingsBusy, setUiSettingsBusy] = useState(false);
   const [selectedExportOption, setSelectedExportOption] = useState('server:xlsx:report');
+  const [skuCatalogVersion, setSkuCatalogVersion] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/sku-catalog/families', { credentials: 'same-origin' })
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload) => {
+        if (cancelled || !payload || !payload.families || typeof payload.families !== 'object') {
+          return;
+        }
+        const catalog = window.CAPACITY_SKU_CATALOG;
+        if (!catalog || !catalog.familySkus) {
+          return;
+        }
+        const normalize = catalog.normalizeFamilyKey || ((value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ''));
+        Object.entries(payload.families).forEach(([family, skus]) => {
+          if (!Array.isArray(skus) || skus.length === 0) return;
+          const key = normalize(family);
+          if (!key) return;
+          const merged = new Set(catalog.familySkus[key] || []);
+          skus.forEach((sku) => {
+            const trimmed = String(sku || '').trim();
+            if (trimmed) merged.add(trimmed);
+          });
+          catalog.familySkus[key] = [...merged].sort();
+        });
+        setSkuCatalogVersion((value) => value + 1);
+      })
+      .catch(() => { /* non-fatal */ });
+    return () => { cancelled = true; };
+  }, []);
 
   const queryFilters = useMemo(() => {
     const next = {
@@ -3071,7 +3102,7 @@ function App() {
   const reportingViews = useMemo(() => visibleViews.filter((view) => view.navGroup !== 'admin').sort((left, right) => left.label.localeCompare(right.label)), [visibleViews]);
   const adminViews = useMemo(() => visibleViews.filter((view) => view.navGroup === 'admin').sort((left, right) => left.label.localeCompare(right.label)), [visibleViews]);
 
-  const recommenderFamilySkuOptions = useMemo(() => getRecommenderFamilySkuOptions(filters.family), [filters.family]);
+  const recommenderFamilySkuOptions = useMemo(() => getRecommenderFamilySkuOptions(filters.family), [filters.family, skuCatalogVersion]);
   const recommendationTargetSkuOptions = useMemo(() => {
     const options = new Set();
     (Array.isArray(capacityData.rows) ? capacityData.rows : []).forEach((row) => {

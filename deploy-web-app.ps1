@@ -45,6 +45,7 @@ $filesToCopy = @(
     'server.js',
     'web.config',
     'styles.css',
+    'sku-catalog.js',
     'package.json',
     'package-lock.json'
 )

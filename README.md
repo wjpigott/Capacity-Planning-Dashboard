@@ -774,6 +774,37 @@ Invoke-RestMethod -Method Post -Uri "https://<your-app>.azurewebsites.net/intern
 
 This section documents which tables/views are used by each product area and which APIs are called.
 
+### Direct Azure API Learn references
+
+The dashboard calls a small set of Azure APIs directly instead of relying only on Az PowerShell wrappers. Use these Learn pages as the canonical references for request shapes, response payloads, and version changes.
+
+#### Capacity Score and Capacity Recommender
+
+- Subscription discovery: https://learn.microsoft.com/en-us/rest/api/resources/subscriptions/list?view=rest-resources-2022-12-01
+- Subscription locations: https://learn.microsoft.com/en-us/rest/api/resources/subscriptions/list-locations?view=rest-resources-2022-12-01
+- Compute SKUs: https://learn.microsoft.com/en-us/rest/api/compute/resource-skus/list?view=rest-compute-2025-04-01
+- Compute usage/quotas: https://learn.microsoft.com/en-us/rest/api/compute/usage/list?view=rest-compute-2025-04-01
+- Advisor recommendations: https://learn.microsoft.com/en-us/rest/api/advisor/recommendations/list?view=rest-advisor-2025-01-01
+- Subscription price sheet: https://learn.microsoft.com/en-us/rest/api/consumption/price-sheet/get?view=rest-consumption-2024-08-01
+- Spot placement score cmdlet reference: https://learn.microsoft.com/en-us/powershell/module/az.compute/invoke-azspotplacementscore?view=azps-15.5.0
+
+Note:
+The Capacity Score direct placement-score path currently uses the same underlying placement-score contract surfaced by `Invoke-AzSpotPlacementScore`, but we did not find a public Learn REST page for the `Microsoft.Compute/locations/{location}/placementScores/spot/generate` ARM operation. Treat the Az.Compute cmdlet page above as the public reference for that contract until Microsoft publishes a REST Learn page.
+
+#### Quota discovery and quota move workflows
+
+- Management groups list: https://learn.microsoft.com/en-us/rest/api/managementgroups/management-groups/list?view=rest-managementgroups-2020-05-01
+- Management group subscriptions: https://learn.microsoft.com/en-us/rest/api/managementgroups/management-group-subscriptions/get-subscriptions-under-management-group?view=rest-managementgroups-2020-05-01
+- Management entities list: https://learn.microsoft.com/en-us/rest/api/managementgroups/entities/list?view=rest-managementgroups-2020-05-01
+- Group quotas list: https://learn.microsoft.com/en-us/rest/api/quota/group-quotas/list?view=rest-quota-2025-09-01
+- Group quota subscriptions list: https://learn.microsoft.com/en-us/rest/api/quota/group-quota-subscriptions/list?view=rest-quota-2025-09-01
+- Group quota subscription allocation list: https://learn.microsoft.com/en-us/rest/api/quota/group-quota-subscription-allocation/list?view=rest-quota-2025-09-01
+
+#### AI quota and model catalog ingestion
+
+- Azure AI usages: https://learn.microsoft.com/en-us/rest/api/aiservices/accountmanagement/usages/list?view=rest-aiservices-accountmanagement-2024-10-01
+- Azure AI models: https://learn.microsoft.com/en-us/rest/api/aiservices/accountmanagement/models/list?view=rest-aiservices-accountmanagement-2024-10-01
+
 ### SQL objects and structure
 
 #### `dbo.CapacitySnapshot` (base ingestion table)

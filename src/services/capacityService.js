@@ -173,6 +173,29 @@ function normalizeFamilyBaseFilter(value) {
   return String(value || '').trim().toUpperCase();
 }
 
+function getFamilyBaseSqlLikePatterns(familyBase) {
+  const normalized = normalizeFamilyBaseFilter(familyBase);
+  if (!normalized || normalized === 'ALL') {
+    return [];
+  }
+
+  const isKnownComputeBase = CANONICAL_COMPUTE_FAMILY_PATTERNS.some(([label]) => label === normalized);
+  if (!isKnownComputeBase || !/^[A-Z0-9]{1,8}$/.test(normalized)) {
+    return [];
+  }
+
+  const token = normalized.toLowerCase();
+  return [
+    `${token}%`,
+    `standard${token}%`,
+    `standard_${token}%`,
+    `standard ${token}%`,
+    `basic${token}%`,
+    `basic_${token}%`,
+    `basic ${token}%`
+  ];
+}
+
 function applyFilters(rows, { region, family, familyBase, sku, availability, resourceType, provider }) {
   const providerFilter = String(provider || '').trim();
   const normalizedFamilyBase = normalizeFamilyBaseFilter(familyBase);
@@ -467,6 +490,19 @@ function appendCommonSqlFilters(filters, request, options = {}) {
   if (filters.family && filters.family !== 'all') {
     where += ' AND skuFamily = @family';
     request.input('family', normalizeFamilyName(filters.family));
+  }
+  if ((!filters.family || filters.family === 'all') && filters.familyBase && filters.familyBase !== 'all') {
+    const familyBasePatterns = getFamilyBaseSqlLikePatterns(filters.familyBase);
+    if (familyBasePatterns.length > 0) {
+      const clauses = [];
+      familyBasePatterns.forEach((pattern, index) => {
+        const paramName = `familyBasePattern${index}`;
+        request.input(paramName, sql.NVarChar(64), pattern);
+        clauses.push(`LOWER(COALESCE(skuFamily, '')) LIKE @${paramName}`);
+        clauses.push(`LOWER(COALESCE(skuName, '')) LIKE @${paramName}`);
+      });
+      where += ` AND (${clauses.join(' OR ')})`;
+    }
   }
   if (filters.sku && filters.sku !== 'all') {
     where += ' AND skuName = @sku';

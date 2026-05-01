@@ -64,9 +64,9 @@ The deploy script handles infra provisioning, web app publish, and SQL bootstrap
 
 ```powershell
 ./scripts/deploy-infra.ps1 `
-  -ResourceGroupName "CapacityDashboard-Test" `
+  -ResourceGroupName "<resource-group-name>" `
   -Environment test `
-  -WorkloadSuffix "cap001" `
+  -WorkloadSuffix "demo001" `
   -ParameterFile "./infra/bicep/test.bicepparam" `
   -SqlEntraAdminLogin "<entra-upn>" `
   -SqlEntraAdminObjectId "<entra-object-id>" `
@@ -88,9 +88,9 @@ Example:
 
 ```powershell
 ./scripts/deploy-infra.ps1 `
-  -ResourceGroupName "CapacityDashboard-Test" `
+  -ResourceGroupName "<resource-group-name>" `
   -Environment test `
-  -WorkloadSuffix "cap001" `
+  -WorkloadSuffix "demo001" `
   -SqlEntraAdminLogin "<entra-upn>" `
   -SqlEntraAdminObjectId "<entra-object-id>" `
   -ExistingSqlServerName "sql-shared-test" `

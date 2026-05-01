@@ -16,7 +16,7 @@ Operational notes:
 
 - The first regression symptom was caused by the literal `all` SKU sentinel flowing into equality-based filtering.
 - A second blank-report symptom remained even after the filter fix because the shared analytics loader was blocked by the trend request timing out or running slowly.
-- After the loader decoupling change was deployed to `app-capdash-dev-cap001`, Capacity Grid, Region Matrix, Family Summary, and Region Health were all confirmed working again.
+- After the loader decoupling change was deployed to the dashboard App Service, Capacity Grid, Region Matrix, Family Summary, and Region Health were all confirmed working again.
 
 ## 2026-04-23
 

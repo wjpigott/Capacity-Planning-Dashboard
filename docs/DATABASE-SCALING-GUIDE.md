@@ -2,8 +2,8 @@
 
 ## Current Database Status
 ```
-Server:   sql-capdash-dev-cap001.database.windows.net
-Database: sqldb-capdash-dev
+Server:   <sql-server-name>.database.windows.net
+Database: <sql-database-name>
 Tier:     Standard S0 (10 DTUs)
 Size:     256 GB
 Cost:     ~$25/month
@@ -14,9 +14,9 @@ Cost:     ~$25/month
 ### Scale to S1 (Recommended first upgrade)
 ```bash
 az sql db update \
-  --resource-group CapacityDashboard \
-  --server sql-capdash-dev-cap001 \
-  --name sqldb-capdash-dev \
+  --resource-group <resource-group-name> \
+  --server <sql-server-name> \
+  --name <sql-database-name> \
   --edition Standard \
   --service-objective S1
 ```
@@ -27,9 +27,9 @@ az sql db update \
 ### Scale to S2
 ```bash
 az sql db update \
-  --resource-group CapacityDashboard \
-  --server sql-capdash-dev-cap001 \
-  --name sqldb-capdash-dev \
+  --resource-group <resource-group-name> \
+  --server <sql-server-name> \
+  --name <sql-database-name> \
   --edition Standard \
   --service-objective S2
 ```
@@ -39,9 +39,9 @@ az sql db update \
 ### Scale to S3
 ```bash
 az sql db update \
-  --resource-group CapacityDashboard \
-  --server sql-capdash-dev-cap001 \
-  --name sqldb-capdash-dev \
+  --resource-group <resource-group-name> \
+  --server <sql-server-name> \
+  --name <sql-database-name> \
   --edition Standard \
   --service-objective S3
 ```
@@ -83,9 +83,9 @@ While updating database tier, watch these metrics:
 ```bash
 # Check scaling progress
 az sql db show \
-  --resource-group CapacityDashboard \
-  --server sql-capdash-dev-cap001 \
-  --name sqldb-capdash-dev \
+  --resource-group <resource-group-name> \
+  --server <sql-server-name> \
+  --name <sql-database-name> \
   --query "{status: status, sku: sku, Edition: currentServiceObjectiveName}"
 ```
 
@@ -127,9 +127,9 @@ The scaling operation:
 Scale back down to S0 with same command:
 ```bash
 az sql db update \
-  --resource-group CapacityDashboard \
-  --server sql-capdash-dev-cap001 \
-  --name sqldb-capdash-dev \
+  --resource-group <resource-group-name> \
+  --server <sql-server-name> \
+  --name <sql-database-name> \
   --edition Standard \
   --service-objective S0
 ```

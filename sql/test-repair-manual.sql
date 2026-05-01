@@ -1,5 +1,5 @@
 -- Manual repair script for existing environments.
--- Run as an Entra SQL admin or equivalent in SSMS against sqldb-capdash-test.
+-- Run as an Entra SQL admin or equivalent in SSMS against <sql-database-name>.
 -- Purpose:
 -- 1. Optionally grant the web app identity the database roles it needs.
 -- 2. Apply the missing QuotaCandidateSnapshot expansion.
@@ -634,4 +634,4 @@ IF OBJECT_ID('tempdb..#RepairConfig') IS NOT NULL
     DROP TABLE #RepairConfig;
 GO
 
-PRINT 'Test manual repair completed. Rerun Query 1, Query 2, Query 3, Query 4, and Query 5 against sqldb-capdash-test.';
+PRINT 'Test manual repair completed. Rerun Query 1, Query 2, Query 3, Query 4, and Query 5 against the target SQL database.';

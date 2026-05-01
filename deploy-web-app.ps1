@@ -1,10 +1,14 @@
 # Clean web app deployment script
 param(
-    [string]$ResourceGroup = "CapacityDashboard",
-    [string]$AppName = "app-capdash-dev-cap001",
+    [string]$ResourceGroup = $env:AZURE_RESOURCE_GROUP,
+    [string]$AppName = $env:AZURE_WEBAPP_NAME,
     [string]$SourcePath = (Resolve-Path "$PSScriptRoot"),
     [switch]$SkipTests
 )
+
+if ([string]::IsNullOrWhiteSpace($ResourceGroup) -or [string]::IsNullOrWhiteSpace($AppName)) {
+    throw "Provide -ResourceGroup and -AppName, or set AZURE_RESOURCE_GROUP and AZURE_WEBAPP_NAME."
+}
 
 Write-Host "Starting clean web app deployment..."
 Write-Host "Source: $SourcePath"

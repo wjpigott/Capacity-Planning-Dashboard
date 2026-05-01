@@ -6,10 +6,10 @@
 
 1. **Open Azure Portal**
    - Go to: https://portal.azure.com
-   - Search for: "sql-capdash-dev-cap001" or navigate to SQL servers
+   - Search for: "<sql-server-name>" or navigate to SQL servers
 
 2. **Select Your Database**
-   - Click: **Databases** → **sqldb-capdash-dev**
+   - Click: **Databases** → **<sql-database-name>**
 
 3. **Open Query Editor**
    - Look for: "Query editor" in the left panel
@@ -82,7 +82,7 @@ You should see 5 indexes listed:
 
 ### Next Steps After Indexes
 
-1. Test your dashboard: https://app-capdash-dev-cap001.azurewebsites.net/
+1. Test your dashboard: https://<web-app-name>.azurewebsites.net/
 2. Navigate to different reports
 3. Notice the improved responsiveness
 4. If still slow after 1-2 weeks, consider scaling to S1 (see DATABASE-SCALING-GUIDE.md)

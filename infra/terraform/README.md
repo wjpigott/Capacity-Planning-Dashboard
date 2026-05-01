@@ -154,11 +154,11 @@ The script-based Terraform path also publishes both application packages after t
 
 ```hcl
 # terraform.tfvars
-resource_group_name       = "CapacityDashboard-Dev"
+resource_group_name       = "rg-capacity-dashboard-dev"
 resource_group_location   = "centralus"
 location                  = "centralus"
 environment               = "dev"
-workload_suffix           = "cap002"
+workload_suffix           = "demo001"
 sql_entra_admin_login     = "user@contoso.com"
 sql_entra_admin_object_id = "00000000-0000-0000-0000-000000000000"
 ingest_api_key            = "your-ingest-key"
@@ -204,9 +204,9 @@ All variables have defaults and can be overridden via tfvars or CLI flags.
 | `location` | `centralus` | Azure region for all resources |
 | `resource_group_location` | `""` | Optional resource group region override when the resource group already exists in a different region |
 | `environment` | `dev` | Environment token (`dev`, `test`, `prod`) |
-| `workload_suffix` | `cap002` | Unique suffix (3-12 chars) for resource naming |
+| `workload_suffix` | `demo001` | Unique suffix (3-12 chars) for resource naming |
 | `key_vault_name_override` | `""` | Optional explicit Key Vault name when the default `kv-capdash-<environment>-<suffix>` is unavailable |
-| `resource_group_name` | `CapacityDashboard-Dev` | Resource group name (created by Terraform) |
+| `resource_group_name` | `rg-capacity-dashboard-dev` | Resource group name (created by Terraform) |
 | `sql_entra_admin_login` | *(set in defaults)* | Entra admin UPN for SQL Server |
 | `sql_entra_admin_object_id` | *(set in defaults)* | Entra admin object ID for SQL Server |
 | `existing_sql_server_name` | `""` | Existing Azure SQL server name to reuse |
@@ -281,16 +281,16 @@ Management-group RBAC note:
 
 ## Naming convention
 
-With `environment = "dev"` and `workload_suffix = "cap002"`:
+With `environment = "dev"` and `workload_suffix = "demo001"`:
 
 | Resource | Name |
 |---|---|
-| Resource Group | `CapacityDashboard-Dev` |
-| Web App | `app-capdash-dev-cap002` |
-| Function App | `func-capdash-dev-cap002-appsvc` |
-| SQL Server | `sql-capdash-dev-cap002` |
-| Key Vault | `kv-capdash-dev-cap002` |
-| VNet | `vnet-capdash-dev-cap002` |
+| Resource Group | `rg-capacity-dashboard-dev` |
+| Web App | `<web-app-name>` |
+| Function App | `<function-app-name>` |
+| SQL Server | `<sql-server-name>` |
+| Key Vault | `<key-vault-name>` |
+| VNet | `<vnet-name>` |
 | Storage Account | `stcapdev<random8>` |
 
 ## Provider configuration

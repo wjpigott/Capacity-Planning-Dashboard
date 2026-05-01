@@ -1,9 +1,13 @@
 # Apply database performance indexes
 # Uses Entra-based authentication via az account
 
-$resourceGroup = "CapacityDashboard"
-$serverName = "sql-capdash-dev-cap001"
-$databaseName = "sqldb-capdash-dev"
+$resourceGroup = $env:AZURE_RESOURCE_GROUP
+$serverName = $env:SQL_SERVER_NAME
+$databaseName = $env:SQL_DATABASE
+
+if ([string]::IsNullOrWhiteSpace($resourceGroup) -or [string]::IsNullOrWhiteSpace($serverName) -or [string]::IsNullOrWhiteSpace($databaseName)) {
+    throw "Set AZURE_RESOURCE_GROUP, SQL_SERVER_NAME, and SQL_DATABASE before running this script."
+}
 
 # Get access token for Azure SQL
 Write-Host "Getting Azure SQL access token..." -ForegroundColor Cyan

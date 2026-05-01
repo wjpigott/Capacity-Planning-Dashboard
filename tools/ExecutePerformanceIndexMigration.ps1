@@ -4,10 +4,14 @@
 
 $ErrorActionPreference = "Stop"
 
-$resourceGroup = "CapacityDashboard"
-$serverName = "sql-capdash-dev-cap001"
-$databaseName = "sqldb-capdash-dev"
+$resourceGroup = $env:AZURE_RESOURCE_GROUP
+$serverName = $env:SQL_SERVER_NAME
+$databaseName = $env:SQL_DATABASE
 $sqlFile = "sql/migrations/20260414-add-performance-indexes.sql"
+
+if ([string]::IsNullOrWhiteSpace($resourceGroup) -or [string]::IsNullOrWhiteSpace($serverName) -or [string]::IsNullOrWhiteSpace($databaseName)) {
+    throw "Set AZURE_RESOURCE_GROUP, SQL_SERVER_NAME, and SQL_DATABASE before running this script."
+}
 
 Write-Host "╔════════════════════════════════════════╗" -ForegroundColor Cyan
 Write-Host "║  Database Performance Indexes Migration║" -ForegroundColor Cyan
@@ -59,7 +63,7 @@ try {
     Write-Host "OPTION 1: Azure Portal (Recommended)" -ForegroundColor Green
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Gray
     Write-Host "1. Open Azure Portal: https://portal.azure.com"
-    Write-Host "2. Navigate to: SQL databases → sqldb-capdash-dev"
+    Write-Host "2. Navigate to: SQL databases → $databaseName"
     Write-Host "3. Click: Query editor (or Search → Query Editor)"
     Write-Host "4. Copy contents of: $sqlFile"
     Write-Host "5. Paste into Query Editor and click: Run"
@@ -68,8 +72,8 @@ try {
     
     Write-Host "OPTION 2: SQL Server Management Studio (SSMS)" -ForegroundColor Green
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Gray
-    Write-Host "1. Connect to: sql-capdash-dev-cap001.database.windows.net"
-    Write-Host "2. Database: sqldb-capdash-dev"
+    Write-Host "1. Connect to: $serverName.database.windows.net"
+    Write-Host "2. Database: $databaseName"
     Write-Host "3. Authentication: Azure Active Directory Integrated"
     Write-Host "4. Open file: $sqlFile"
     Write-Host "5. Execute (F5)"
@@ -86,8 +90,8 @@ try {
         Write-Host "OPTION 3: SQLCMD (Available on this machine)" -ForegroundColor Green
         Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Gray
         Write-Host "Run this command:"
-        Write-Host "  sqlcmd -S sql-capdash-dev-cap001.database.windows.net \"
-        Write-Host "          -d sqldb-capdash-dev \"
+        Write-Host "  sqlcmd -S $serverName.database.windows.net \"
+        Write-Host "          -d $databaseName \"
         Write-Host "          -G (for Entra login) \"
         Write-Host "          -i $sqlFile"
         Write-Host ""

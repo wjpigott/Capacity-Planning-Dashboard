@@ -64,7 +64,7 @@ variable "assign_worker_billing_reader_role" {
 variable "resource_group_name" {
   type        = string
   description = "Name of the resource group to deploy into (created by Terraform)"
-  default     = "CapacityDashboard-Dev"
+  default     = "rg-capacity-dashboard-dev"
 }
 
 variable "resource_group_location" {
@@ -92,7 +92,7 @@ variable "environment" {
 variable "workload_suffix" {
   type        = string
   description = "Unique workload suffix (lowercase, 3-12 chars)"
-  default     = "cap002"
+  default     = "demo001"
   validation {
     condition     = length(var.workload_suffix) >= 3 && length(var.workload_suffix) <= 12
     error_message = "workload_suffix must be 3-12 characters."

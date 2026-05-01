@@ -2,7 +2,7 @@ using './main.bicep'
 
 param location = 'centralus'
 param environment = 'test'
-param workloadSuffix = 'cap001'
+param workloadSuffix = 'demo001'
 
 // Supply at deployment time for Azure SQL Entra admin configuration.
 param sqlEntraAdminLogin = 'user@contoso.com'
@@ -49,4 +49,4 @@ param keyVaultPublicNetworkAccess = 'Disabled'
 // param entraClientId = '00000000-0000-0000-0000-000000000000'
 // param entraClientSecret = 'replace-with-secret-at-deploy-time'
 // param adminGroupId = '00000000-0000-0000-0000-000000000000'
-// param authRedirectUri = 'https://app-capdash-test-cap001.azurewebsites.net/auth/callback'
+// param authRedirectUri = 'https://<web-app-name>.azurewebsites.net/auth/callback'

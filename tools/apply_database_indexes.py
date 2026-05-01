@@ -24,8 +24,11 @@ def get_access_token():
 
 def apply_indexes():
     """Apply database indexes"""
-    server = "sql-capdash-dev-cap001.database.windows.net"
-    database = "sqldb-capdash-dev"
+    server = os.environ.get("SQL_SERVER")
+    database = os.environ.get("SQL_DATABASE")
+    if not server or not database:
+        print("Set SQL_SERVER and SQL_DATABASE before running this script.", file=sys.stderr)
+        return False
     
     # Try using pyodbc if available
     try:

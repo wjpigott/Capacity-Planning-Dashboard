@@ -24,14 +24,14 @@
 
 .PARAMETER ProductionRedirectUri
     OAuth2 redirect URI for the deployed Azure App Service.
-    Example: 'https://app-capdash-dev-cap001.azurewebsites.net/auth/callback'
+    Example: 'https://<web-app-name>.azurewebsites.net/auth/callback'
     Leave empty to skip.
 
 .EXAMPLE
     .\New-EntraApp.ps1
 
 .EXAMPLE
-    .\New-EntraApp.ps1 -ProductionRedirectUri 'https://app-capdash-dev-cap001.azurewebsites.net/auth/callback'
+    .\New-EntraApp.ps1 -ProductionRedirectUri 'https://<web-app-name>.azurewebsites.net/auth/callback'
 
 .NOTES
     Requires the Microsoft.Graph PowerShell SDK.

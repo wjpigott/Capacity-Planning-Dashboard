@@ -28,9 +28,15 @@ async function main() {
   console.log(colors.cyan + '╚════════════════════════════════════════╝' + colors.reset);
   console.log('');
 
+  const server = process.env.SQL_SERVER;
+  const database = process.env.SQL_DATABASE;
+  if (!server || !database) {
+    throw new Error('Set SQL_SERVER and SQL_DATABASE before running this script.');
+  }
+
   const config = {
-    server: 'sql-capdash-dev-cap001.database.windows.net',
-    database: 'sqldb-capdash-dev',
+    server,
+    database,
     authentication: {
       type: 'azure-active-directory-default'
     },

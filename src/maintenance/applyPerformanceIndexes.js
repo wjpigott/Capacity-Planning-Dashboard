@@ -10,9 +10,15 @@ async function applyIndexes() {
   console.log('║  Database Performance Indexes Migration║');
   console.log('╚════════════════════════════════════════╝\n');
 
+  const server = process.env.SQL_SERVER;
+  const database = process.env.SQL_DATABASE;
+  if (!server || !database) {
+    throw new Error('Set SQL_SERVER and SQL_DATABASE before running this script.');
+  }
+
   const config = {
-    server: process.env.SQL_SERVER || 'sql-capdash-dev-cap001.database.windows.net',
-    database: process.env.SQL_DATABASE || 'sqldb-capdash-dev',
+    server,
+    database,
     authentication: {
       type: 'azure-active-directory-msi-app-service'
     },

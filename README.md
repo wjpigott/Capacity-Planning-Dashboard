@@ -189,8 +189,8 @@ When `CAPACITY_WORKER_BASE_URL` is set, live placement refresh calls the Azure F
 
 Deployment incident note, 2026-04-24:
 
-- `cap005` spent hours failing because it had drifted onto the newer managed-identity worker-auth deployment while the known-good `cap001` environment was still running the older shared-secret contract.
-- The successful recovery was to restore `cap005` to the same contract as `cap001`: set `CAPACITY_WORKER_SHARED_SECRET` on the web app, set `WORKER_SHARED_SECRET` on the function app, keep `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK=true`, and redeploy from `github/main`.
+- A previous environment spent hours failing because it had drifted onto the newer managed-identity worker-auth deployment while the known-good environment was still running the older shared-secret contract.
+- The successful recovery was to restore the affected environment to the same contract as the working environment: set `CAPACITY_WORKER_SHARED_SECRET` on the web app, set `WORKER_SHARED_SECRET` on the function app, keep `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK=true`, and redeploy from `github/main`.
 - Validation after rollback: Capacity Score worked again, Capacity Recommender worked again, `/api/auth/me` returned the normal unauthenticated payload, and direct function `/api/recommendations` calls returned `ok: true` including pricing.
 - Until the managed-identity worker path is deliberately fixed and revalidated, do not redeploy the local managed-identity worker-auth variant to the dev environment expecting parity with the current working baseline.
 - Future hardening note: discuss with the team whether the current shared-secret approach should stay in place for the worker/web contract and other internal app secrets, or whether there is a safe managed-identity path at all. We already know the earlier managed-identity worker-auth attempt broke the working dev baseline, so any revisit needs a deliberate design review and revalidation plan rather than another silent drift.
@@ -229,13 +229,13 @@ Practical guidance for new environments:
 
 - You do not strictly need the App Service resource name itself to contain `dev` or `test`
 - You do need the user-facing hostname to contain the environment token if you want automatic environment-specific branding and color treatment
-- The simplest approach is to keep the App Service name and default `azurewebsites.net` hostname aligned with the environment, for example `app-capdash-dev-...` or `app-capdash-test-...`
+- The simplest approach is to keep the App Service name and default `azurewebsites.net` hostname aligned with the environment, for example `<dev-web-app-name>` or `<test-web-app-name>`.
 - If you use a custom domain, the same rule applies: include `dev`, `test`, `demo`, or `prod` in the hostname if you want the automatic theme to activate
 
 Examples:
 
-- `app-capdash-dev-<suffix>.azurewebsites.net` -> `Dev`
-- `app-capdash-test-<suffix>.azurewebsites.net` -> `Test`
+- `https://<dev-web-app-name>.azurewebsites.net` -> `Dev`
+- `https://<test-web-app-name>.azurewebsites.net` -> `Test`
 - `capacity-demo.contoso.com` -> `Test`
 - `capacity.contoso.com` -> default styling unless you change the detection logic
 
@@ -269,7 +269,7 @@ pwsh ./scripts/apply-database-upgrade.ps1 `
 	-SqlDatabase 'your-database' `
 	-SqlFile 'sql/test-repair-manual.sql' `
 	-AuthenticationMethod ActiveDirectoryInteractive `
-	-AppIdentityName 'app-capdash-test-cap42a'
+	-AppIdentityName '<app-managed-identity-name>'
 ```
 
 Validation helpers:
@@ -293,13 +293,13 @@ Examples:
 ```powershell
 ./scripts/invoke-from-clean-main.ps1 `
 	-ScriptRelativePath 'deploy-web-app.ps1' `
-	-ResourceGroup 'CapacityDashboard-Dev' `
-	-AppName 'app-capdash-dev-cap005'
+	-ResourceGroup '<resource-group-name>' `
+	-AppName '<web-app-name>'
 
 ./scripts/invoke-from-clean-main.ps1 `
 	-ScriptRelativePath 'scripts/deploy-worker.ps1' `
-	-ResourceGroupName 'CapacityDashboard-Dev' `
-	-FunctionAppName 'func-capdash-dev-cap005-appsvc'
+	-ResourceGroupName '<resource-group-name>' `
+	-FunctionAppName '<function-app-name>'
 ```
 
 Deployment target values are environment-specific. Set them with variables or substitute your own names when you run the commands below.
@@ -433,7 +433,7 @@ Use script-based deployment with Central US default:
 ./scripts/deploy-infra.ps1 \
 	-ResourceGroupName "<rg-name>" \
 	-Environment dev \
-	-WorkloadSuffix "cap001" \
+	-WorkloadSuffix "demo001" \
 	-QuotaManagementGroupId "<management-group-id>" \
 	-WebReaderManagementGroupNames @("<management-group-name-1>","<management-group-name-2>") \
 	-WorkerRbacManagementGroupNames @("<management-group-name-1>","<management-group-name-2>") \
@@ -469,7 +469,7 @@ Example:
 ./scripts/deploy-infra.ps1 \
 	-ResourceGroupName "<test-resource-group-name>" \
 	-Environment test \
-	-WorkloadSuffix "cap001" \
+	-WorkloadSuffix "demo001" \
 	-ParameterFile "./infra/bicep/test.bicepparam" \
 	-QuotaManagementGroupId "Demo-MG" \
 	-WebReaderManagementGroupNames @("Demo-MG","LandingZones-MG") \
@@ -499,11 +499,11 @@ Notes:
 - `-WorkerRbacSubscriptionIds` remains available as a fallback for small customers without management groups.
 - `-AuthEnabled` plus `-EntraTenantId`, `-EntraClientId`, `-EntraClientSecret`, and optional `-AdminGroupId` configure the built-in Entra sign-in flow used by the dashboard API.
 
-Verified working RBAC baseline (`cap001`, captured 2026-04-24):
+Example RBAC baseline:
 
-- Dashboard web app (`app-capdash-dev-cap001`) currently has subscription `Reader`, subscription `Billing Reader`, subscription `GroupQuota Request Operator`, management-group `GroupQuota Request Operator`, and `Key Vault Secrets User` on the app Key Vault.
+- Dashboard web app (`<web-app-name>`) should have subscription `Reader`, subscription `Billing Reader`, subscription `GroupQuota Request Operator`, management-group `GroupQuota Request Operator`, and `Key Vault Secrets User` on the app Key Vault.
 - The earlier subscription `Reader` grant on the dashboard web app was part of the working deployment and should be treated as required for the current live discovery/ingestion surface.
-- Function App worker (`func-capdash-dev-cap001-appsvc`) currently has subscription `Compute Recommendations Role`, subscription `Billing Reader`, subscription `Cost Management Reader`, management-group `Compute Recommendations Role`, plus storage data-plane roles on its host storage account (`Storage Blob Data Owner`, `Storage Queue Data Contributor`, `Storage Table Data Contributor`).
+- Function App worker (`<function-app-name>`) should have subscription `Compute Recommendations Role`, subscription `Billing Reader`, subscription `Cost Management Reader`, management-group `Compute Recommendations Role`, plus storage data-plane roles on its host storage account (`Storage Blob Data Owner`, `Storage Queue Data Contributor`, `Storage Table Data Contributor`).
 - The working Function App does not currently have plain subscription `Reader`, so `Reader` was not required for the working recommendation/live-placement path in that environment.
 - The working web app also has `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK=true`, so the web app itself does not need `Compute Recommendations Role` in that working set because the recommendation/live-placement path stays remote-first.
 
@@ -513,7 +513,7 @@ Example with Entra sign-in enabled:
 ./scripts/deploy-infra.ps1 \
 	-ResourceGroupName "<test-resource-group-name>" \
 	-Environment test \
-	-WorkloadSuffix "cap001" \
+	-WorkloadSuffix "demo001" \
 	-ParameterFile "./infra/bicep/test.bicepparam" \
 	-UseAllAccessibleManagementGroups \
 	-AuthEnabled $true \
@@ -538,7 +538,7 @@ Full example with the most commonly needed inputs:
 ./scripts/deploy-infra.ps1 `
 	-ResourceGroupName "<rg-name>" `
 	-Environment prod `
-	-WorkloadSuffix "cap001" `
+	-WorkloadSuffix "demo001" `
 	-ParameterFile "./infra/<prod-or-env>.bicepparam" `
 	-SqlEntraAdminLogin "<entra-upn>" `
 	-SqlEntraAdminObjectId "<entra-object-id>" `

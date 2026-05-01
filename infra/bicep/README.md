@@ -67,19 +67,19 @@ Optional resource-group overrides are also available for reuse scenarios:
 - Keep `dev` as the mutable build-and-verify environment.
 - Stand up `test` as the stable demo environment in the same subscription using the same naming pattern with the environment token changed to `test`.
 - Treat the React app as the primary UI for future production rollout. The classic root UI can remain for compatibility in dev/test, but it should not drive the production deployment shape.
-- Current naming example with `workloadSuffix = cap001`:
-  - Web App: `app-capdash-test-cap001`
-  - Function App: `func-capdash-test-cap001-appsvc`
-  - SQL Server: `sql-capdash-test-cap001`
-  - Key Vault: `kv-capdash-test-cap001`
+- Current naming example with `workloadSuffix = demo001`:
+- Web App: `<web-app-name>`
+- Function App: `<function-app-name>`
+- SQL Server: `<sql-server-name>`
+- Key Vault: `<key-vault-name>`
 
 ## Deploy
 
 ```powershell
 ./scripts/deploy-infra.ps1 \
-  -ResourceGroupName "CapacityDashboard-Test" \
+  -ResourceGroupName "<resource-group-name>" \
   -Environment test \
-  -WorkloadSuffix "cap001" \
+  -WorkloadSuffix "demo001" \
   -ParameterFile "./infra/bicep/test.bicepparam" \
   -QuotaManagementGroupId "<management-group-id>" \
   -WebReaderManagementGroupNames @("<management-group-name-1>","<management-group-name-2>") \

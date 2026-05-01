@@ -17,7 +17,7 @@ variable "environment" {
 variable "workload_suffix" {
   type        = string
   description = "Unique workload suffix (lowercase, 3-12 chars)"
-  default     = "cap002"
+  default     = "demo001"
   validation {
     condition     = length(var.workload_suffix) >= 3 && length(var.workload_suffix) <= 12
     error_message = "workload_suffix must be 3-12 characters."
@@ -175,7 +175,7 @@ variable "admin_group_id" {
 variable "resource_group_name" {
   type        = string
   description = "Name of the existing resource group to deploy into"
-  default     = "CapacityDashboard-Dev"
+  default     = "rg-capacity-dashboard-dev"
 }
 
 variable "admin_ssh_public_key" {

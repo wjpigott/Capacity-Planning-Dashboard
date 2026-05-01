@@ -2,12 +2,18 @@ const sql = require('mssql');
 const { AzureCliCredential } = require('@azure/identity');
 
 async function main() {
+  const server = process.env.SQL_SERVER;
+  const database = process.env.SQL_DATABASE;
+  if (!server || !database) {
+    throw new Error('Set SQL_SERVER and SQL_DATABASE before running this script.');
+  }
+
   const credential = new AzureCliCredential();
   const token = (await credential.getToken('https://database.windows.net/.default')).token;
 
   const pool = await sql.connect({
-    server: 'sql-capdash-dev-cap001.database.windows.net',
-    database: 'sqldb-capdash-dev',
+    server,
+    database,
     options: { encrypt: true, trustServerCertificate: false },
     authentication: { type: 'azure-active-directory-access-token', options: { token } }
   });

@@ -2,10 +2,14 @@
 # Uses Azure CLI to run SQL commands against the database
 
 param(
-    [string]$ResourceGroup = "CapacityDashboard",
-    [string]$ServerName = "sql-capdash-dev-cap001",
-    [string]$DatabaseName = "sqldb-capdash-dev"
+    [string]$ResourceGroup = $env:AZURE_RESOURCE_GROUP,
+    [string]$ServerName = $env:SQL_SERVER_NAME,
+    [string]$DatabaseName = $env:SQL_DATABASE
 )
+
+if ([string]::IsNullOrWhiteSpace($ResourceGroup) -or [string]::IsNullOrWhiteSpace($ServerName) -or [string]::IsNullOrWhiteSpace($DatabaseName)) {
+    throw "Provide -ResourceGroup, -ServerName, and -DatabaseName, or set AZURE_RESOURCE_GROUP, SQL_SERVER_NAME, and SQL_DATABASE."
+}
 
 Write-Host "Starting performance indexes migration..." -ForegroundColor Cyan
 Write-Host "Target: $ServerName/$DatabaseName" -ForegroundColor Cyan

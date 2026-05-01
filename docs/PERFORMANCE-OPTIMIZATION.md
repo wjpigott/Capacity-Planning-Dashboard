@@ -4,8 +4,8 @@
 This document outlines the DTO (Data Transfer Object) model optimizations and database scaling strategy implemented to improve dashboard performance.
 
 ## Current Database Configuration
-- **Server**: sql-capdash-dev-cap001.database.windows.net
-- **Database**: sqldb-capdash-dev
+- **Server**: <sql-server-name>.database.windows.net
+- **Database**: <sql-database-name>
 - **Current Tier**: Standard S0 (10 DTUs, 250GB max size)
 - **Status**: Online (created 2026-04-10)
 
@@ -128,9 +128,9 @@ Indexes created to accelerate common query patterns:
 - **Scaling Command**:
   ```bash
   az sql db update \
-    --resource-group CapacityDashboard \
-    --server sql-capdash-dev-cap001 \
-    --name sqldb-capdash-dev \
+    --resource-group <resource-group-name> \
+    --server <sql-server-name> \
+    --name <sql-database-name> \
     --edition Standard \
     --service-objective S1
   ```
@@ -177,8 +177,8 @@ Via Azure Portal SQL Query Editor or SQL Server Management Studio:
 Or using command line:
 ```bash
 # Create a SQL file and execute
-sqlcmd -S sql-capdash-dev-cap001.database.windows.net \
-       -d sqldb-capdash-dev \
+sqlcmd -S <sql-server-name>.database.windows.net \
+  -d <sql-database-name> \
        -U YOUR_AAD_USER \
        -i sql/migrations/20260414-add-performance-indexes.sql
 ```
@@ -198,8 +198,8 @@ cd dashboard
 npm install  # if new packages added
 npm run build
 az webapp deployment source config-zip \
-  --resource-group CapacityDashboard \
-  --name app-capdash-dev-cap001 \
+  --resource-group <resource-group-name> \
+  --name <web-app-name> \
   --src ./build.zip
 ```
 

@@ -12,7 +12,7 @@
 
 .EXAMPLE
     # Bicep / resource-group destroy
-    .\scripts\destroy-infra.ps1 -Provider Bicep -ResourceGroupName "CapacityDashboard-Dev"
+    .\scripts\destroy-infra.ps1 -Provider Bicep -ResourceGroupName "<resource-group-name>"
 #>
 param(
     [Parameter(Mandatory = $false)][ValidateSet('Bicep','Terraform')][string]$Provider = 'Bicep',
@@ -76,7 +76,10 @@ if ($Provider -eq 'Terraform') {
 
     # Clean up the resource group if it still exists in Azure (e.g. created
     # outside of Terraform state by a prior Bicep deploy or manual action).
-    $rgName = if ($ResourceGroupName) { $ResourceGroupName } else { 'CapacityDashboard-Dev' }
+    $rgName = if ($ResourceGroupName) { $ResourceGroupName } else { $env:AZURE_RESOURCE_GROUP }
+    if ([string]::IsNullOrWhiteSpace($rgName)) {
+        throw "Provide -ResourceGroupName or set AZURE_RESOURCE_GROUP."
+    }
     $rgExists = az group exists --name $rgName -o tsv 2>$null
     if ($rgExists -eq 'true') {
         Write-Host "Resource group '$rgName' still exists outside Terraform state. Deleting..." -ForegroundColor Yellow

@@ -12,10 +12,10 @@
 # assign_worker_billing_reader_role          = true
 
 # ── General / Resource Group ──────────────────
-resource_group_name       = "CapacityDashboard-Dev"
+resource_group_name       = "rg-capacity-dashboard-dev"
 location                  = "centralus"
 environment               = "dev"
-workload_suffix           = "cap002"
+workload_suffix           = "demo001"
 
 # ── Networking ────────────────────────────────
 vnet_address_prefix                   = "10.90.0.0/16"
@@ -40,7 +40,7 @@ session_secret            = "change-me-session-secret"
 # entra_tenant_id     = "00000000-0000-0000-0000-000000000000"
 # entra_client_id     = "00000000-0000-0000-0000-000000000000"
 # entra_client_secret = "replace-with-secret"
-# auth_redirect_uri   = "https://app-capdash-dev-cap002.azurewebsites.net/auth/callback"
+# auth_redirect_uri   = "https://<web-app-name>.azurewebsites.net/auth/callback"
 # admin_group_id      = "00000000-0000-0000-0000-000000000000"
 
 # ── Function App (Worker) ────────────────────

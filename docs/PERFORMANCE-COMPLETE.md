@@ -29,7 +29,7 @@
 ## Verify Performance Improvements
 
 ### Check Dashboard
-1. Open: https://app-capdash-dev-cap001.azurewebsites.net/
+1. Open: https://<web-app-name>.azurewebsites.net/
 2. Navigate to any report
 3. Measure load time: Should feel noticeably faster
 
@@ -89,9 +89,9 @@ Expected results: 5 indexes created
 ### One-Command Scaling (if needed)
 ```bash
 az sql db update \
-  --resource-group CapacityDashboard \
-  --server sql-capdash-dev-cap001 \
-  --name sqldb-capdash-dev \
+  --resource-group <resource-group-name> \
+  --server <sql-server-name> \
+  --name <sql-database-name> \
   --edition Standard \
   --service-objective S1
 ```

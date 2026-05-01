@@ -28,11 +28,24 @@
       'Standard_D48s_v5',
       'Standard_D64s_v5',
       'Standard_D96s_v5'
+    ],
+    standarddsv6family: [
+      'Standard_D2s_v6',
+      'Standard_D4s_v6',
+      'Standard_D8s_v6',
+      'Standard_D16s_v6',
+      'Standard_D32s_v6',
+      'Standard_D48s_v6',
+      'Standard_D64s_v6',
+      'Standard_D96s_v6',
+      'Standard_D128s_v6',
+      'Standard_D192s_v6'
     ]
   };
 
   const FAMILY_ALIASES = {
     standarddsv5: 'standarddsv5family',
+    standarddsv6: 'standarddsv6family',
     standardhbv3: 'standardhbv3family',
     standardhbv4: 'standardhbv4family',
     standardndh100v5: 'standardndh100v5family',

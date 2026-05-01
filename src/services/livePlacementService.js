@@ -15,10 +15,18 @@ const DEFAULT_MAX_REGIONS_PER_CALL = 8;
 const POWERSHELL_RELEASE_API = 'https://api.github.com/repos/PowerShell/PowerShell/releases/latest';
 const DEFAULT_WORKER_TIMEOUT_MS = 60000;
 const DEFAULT_RECOMMENDATION_WORKER_TIMEOUT_MS = 180000;
+const DEFAULT_RECOMMENDATION_OUTPUT_BUFFER_BYTES = 8 * 1024 * 1024;
 const DEFAULT_MAX_LIVE_PLACEMENT_CALLS = 10;
+const DEFAULT_ARM_MAX_RETRIES = 3;
+const DEFAULT_ARM_TIMEOUT_MS = 30000;
+const DEFAULT_RECOMMENDATION_REGION_CONCURRENCY = 4;
+const DEFAULT_HOURS_PER_MONTH = 730;
 const ARM_SCOPE = 'https://management.azure.com/.default';
 const ARM_BASE = 'https://management.azure.com';
 const PLACEMENT_API_VERSION = '2025-06-05';
+const COMPUTE_SKUS_API_VERSION = '2024-03-01';
+const SUBSCRIPTIONS_API_VERSION = '2020-01-01';
+const RETAIL_PRICING_BASE = 'https://prices.azure.com/api/retail/prices';
 
 let portablePowerShellPromise;
 let azModuleBootstrapPromise;
@@ -199,6 +207,10 @@ function useWorkerFirstMode() {
 
 function shouldDisableLocalFallback() {
   return String(process.env.CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK || '').toLowerCase() === 'true';
+}
+
+function shouldUseDirectRecommendationApi() {
+  return String(process.env.CAPACITY_RECOMMEND_USE_DIRECT_API || '').toLowerCase() === 'true';
 }
 
 function resolveLivePlacementCallLimit() {
@@ -844,6 +856,724 @@ function chunk(items, size) {
   return output;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getRetryDelayMs(retryAfterHeader, attempt) {
+  if (!retryAfterHeader) {
+    return Math.pow(2, attempt + 1) * 1000;
+  }
+
+  const asSeconds = Number.parseInt(retryAfterHeader, 10);
+  if (Number.isFinite(asSeconds)) {
+    return Math.max(asSeconds, 1) * 1000;
+  }
+
+  const asDateMs = Date.parse(retryAfterHeader);
+  if (!Number.isNaN(asDateMs)) {
+    return Math.max(asDateMs - Date.now(), 1000);
+  }
+
+  return Math.pow(2, attempt + 1) * 1000;
+}
+
+async function fetchJsonWithRetry(url, { method = 'GET', token = null, body = null, maxRetries = DEFAULT_ARM_MAX_RETRIES } = {}) {
+  for (let attempt = 0; attempt < maxRetries; attempt += 1) {
+    const controller = new AbortController();
+    const timeoutHandle = setTimeout(() => controller.abort(), DEFAULT_ARM_TIMEOUT_MS);
+    try {
+      const response = await fetch(url, {
+        method,
+        signal: controller.signal,
+        headers: {
+          Accept: 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(body ? { 'Content-Type': 'application/json' } : {})
+        },
+        ...(body ? { body: JSON.stringify(body) } : {})
+      });
+
+      if (response.ok) {
+        return response.json();
+      }
+
+      if ((response.status === 429 || response.status === 503) && attempt < maxRetries - 1) {
+        const delayMs = getRetryDelayMs(response.headers.get('retry-after'), attempt);
+        await sleep(delayMs);
+        continue;
+      }
+
+      const responseText = await response.text();
+      throw new Error(`Request failed (${response.status}) for ${url}: ${responseText}`);
+    } catch (error) {
+      if (attempt >= maxRetries - 1) {
+        throw error;
+      }
+
+      const isAbort = error?.name === 'AbortError';
+      const delayMs = getRetryDelayMs(null, attempt);
+      if (isAbort) {
+        await sleep(delayMs);
+        continue;
+      }
+
+      const message = String(error?.message || 'request failed').toLowerCase();
+      const isRetryableNetworkError = message.includes('fetch failed') || message.includes('network') || message.includes('timed out');
+      if (!isRetryableNetworkError) {
+        throw error;
+      }
+
+      await sleep(delayMs);
+    } finally {
+      clearTimeout(timeoutHandle);
+    }
+  }
+
+  throw new Error(`Request failed after retries for ${url}`);
+}
+
+async function armGetAll(url, token) {
+  const items = [];
+  let nextUrl = url;
+
+  while (nextUrl) {
+    const payload = await fetchJsonWithRetry(nextUrl, { token });
+    if (Array.isArray(payload?.value)) {
+      items.push(...payload.value);
+    }
+    nextUrl = payload?.nextLink || null;
+  }
+
+  return items;
+}
+
+async function retailGetAll(url) {
+  const items = [];
+  let nextUrl = url;
+
+  while (nextUrl) {
+    const payload = await fetchJsonWithRetry(nextUrl);
+    if (Array.isArray(payload?.Items)) {
+      items.push(...payload.Items);
+    }
+    nextUrl = payload?.NextPageLink || null;
+  }
+
+  return items;
+}
+
+async function mapWithConcurrency(items, concurrency, worker) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return [];
+  }
+
+  const safeConcurrency = Math.max(1, Math.min(Number(concurrency) || 1, items.length));
+  const results = new Array(items.length);
+  let currentIndex = 0;
+
+  const runners = Array.from({ length: safeConcurrency }, async () => {
+    while (currentIndex < items.length) {
+      const itemIndex = currentIndex;
+      currentIndex += 1;
+      results[itemIndex] = await worker(items[itemIndex], itemIndex);
+    }
+  });
+
+  await Promise.all(runners);
+  return results;
+}
+
+function getCapabilityValue(capabilities, name) {
+  const match = (capabilities || []).find((capability) => String(capability?.name || capability?.Name || '').toLowerCase() === String(name || '').toLowerCase());
+  return match?.value ?? match?.Value ?? null;
+}
+
+function getSkuFamily(skuName) {
+  const match = String(skuName || '').match(/Standard_([A-Z]+)\d/i);
+  return match?.[1] || 'Unknown';
+}
+
+function getSkuFamilyVersion(skuName) {
+  const match = String(skuName || '').match(/_v(\d+)/i);
+  return match ? Number(match[1]) : 1;
+}
+
+function getProcessorVendor(skuName) {
+  const body = String(skuName || '').replace(/^Standard_/i, '').replace(/_v\d+$/i, '');
+  if (/p(?![\d])/i.test(body)) {
+    return 'ARM';
+  }
+  const family = getSkuFamily(skuName);
+  if (family !== 'A' && /a(?![\d])/i.test(body)) {
+    return 'AMD';
+  }
+  return 'Intel';
+}
+
+function getDiskCode({ hasTempDisk, hasNvme }) {
+  if (hasNvme && hasTempDisk) return 'NV+T';
+  if (hasNvme) return 'NVMe';
+  if (hasTempDisk) return 'SC+T';
+  return 'SCSI';
+}
+
+function getSkuCapabilities(sku) {
+  const tempDiskMb = Number(getCapabilityValue(sku?.capabilities, 'MaxResourceVolumeMB') || 0);
+  return {
+    HyperVGenerations: getCapabilityValue(sku?.capabilities, 'HyperVGenerations') || 'V1',
+    CpuArchitecture: getCapabilityValue(sku?.capabilities, 'CpuArchitectureType') || 'x64',
+    TempDiskGB: tempDiskMb > 0 ? Math.round(tempDiskMb / 1024) : 0,
+    AcceleratedNetworkingEnabled: String(getCapabilityValue(sku?.capabilities, 'AcceleratedNetworkingEnabled') || '').toLowerCase() === 'true',
+    NvmeSupport: getCapabilityValue(sku?.capabilities, 'NvmeDiskSizeInMiB') != null,
+    MaxDataDiskCount: Number(getCapabilityValue(sku?.capabilities, 'MaxDataDiskCount') || 0),
+    MaxNetworkInterfaces: Number(getCapabilityValue(sku?.capabilities, 'MaxNetworkInterfaces') || 1),
+    EphemeralOSDiskSupported: String(getCapabilityValue(sku?.capabilities, 'EphemeralOSDiskSupported') || '').toLowerCase() === 'true',
+    UltraSSDAvailable: String(getCapabilityValue(sku?.capabilities, 'UltraSSDAvailable') || '').toLowerCase() === 'true',
+    UncachedDiskIOPS: Number(getCapabilityValue(sku?.capabilities, 'UncachedDiskIOPS') || 0),
+    UncachedDiskBytesPerSecond: Number(getCapabilityValue(sku?.capabilities, 'UncachedDiskBytesPerSecond') || 0),
+    EncryptionAtHostSupported: String(getCapabilityValue(sku?.capabilities, 'EncryptionAtHostSupported') || '').toLowerCase() === 'true'
+  };
+}
+
+function getRestrictionDetails(sku, region = null) {
+  const locationInfo = Array.isArray(sku?.locationInfo)
+    ? (region
+      ? sku.locationInfo.find((entry) => String(entry?.location || '').toLowerCase() === String(region || '').toLowerCase()) || sku.locationInfo[0]
+      : sku.locationInfo[0])
+    : null;
+  const allZones = Array.isArray(locationInfo?.zones) ? locationInfo.zones.map((zone) => String(zone)) : [];
+
+  if (!Array.isArray(sku?.restrictions) || sku.restrictions.length === 0) {
+    return {
+      Status: 'OK',
+      ZonesOK: allZones,
+      ZonesLimited: [],
+      ZonesRestricted: [],
+      RestrictionReasons: []
+    };
+  }
+
+  const zonesOk = new Set();
+  const zonesLimited = new Set();
+  const zonesRestricted = new Set();
+  const reasonCodes = new Set();
+
+  for (const restriction of sku.restrictions) {
+    const type = String(restriction?.type || restriction?.Type || '');
+    const reasonCode = String(restriction?.reasonCode || restriction?.ReasonCode || '');
+    if (reasonCode) {
+      reasonCodes.add(reasonCode);
+    }
+    const zones = Array.isArray(restriction?.restrictionInfo?.zones)
+      ? restriction.restrictionInfo.zones
+      : (Array.isArray(restriction?.RestrictionInfo?.Zones) ? restriction.RestrictionInfo.Zones : []);
+    if (type !== 'Zone' || zones.length === 0) {
+      continue;
+    }
+
+    for (const zone of zones) {
+      const zoneText = String(zone);
+      if (reasonCode === 'NotAvailableForSubscription') {
+        zonesLimited.add(zoneText);
+      } else {
+        zonesRestricted.add(zoneText);
+      }
+    }
+  }
+
+  for (const zone of allZones) {
+    if (!zonesLimited.has(zone) && !zonesRestricted.has(zone)) {
+      zonesOk.add(zone);
+    }
+  }
+
+  const status = zonesRestricted.size > 0
+    ? (zonesOk.size === 0 ? 'RESTRICTED' : 'PARTIAL')
+    : (zonesLimited.size > 0
+      ? (zonesOk.size === 0 ? 'LIMITED' : 'CAPACITY-CONSTRAINED')
+      : 'OK');
+
+  return {
+    Status: status,
+    ZonesOK: [...zonesOk].sort(),
+    ZonesLimited: [...zonesLimited].sort(),
+    ZonesRestricted: [...zonesRestricted].sort(),
+    RestrictionReasons: [...reasonCodes]
+  };
+}
+
+function buildRecommendationSkuProfile(sku) {
+  const caps = getSkuCapabilities(sku);
+  const hasNvme = caps.NvmeSupport;
+  return {
+    Name: normalizeSkuName(sku?.name || sku?.Name || ''),
+    vCPU: Number(getCapabilityValue(sku?.capabilities, 'vCPUs') || 0),
+    MemoryGB: Number(getCapabilityValue(sku?.capabilities, 'MemoryGB') || 0),
+    Family: getSkuFamily(sku?.name || sku?.Name || ''),
+    FamilyVersion: getSkuFamilyVersion(sku?.name || sku?.Name || ''),
+    Generation: caps.HyperVGenerations,
+    Architecture: caps.CpuArchitecture,
+    PremiumIO: String(getCapabilityValue(sku?.capabilities, 'PremiumIO') || '').toLowerCase() === 'true',
+    Processor: getProcessorVendor(sku?.name || sku?.Name || ''),
+    TempDiskGB: caps.TempDiskGB,
+    DiskCode: getDiskCode({ hasTempDisk: caps.TempDiskGB > 0, hasNvme }),
+    AccelNet: caps.AcceleratedNetworkingEnabled,
+    MaxDataDiskCount: caps.MaxDataDiskCount,
+    MaxNetworkInterfaces: caps.MaxNetworkInterfaces,
+    EphemeralOSDiskSupported: caps.EphemeralOSDiskSupported,
+    UltraSSDAvailable: caps.UltraSSDAvailable,
+    UncachedDiskIOPS: caps.UncachedDiskIOPS,
+    UncachedDiskBytesPerSecond: caps.UncachedDiskBytesPerSecond,
+    EncryptionAtHostSupported: caps.EncryptionAtHostSupported,
+    Caps: caps
+  };
+}
+
+function testSkuCompatibility(target, candidate) {
+  const failures = [];
+  const targetFamily = target?.Family || getSkuFamily(target?.Name);
+  const candidateFamily = candidate?.Family || getSkuFamily(candidate?.Name);
+
+  if (candidateFamily === 'B' && targetFamily !== 'B') {
+    failures.push(`Category: burstable (B-series) cannot replace non-burstable (${targetFamily}-series)`);
+  }
+  if (candidate.vCPU > 0 && target.vCPU > 0 && candidate.vCPU < target.vCPU) {
+    failures.push(`vCPU: candidate ${candidate.vCPU} < target ${target.vCPU}`);
+  }
+  if (candidate.vCPU > 0 && target.vCPU > 0 && candidate.vCPU > (target.vCPU * 2)) {
+    failures.push(`vCPU: candidate ${candidate.vCPU} exceeds 2x target ${target.vCPU} (licensing risk)`);
+  }
+  if (candidate.MemoryGB > 0 && target.MemoryGB > 0 && candidate.MemoryGB < target.MemoryGB) {
+    failures.push(`MemoryGB: candidate ${candidate.MemoryGB} < target ${target.MemoryGB}`);
+  }
+  if (target.MaxNetworkInterfaces > 1 && candidate.MaxNetworkInterfaces < target.MaxNetworkInterfaces) {
+    failures.push(`MaxNICs: candidate ${candidate.MaxNetworkInterfaces} < target ${target.MaxNetworkInterfaces}`);
+  }
+  if (target.AccelNet === true && candidate.AccelNet !== true) {
+    failures.push('AcceleratedNetworking: target requires it, candidate lacks it');
+  }
+  if (target.PremiumIO === true && candidate.PremiumIO !== true) {
+    failures.push('PremiumIO: target requires it, candidate lacks it');
+  }
+  if (/NV/.test(String(target.DiskCode || '')) && !/NV/.test(String(candidate.DiskCode || ''))) {
+    failures.push('DiskInterface: target uses NVMe, candidate only has SCSI');
+  }
+  if (target.EphemeralOSDiskSupported === true && candidate.EphemeralOSDiskSupported !== true) {
+    failures.push('EphemeralOSDisk: target requires it, candidate lacks it');
+  }
+  if (target.UltraSSDAvailable === true && candidate.UltraSSDAvailable !== true) {
+    failures.push('UltraSSD: target requires it, candidate lacks it');
+  }
+
+  return {
+    Compatible: failures.length === 0,
+    Failures: failures
+  };
+}
+
+function getSkuSimilarityScore(target, candidate) {
+  let score = 0;
+
+  if (target.vCPU > 0 && candidate.vCPU > 0) {
+    const maxCpu = Math.max(target.vCPU, candidate.vCPU);
+    score += Math.round((1 - (Math.abs(target.vCPU - candidate.vCPU) / maxCpu)) * 20);
+  }
+
+  if (target.MemoryGB > 0 && candidate.MemoryGB > 0) {
+    const maxMemory = Math.max(target.MemoryGB, candidate.MemoryGB);
+    score += Math.round((1 - (Math.abs(target.MemoryGB - candidate.MemoryGB) / maxMemory)) * 20);
+  }
+
+  if (target.Family === candidate.Family) {
+    score += 18;
+  } else if (String(target.Family || '')[0] && String(target.Family || '')[0] === String(candidate.Family || '')[0]) {
+    score += 9;
+  }
+
+  const targetVersion = Number(target.FamilyVersion || 1);
+  const candidateVersion = Number(candidate.FamilyVersion || 1);
+  if (target.Family === candidate.Family) {
+    if (candidateVersion > targetVersion) {
+      const versionBonus = candidateVersion >= 7 ? 4 : candidateVersion >= 6 ? 3 : candidateVersion >= 5 ? 2 : 1;
+      score += Math.min(8 + versionBonus, 12);
+    } else if (candidateVersion === targetVersion) {
+      score += 5;
+    } else {
+      score += 1;
+    }
+  } else {
+    score += candidateVersion >= 7 ? 10
+      : candidateVersion >= 6 ? 9
+        : candidateVersion >= 5 ? 7
+          : candidateVersion >= 4 ? 5
+            : candidateVersion >= 3 ? 3
+              : candidateVersion >= 2 ? 1
+                : 0;
+  }
+
+  if (target.Architecture === candidate.Architecture) {
+    score += 10;
+  }
+
+  if (target.PremiumIO === true && candidate.PremiumIO === true) {
+    score += 5;
+  } else if (target.PremiumIO !== true) {
+    score += 5;
+  }
+
+  if (target.UncachedDiskIOPS > 0 && candidate.UncachedDiskIOPS > 0) {
+    const maxIops = Math.max(target.UncachedDiskIOPS, candidate.UncachedDiskIOPS);
+    score += Math.round((1 - (Math.abs(target.UncachedDiskIOPS - candidate.UncachedDiskIOPS) / maxIops)) * 8);
+  } else if (target.UncachedDiskIOPS <= 0) {
+    score += 8;
+  }
+
+  if (target.MaxDataDiskCount > 0 && candidate.MaxDataDiskCount > 0) {
+    const maxDisks = Math.max(target.MaxDataDiskCount, candidate.MaxDataDiskCount);
+    score += Math.round((1 - (Math.abs(target.MaxDataDiskCount - candidate.MaxDataDiskCount) / maxDisks)) * 7);
+  } else if (target.MaxDataDiskCount <= 0) {
+    score += 7;
+  }
+
+  return Math.min(score, 100);
+}
+
+function getPricingCacheKey(region, skuName) {
+  return `${String(region || '').trim().toLowerCase()}|${normalizeSkuName(skuName).toLowerCase()}`;
+}
+
+function pickConsumptionPrice(items) {
+  const candidate = (items || [])
+    .filter((item) => Number.isFinite(Number(item?.retailPrice)) && Number(item?.retailPrice) > 0)
+    .sort((left, right) => Number(left.retailPrice) - Number(right.retailPrice))[0];
+  return candidate ? Number(candidate.retailPrice) : null;
+}
+
+function getRetailPriceUrl(region, skuName) {
+  const filters = [
+    "serviceName eq 'Virtual Machines'",
+    `armRegionName eq '${String(region || '').trim().toLowerCase()}'`,
+    `armSkuName eq '${normalizeSkuName(skuName)}'`,
+    "priceType eq 'Consumption'"
+  ];
+
+  return `${RETAIL_PRICING_BASE}?$filter=${encodeURIComponent(filters.join(' and '))}`;
+}
+
+async function getVmRetailPricing(region, skuName, cache) {
+  const cacheKey = getPricingCacheKey(region, skuName);
+  if (cache.has(cacheKey)) {
+    return cache.get(cacheKey);
+  }
+
+  try {
+    const allItems = await retailGetAll(getRetailPriceUrl(region, skuName));
+    const primaryItems = allItems.filter((item) => item?.isPrimaryMeterRegion === true);
+    const linuxItems = primaryItems.filter((item) => !/windows/i.test(String(item?.productName || '')));
+    const regularItems = linuxItems.filter((item) => !/spot|low priority/i.test(String(item?.meterName || item?.skuName || '')));
+    const spotItems = linuxItems.filter((item) => /spot/i.test(String(item?.meterName || item?.skuName || '')));
+    const hourly = pickConsumptionPrice(regularItems);
+    const spotHourly = pickConsumptionPrice(spotItems);
+    const pricing = {
+      hourly,
+      monthly: Number.isFinite(hourly) ? Number((hourly * DEFAULT_HOURS_PER_MONTH).toFixed(2)) : null,
+      spotHourly,
+      spotMonthly: Number.isFinite(spotHourly) ? Number((spotHourly * DEFAULT_HOURS_PER_MONTH).toFixed(2)) : null
+    };
+    cache.set(cacheKey, pricing);
+    return pricing;
+  } catch {
+    const pricing = { hourly: null, monthly: null, spotHourly: null, spotMonthly: null };
+    cache.set(cacheKey, pricing);
+    return pricing;
+  }
+}
+
+async function resolveRecommendationSubscriptionId() {
+  const configuredSubscriptionId = String(process.env.CAPACITY_RECOMMEND_SUBSCRIPTION_ID || '').trim();
+  if (configuredSubscriptionId) {
+    return configuredSubscriptionId;
+  }
+
+  const configuredIngestSubscriptionId = parseCsv(process.env.INGEST_SUBSCRIPTION_IDS)[0] || null;
+  if (configuredIngestSubscriptionId) {
+    return configuredIngestSubscriptionId;
+  }
+
+  const token = await getArmAccessToken();
+  const subscriptions = await armGetAll(`${ARM_BASE}/subscriptions?api-version=${SUBSCRIPTIONS_API_VERSION}`, token);
+  const enabledSubscription = subscriptions.find((subscription) => String(subscription?.state || '').toLowerCase() === 'enabled');
+  if (!enabledSubscription?.subscriptionId) {
+    throw new Error('No enabled Azure subscription was available for the direct API recommender path.');
+  }
+
+  return String(enabledSubscription.subscriptionId);
+}
+
+async function fetchRecommendationRegionData(subscriptionId, regions) {
+  const token = await getArmAccessToken();
+  const regionConcurrency = Math.max(Number(process.env.CAPACITY_RECOMMEND_REGION_CONCURRENCY || DEFAULT_RECOMMENDATION_REGION_CONCURRENCY), 1);
+  const regionResults = await mapWithConcurrency(regions, regionConcurrency, async (region) => {
+    const skusUrl = `${ARM_BASE}/subscriptions/${encodeURIComponent(subscriptionId)}/providers/Microsoft.Compute/skus?$filter=${encodeURIComponent(`location eq '${region}'`)}&api-version=${COMPUTE_SKUS_API_VERSION}`;
+    const skus = await armGetAll(skusUrl, token);
+    return {
+      region,
+      skus: skus.filter((sku) => String(sku?.resourceType || '').toLowerCase() === 'virtualmachines')
+    };
+  });
+
+  return regionResults;
+}
+
+function buildRecommendationOutputContract({ targetProfile, targetAvailability, recommendations, warnings, belowMinSpec, minScore, topN, fetchPricing, showSpot, diagnostics }) {
+  return {
+    schemaVersion: '1.0',
+    mode: 'recommend',
+    generatedAt: new Date().toISOString(),
+    minScore,
+    topN,
+    pricingEnabled: fetchPricing,
+    placementEnabled: false,
+    spotPricingEnabled: Boolean(fetchPricing && showSpot),
+    target: targetProfile,
+    targetAvailability,
+    recommendations: recommendations.map((item, index) => ({
+      rank: index + 1,
+      sku: item.SKU,
+      region: item.Region,
+      vCPU: item.vCPU,
+      memGiB: item.MemGiB,
+      family: item.Family,
+      purpose: item.Purpose,
+      gen: item.Gen,
+      arch: item.Arch,
+      cpu: item.CPU,
+      disk: item.Disk,
+      tempDiskGB: item.TempGB,
+      accelNet: item.AccelNet,
+      maxDisks: item.MaxDisks,
+      maxNICs: item.MaxNICs,
+      iops: item.IOPS,
+      score: item.Score,
+      capacity: item.Capacity,
+      allocScore: null,
+      zonesOK: item.ZonesOK,
+      priceHr: item.PriceHr,
+      priceMo: item.PriceMo,
+      spotPriceHr: item.SpotPriceHr,
+      spotPriceMo: item.SpotPriceMo
+    })),
+    warnings,
+    belowMinSpec: belowMinSpec.map((item) => ({
+      sku: item.SKU,
+      region: item.Region,
+      vCPU: item.vCPU,
+      memGiB: item.MemGiB,
+      score: item.Score,
+      capacity: item.Capacity
+    })),
+    diagnostics
+  };
+}
+
+async function applyPricingToRecommendations(recommendations, { fetchPricing, showSpot }) {
+  if (!fetchPricing || !Array.isArray(recommendations) || recommendations.length === 0) {
+    return recommendations;
+  }
+
+  const pricingCache = new Map();
+  const priced = await Promise.all(recommendations.map(async (item) => {
+    const pricing = await getVmRetailPricing(item.Region, item.SKU, pricingCache);
+    return {
+      ...item,
+      PriceHr: pricing.hourly,
+      PriceMo: pricing.monthly,
+      SpotPriceHr: showSpot ? pricing.spotHourly : null,
+      SpotPriceMo: showSpot ? pricing.spotMonthly : null
+    };
+  }));
+  return priced;
+}
+
+async function runRecommendationLookupDirect({ targetSku, regions, topN, minScore, showPricing, showSpot }) {
+  const totalStartedAt = Date.now();
+  const subscriptionId = await resolveRecommendationSubscriptionId();
+  const dataCollectionStartedAt = Date.now();
+  const regionData = await fetchRecommendationRegionData(subscriptionId, regions);
+  const dataCollectionMs = Date.now() - dataCollectionStartedAt;
+
+  let targetSkuEntry = null;
+  const targetAvailability = [];
+  for (const data of regionData) {
+    for (const sku of data.skus) {
+      if (normalizeSkuName(sku?.name) !== targetSku) {
+        continue;
+      }
+      const restrictions = getRestrictionDetails(sku, data.region);
+      targetAvailability.push({
+        Region: String(data.region),
+        Status: restrictions.Status,
+        ZonesOK: restrictions.ZonesOK.length
+      });
+      if (!targetSkuEntry) {
+        targetSkuEntry = sku;
+      }
+    }
+  }
+
+  if (!targetSkuEntry) {
+    throw new Error(`SKU '${targetSku}' was not found in any scanned region.`);
+  }
+
+  const targetProfile = buildRecommendationSkuProfile(targetSkuEntry);
+  const recommendStartedAt = Date.now();
+  const candidates = [];
+
+  for (const data of regionData) {
+    for (const sku of data.skus) {
+      const normalizedSku = normalizeSkuName(sku?.name);
+      if (!normalizedSku || normalizedSku === targetSku) {
+        continue;
+      }
+
+      const candidateProfile = buildRecommendationSkuProfile(sku);
+      const restrictions = getRestrictionDetails(sku, data.region);
+
+      const compatibility = testSkuCompatibility(targetProfile, candidateProfile);
+      if (!compatibility.Compatible) {
+        continue;
+      }
+
+      const similarityScore = getSkuSimilarityScore(targetProfile, candidateProfile);
+      candidates.push({
+        SKU: normalizedSku,
+        Region: String(data.region),
+        vCPU: candidateProfile.vCPU,
+        MemGiB: candidateProfile.MemoryGB,
+        Family: candidateProfile.Family,
+        Purpose: '',
+        Gen: String(candidateProfile.Generation || '').replace(/V/g, '').replace(/,/g, ','),
+        Arch: candidateProfile.Architecture,
+        CPU: candidateProfile.Processor,
+        Disk: candidateProfile.DiskCode,
+        TempGB: candidateProfile.TempDiskGB,
+        AccelNet: candidateProfile.AccelNet,
+        MaxDisks: candidateProfile.MaxDataDiskCount,
+        MaxNICs: candidateProfile.MaxNetworkInterfaces,
+        IOPS: candidateProfile.UncachedDiskIOPS,
+        Score: similarityScore,
+        Capacity: restrictions.Status,
+        ZonesOK: restrictions.ZonesOK.length,
+        PriceHr: null,
+        PriceMo: null,
+        SpotPriceHr: null,
+        SpotPriceMo: null
+      });
+    }
+  }
+
+  const belowMinSpecBySku = new Map();
+  let filtered = [...candidates];
+  filtered.filter((item) => item.vCPU < targetProfile.vCPU && item.Capacity === 'OK').forEach((item) => {
+    if (!belowMinSpecBySku.has(item.SKU)) {
+      belowMinSpecBySku.set(item.SKU, item);
+    }
+  });
+  filtered = filtered.filter((item) => item.vCPU >= targetProfile.vCPU);
+  filtered.filter((item) => item.MemGiB < targetProfile.MemoryGB && item.Capacity === 'OK').forEach((item) => {
+    if (!belowMinSpecBySku.has(item.SKU)) {
+      belowMinSpecBySku.set(item.SKU, item);
+    }
+  });
+  filtered = filtered.filter((item) => item.MemGiB >= targetProfile.MemoryGB);
+  filtered = filtered.filter((item) => item.Score >= minScore);
+  const belowMinSpec = [...belowMinSpecBySku.values()];
+
+  const rankWeight = (value) => {
+    if (value === 'OK') return 0;
+    if (value === 'LIMITED') return 1;
+    return 2;
+  };
+
+  let ranked = [...filtered]
+    .sort((left, right) => right.Score - left.Score || rankWeight(left.Capacity) - rankWeight(right.Capacity) || right.ZonesOK - left.ZonesOK)
+    .filter((item, index, array) => array.findIndex((entry) => entry.SKU === item.SKU) === index)
+    .slice(0, topN);
+
+  if (!ranked.some((item) => Number(item.vCPU) === Number(targetProfile.vCPU))) {
+    const likeForLike = filtered
+      .filter((item) => Number(item.vCPU) === Number(targetProfile.vCPU))
+      .sort((left, right) => right.Score - left.Score)
+      .find((item, index, array) => array.findIndex((entry) => entry.SKU === item.SKU) === index);
+    if (likeForLike) {
+      ranked = [...ranked, likeForLike];
+    }
+  }
+
+  if (Number(targetProfile.UncachedDiskIOPS) > 0 && !ranked.some((item) => Number(item.IOPS) >= Number(targetProfile.UncachedDiskIOPS))) {
+    const iopsMatch = filtered
+      .filter((item) => Number(item.IOPS) >= Number(targetProfile.UncachedDiskIOPS))
+      .sort((left, right) => right.Score - left.Score)
+      .find((item, index, array) => array.findIndex((entry) => entry.SKU === item.SKU) === index);
+    if (iopsMatch) {
+      ranked = [...ranked, iopsMatch];
+    }
+  }
+
+  ranked = await applyPricingToRecommendations(ranked, { fetchPricing: showPricing, showSpot });
+
+  const recommendMs = Date.now() - recommendStartedAt;
+  const diagnostics = {
+    executionMode: 'local-app-service-direct-api',
+    subscriptionId,
+    performance: {
+      dataCollectionMs,
+      recommendMs,
+      totalMs: Date.now() - totalStartedAt
+    },
+    counts: {
+      regionCount: regionData.length,
+      candidateCount: candidates.length,
+      rankedCount: ranked.length,
+      belowMinSpecCount: belowMinSpec.length
+    }
+  };
+
+  return buildRecommendationOutputContract({
+    targetProfile: {
+      name: targetProfile.Name,
+      vCPU: targetProfile.vCPU,
+      MemoryGB: targetProfile.MemoryGB,
+      Family: targetProfile.Family,
+      FamilyVersion: targetProfile.FamilyVersion,
+      Generation: targetProfile.Generation,
+      Architecture: targetProfile.Architecture,
+      PremiumIO: targetProfile.PremiumIO,
+      Processor: targetProfile.Processor,
+      TempDiskGB: targetProfile.TempDiskGB,
+      DiskCode: targetProfile.DiskCode,
+      AccelNet: targetProfile.AccelNet,
+      MaxDataDiskCount: targetProfile.MaxDataDiskCount,
+      MaxNetworkInterfaces: targetProfile.MaxNetworkInterfaces,
+      EphemeralOSDiskSupported: targetProfile.EphemeralOSDiskSupported,
+      UltraSSDAvailable: targetProfile.UltraSSDAvailable,
+      UncachedDiskIOPS: targetProfile.UncachedDiskIOPS,
+      UncachedDiskBytesPerSecond: targetProfile.UncachedDiskBytesPerSecond,
+      EncryptionAtHostSupported: targetProfile.EncryptionAtHostSupported
+    },
+    targetAvailability,
+    recommendations: ranked,
+    warnings: [],
+    belowMinSpec,
+    minScore,
+    topN,
+    fetchPricing: showPricing,
+    showSpot,
+    diagnostics
+  });
+}
+
 async function runPlacementLookupLocal({ subscriptionId, skus, regions, desiredCount }) {
   let directError = null;
   if (subscriptionId) {
@@ -1198,6 +1928,7 @@ async function runRecommendationLookupLocal({ targetSku, regions, topN, minScore
   }
 
   const timeoutMs = resolveRecommendationWorkerTimeoutMs(Array.isArray(regions) ? regions.length : 1);
+  const maxBufferBytes = Number(process.env.CAPACITY_RECOMMEND_MAX_BUFFER_BYTES || DEFAULT_RECOMMENDATION_OUTPUT_BUFFER_BYTES);
 
   function tryCommand(commandIndex, resolve, reject) {
     if (commandIndex >= commands.length) {
@@ -1215,7 +1946,7 @@ async function runRecommendationLookupLocal({ targetSku, regions, topN, minScore
         {
           cwd: resolveProjectRoot(),
           env,
-          maxBuffer: 2 * 1024 * 1024,
+          maxBuffer: maxBufferBytes,
           timeout: timeoutMs
         },
         (error, stdout, stderr) => {
@@ -1236,6 +1967,8 @@ async function runRecommendationLookupLocal({ targetSku, regions, topN, minScore
             minScore,
             showPricing,
             showSpot,
+            timeoutMs,
+            maxBufferBytes,
             stdoutLength: stdoutText.length,
             stderrLength: stderrText.length,
             stdoutSnippet: stdoutText.slice(0, 500),
@@ -1245,6 +1978,11 @@ async function runRecommendationLookupLocal({ targetSku, regions, topN, minScore
           if (error) {
             if (error.code === 'ENOENT') {
               tryCommand(commandIndex + 1, resolve, reject);
+              return;
+            }
+
+            if (error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' || /maxBuffer/i.test(String(error.message || ''))) {
+              reject(new Error(`Capacity recommendation failed: recommendation output exceeded the child-process buffer (${maxBufferBytes} bytes). Reduce the request scope or increase CAPACITY_RECOMMEND_MAX_BUFFER_BYTES. | Context: ${JSON.stringify(outputContext)}`));
               return;
             }
 
@@ -1340,8 +2078,58 @@ async function getCapacityRecommendations(options = {}) {
 
   let contract;
   let fallbackApplied = false;
+  if (shouldUseDirectRecommendationApi()) {
+    try {
+      contract = await runRecommendationLookupDirect({
+        targetSku,
+        regions: resolvedRegions,
+        topN,
+        minScore,
+        showPricing,
+        showSpot
+      });
+    } catch (error) {
+      const fallbackWarnings = [`Direct API recommender failed and fell back to the existing runner: ${error.message}`];
+      try {
+        const fallbackContract = useWorkerFirstMode()
+          ? await runRemoteRecommendationLookup({
+              targetSku,
+              regions: resolvedRegions,
+              topN,
+              minScore,
+              showPricing,
+              showSpot
+            })
+          : await runRecommendationLookupLocal({
+              targetSku,
+              regions: resolvedRegions,
+              topN,
+              minScore,
+              showPricing,
+              showSpot
+            });
+        contract = {
+          ...fallbackContract,
+          warnings: [...new Set([...(Array.isArray(fallbackContract?.warnings) ? fallbackContract.warnings : []), ...fallbackWarnings])],
+          diagnostics: fallbackContract?.diagnostics
+            ? {
+                ...fallbackContract.diagnostics,
+                executionMode: `${fallbackContract.diagnostics.executionMode || 'fallback'}-after-direct-api-failure`,
+                directApiFailure: error.message
+              }
+            : {
+                executionMode: 'fallback-after-direct-api-failure',
+                directApiFailure: error.message
+              }
+        };
+      } catch {
+        throw error;
+      }
+    }
+  }
+
   try {
-    if (useWorkerFirstMode()) {
+    if (!contract && useWorkerFirstMode()) {
       contract = await runRemoteRecommendationLookup({
         targetSku,
         regions: resolvedRegions,
@@ -1350,7 +2138,7 @@ async function getCapacityRecommendations(options = {}) {
         showPricing,
         showSpot
       });
-    } else {
+    } else if (!contract) {
       contract = await runRecommendationLookupLocal({
         targetSku,
         regions: resolvedRegions,
@@ -1893,6 +2681,42 @@ function getLivePlacementSchedulerConfig() {
   return { ...livePlacementSchedulerConfig };
 }
 
+async function seedVmSkuCatalogIfEmpty({ region = process.env.SKU_CATALOG_SEED_REGION || 'eastus' } = {}) {
+  const { upsertVmSkuCatalogRows, getVmSkuCatalogFamilies } = require('../store/sql');
+  try {
+    const existing = await getVmSkuCatalogFamilies();
+    if (Array.isArray(existing) && existing.length > 0) {
+      return { seeded: false, reason: 'already-populated', count: existing.length };
+    }
+
+    const subscriptionId = await resolveRecommendationSubscriptionId();
+    const token = await getArmAccessToken();
+    const url = `${ARM_BASE}/subscriptions/${encodeURIComponent(subscriptionId)}/providers/Microsoft.Compute/skus?$filter=${encodeURIComponent(`location eq '${region}'`)}&api-version=${COMPUTE_SKUS_API_VERSION}`;
+    const skus = await armGetAll(url, token);
+    const rows = [];
+    for (const sku of skus) {
+      if (!sku || sku.resourceType !== 'virtualMachines') continue;
+      const family = String(sku.family || '').trim();
+      const name = String(sku.name || '').trim();
+      if (!family || !name) continue;
+      rows.push({
+        skuFamily: family,
+        skuName: name,
+        vCpu: Number(getCapabilityValue(sku.capabilities, 'vCPUs') || 0) || null,
+        memoryGB: Number(getCapabilityValue(sku.capabilities, 'MemoryGB') || 0) || null
+      });
+    }
+    if (rows.length === 0) {
+      return { seeded: false, reason: 'no-vm-skus' };
+    }
+    const result = await upsertVmSkuCatalogRows(rows);
+    return { seeded: true, count: result.upserted, region };
+  } catch (err) {
+    console.warn('[seedVmSkuCatalogIfEmpty] Skipping seed due to error:', err?.message || err);
+    return { seeded: false, reason: 'error', error: err?.message || String(err) };
+  }
+}
+
 module.exports = {
   getLivePlacementScoreRows,
   getCapacityRecommendations,
@@ -1904,10 +2728,19 @@ module.exports = {
   startLivePlacementScheduler,
   updateLivePlacementScheduler,
   getLivePlacementSchedulerConfig,
+  seedVmSkuCatalogIfEmpty,
   __testHooks: {
     normalizeSkuName,
     isAggregateSkuName,
     normalizeRecommendationContract,
-    parseExtraSkus
+    parseExtraSkus,
+    getRestrictionDetails,
+    buildRecommendationSkuProfile,
+    testSkuCompatibility,
+    getSkuSimilarityScore,
+    buildRecommendationOutputContract,
+    runPlacementLookupDirect,
+    runPlacementLookupLocal,
+    shouldUseDirectRecommendationApi
   }
 };

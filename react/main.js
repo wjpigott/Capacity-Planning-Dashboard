@@ -173,7 +173,9 @@ async function fetchJson(url, options) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload.ok === false) {
     const baseReason = payload.error || `Request failed (${response.status})`;
-    const reason = payload.requestId ? `${baseReason} [Ref ${payload.requestId}]` : baseReason;
+    const detail = payload.detail && payload.detail !== payload.error ? String(payload.detail) : '';
+    const detailedReason = detail ? `${baseReason} ${detail}` : baseReason;
+    const reason = payload.requestId ? `${detailedReason} [Ref ${payload.requestId}]` : detailedReason;
     throw new Error(`${String(url)}: ${reason}`);
   }
 
@@ -536,12 +538,26 @@ function isAggregateSkuName(value) {
 
 function getRecommenderFamilySkuOptions(familyValue) {
   const familyKey = String(familyValue || '').trim();
+  const catalogSkus = skuCatalog?.getSkusForFamily(familyKey);
+  if (Array.isArray(catalogSkus) && catalogSkus.length > 0) {
+    return [...new Set(catalogSkus
+      .map((sku) => normalizeSkuName(sku))
+      .filter((sku) => sku && !isAggregateSkuName(sku)))].sort((left, right) => compareSkuValues(left, right));
+  }
   const preferred = RECOMMENDER_FAMILY_SKU_OPTIONS[familyKey];
   if (Array.isArray(preferred) && preferred.length > 0) {
-    return preferred;
+    return [...new Set(preferred
+      .map((sku) => normalizeSkuName(sku))
+      .filter((sku) => sku && !isAggregateSkuName(sku)))].sort((left, right) => compareSkuValues(left, right));
   }
   const mapped = FAMILY_EXTRA_SKU_MAP[familyKey];
-  return Array.isArray(mapped) ? mapped : [];
+  if (!Array.isArray(mapped)) {
+    return [];
+  }
+
+  return [...new Set(mapped
+    .map((sku) => normalizeSkuName(sku))
+    .filter((sku) => sku && !isAggregateSkuName(sku)))].sort((left, right) => compareSkuValues(left, right));
 }
 
 function defaultRecommendTargetSkuFromRows(rows, preferredSkus = []) {
@@ -2976,6 +2992,37 @@ function App() {
   const [sqlPreviewState, setSqlPreviewState] = useState({ loading: false, error: '', rows: [] });
   const [uiSettingsBusy, setUiSettingsBusy] = useState(false);
   const [selectedExportOption, setSelectedExportOption] = useState('server:xlsx:report');
+  const [skuCatalogVersion, setSkuCatalogVersion] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/sku-catalog/families', { credentials: 'same-origin' })
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload) => {
+        if (cancelled || !payload || !payload.families || typeof payload.families !== 'object') {
+          return;
+        }
+        const catalog = window.CAPACITY_SKU_CATALOG;
+        if (!catalog || !catalog.familySkus) {
+          return;
+        }
+        const normalize = catalog.normalizeFamilyKey || ((value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ''));
+        Object.entries(payload.families).forEach(([family, skus]) => {
+          if (!Array.isArray(skus) || skus.length === 0) return;
+          const key = normalize(family);
+          if (!key) return;
+          const merged = new Set(catalog.familySkus[key] || []);
+          skus.forEach((sku) => {
+            const trimmed = String(sku || '').trim();
+            if (trimmed) merged.add(trimmed);
+          });
+          catalog.familySkus[key] = [...merged].sort();
+        });
+        setSkuCatalogVersion((value) => value + 1);
+      })
+      .catch(() => { /* non-fatal */ });
+    return () => { cancelled = true; };
+  }, []);
 
   const queryFilters = useMemo(() => {
     const next = {
@@ -3055,7 +3102,7 @@ function App() {
   const reportingViews = useMemo(() => visibleViews.filter((view) => view.navGroup !== 'admin').sort((left, right) => left.label.localeCompare(right.label)), [visibleViews]);
   const adminViews = useMemo(() => visibleViews.filter((view) => view.navGroup === 'admin').sort((left, right) => left.label.localeCompare(right.label)), [visibleViews]);
 
-  const recommenderFamilySkuOptions = useMemo(() => getRecommenderFamilySkuOptions(filters.family), [filters.family]);
+  const recommenderFamilySkuOptions = useMemo(() => getRecommenderFamilySkuOptions(filters.family), [filters.family, skuCatalogVersion]);
   const recommendationTargetSkuOptions = useMemo(() => {
     const options = new Set();
     (Array.isArray(capacityData.rows) ? capacityData.rows : []).forEach((row) => {
@@ -3072,13 +3119,31 @@ function App() {
     });
     return [...options].sort((left, right) => compareSkuValues(left, right));
   }, [capacityData.rows, recommenderFamilySkuOptions]);
+  const recommendationSkuPickerOptions = useMemo(() => {
+    if (recommenderFamilySkuOptions.length > 0) {
+      return recommenderFamilySkuOptions;
+    }
+
+    return recommendationTargetSkuOptions;
+  }, [recommendationTargetSkuOptions, recommenderFamilySkuOptions]);
+  const selectedScopedSku = useMemo(() => {
+    if (!filters.sku || filters.sku === 'all') {
+      return '';
+    }
+
+    const normalized = normalizeSkuName(filters.sku);
+    return recommendationTargetSkuOptions.includes(normalized) ? normalized : '';
+  }, [filters.sku, recommendationTargetSkuOptions]);
   const fastRecommendedTargetSku = useMemo(() => defaultRecommendTargetSkuFromRows(capacityData.rows, recommenderFamilySkuOptions), [capacityData.rows, recommenderFamilySkuOptions]);
   const recommendedTargetSku = useMemo(() => {
+    if (selectedScopedSku) {
+      return selectedScopedSku;
+    }
     if (filters.family && filters.family !== 'all') {
       return String(fastRecommendedTargetSku || capacityAnalytics.recommendedTargetSku || '').trim();
     }
     return String(capacityAnalytics.recommendedTargetSku || fastRecommendedTargetSku || '').trim();
-  }, [capacityAnalytics.recommendedTargetSku, fastRecommendedTargetSku, filters.family]);
+  }, [capacityAnalytics.recommendedTargetSku, fastRecommendedTargetSku, filters.family, selectedScopedSku]);
   const recommendedRegions = useMemo(() => defaultRecommendRegionsFromFilters(filters, capacityData.facets.regions, []), [filters, capacityData.facets.regions]);
   const scopedRegionOptions = useMemo(() => {
     const baseOptions = activeView === 'ai-model-availability' || activeView === 'ai-summary-report'
@@ -3638,7 +3703,7 @@ function App() {
         setShowSqlPreview(Boolean(uiSettingsPayload.settings && uiSettingsPayload.settings.showSqlPreview));
         setAppStatus(bootstrapWarning
           ? { tone: 'warning', message: bootstrapWarning }
-          : { tone: 'success', message: 'React v2 loaded. Use the right-side flyout to manage large filter sets.' });
+          : { tone: 'info', message: '' });
       } catch (error) {
         setAppStatus({ tone: 'error', message: error.message || 'Failed to initialize React experience.' });
       } finally {
@@ -4739,7 +4804,7 @@ function App() {
     }
     if (activeView === 'recommender') {
       const recommendations = Array.isArray(recommendState.result && recommendState.result.recommendations) ? recommendState.result.recommendations : [];
-      return <div className="rx-view-stack"><Banner tone={recommendState.status.tone} message={recommendState.status.message} detail={recommendState.status.detail} /><section className="rx-panel"><div className="rx-panel__header"><div><h2>Capacity Recommender</h2><p>Same backend recommendation API, but staged into a clearer React workflow.</p></div></div><div className="rx-field-grid rx-field-grid--filters"><label className="rx-field"><span>Target SKU</span><input className="rx-input" list="recommend-target-sku-options" value={recommendState.targetSku} onChange={(event) => setRecommendState({ ...recommendState, targetSku: normalizeSkuName(event.target.value), autoTargetSku: recommendState.autoTargetSku })} placeholder="Standard_D4s_v5" /><datalist id="recommend-target-sku-options">{recommendationTargetSkuOptions.map((sku) => <option key={sku} value={sku}>{sku}</option>)}</datalist></label><label className="rx-field"><span>Regions</span><input className="rx-input" value={recommendState.regions} onChange={(event) => setRecommendState({ ...recommendState, regions: event.target.value, autoRegions: recommendState.autoRegions })} placeholder="eastus,westus2" /></label><label className="rx-field"><span>Top N</span><input className="rx-input" type="number" min="1" max="25" value={recommendState.topN} onChange={(event) => setRecommendState({ ...recommendState, topN: Number(event.target.value || 10) })} /></label><label className="rx-field"><span>Min Score</span><input className="rx-input" type="number" min="0" max="100" value={recommendState.minScore} onChange={(event) => setRecommendState({ ...recommendState, minScore: Number(event.target.value || 50) })} /></label></div><div className="rx-inline-actions"><span className="rx-selected-count">Scoped default SKU: {recommendedTargetSku || 'n/a'}</span><span className="rx-selected-count">Scoped default Regions: {recommendedRegions || 'n/a'}</span>{recommenderFamilySkuOptions.length > 0 ? <span className="rx-selected-count">Known SKUs in family: {recommenderFamilySkuOptions.length}</span> : null}<label className="rx-check"><input type="checkbox" checked={recommendState.showPricing} onChange={(event) => setRecommendState({ ...recommendState, showPricing: event.target.checked })} />Show pricing</label><label className="rx-check"><input type="checkbox" checked={recommendState.showSpot} onChange={(event) => setRecommendState({ ...recommendState, showSpot: event.target.checked })} />Show spot</label><button className="rx-button" type="button" disabled={recommendState.busy} onClick={runRecommendation}>{recommendState.busy ? 'Running...' : 'Run Recommendation'}</button></div></section><DataTable title="Recommendation Results" columns={[{ key: 'rank', label: '#' }, { key: 'sku', label: 'SKU', render: (row) => normalizeSkuName(row.sku) || 'n/a' }, { key: 'region', label: 'Region' }, { key: 'vCPU', label: 'vCPU' }, { key: 'memGiB', label: 'Mem(GB)' }, { key: 'score', label: 'Score', render: (row) => `${row.score || 0}%` }, { key: 'cpu', label: 'CPU' }, { key: 'disk', label: 'Disk' }, { key: 'purpose', label: 'Type' }, { key: 'capacity', label: 'Capacity', render: (row) => <StatusPill value={row.capacity} /> }, { key: 'zonesOK', label: 'Zones' }, { key: 'priceHr', label: '$/Hr', render: (row) => formatMoney(row.priceHr, 2) }, { key: 'priceMo', label: '$/Mo', render: (row) => formatMoney(row.priceMo, 0) }]} rows={recommendations} emptyMessage="Run a recommendation to see results." /></div>;
+      return <div className="rx-view-stack"><Banner tone={recommendState.status.tone} message={recommendState.status.message} detail={recommendState.status.detail} /><section className="rx-panel"><div className="rx-panel__header"><div><h2>Capacity Recommender</h2><p>Same backend recommendation API, but staged into a clearer React workflow.</p></div></div><div className="rx-field-grid rx-field-grid--filters"><label className="rx-field"><span>Target SKU</span><select className="rx-input" value={recommendationSkuPickerOptions.includes(recommendState.targetSku) ? recommendState.targetSku : ''} onChange={(event) => setRecommendState({ ...recommendState, targetSku: normalizeSkuName(event.target.value), autoTargetSku: recommendState.autoTargetSku })} disabled={recommendationSkuPickerOptions.length === 0}><option value="">{recommendationSkuPickerOptions.length > 0 ? 'Pick scoped size' : 'No scoped SKUs available'}</option>{recommendationSkuPickerOptions.map((sku) => <option key={sku} value={sku}>{sku}</option>)}</select></label><label className="rx-field"><span>Regions</span><input className="rx-input" value={recommendState.regions} onChange={(event) => setRecommendState({ ...recommendState, regions: event.target.value, autoRegions: recommendState.autoRegions })} placeholder="eastus,westus2" /></label><label className="rx-field"><span>Top N</span><input className="rx-input" type="number" min="1" max="25" value={recommendState.topN} onChange={(event) => setRecommendState({ ...recommendState, topN: Number(event.target.value || 10) })} /></label><label className="rx-field"><span>Min Score</span><input className="rx-input" type="number" min="0" max="100" value={recommendState.minScore} onChange={(event) => setRecommendState({ ...recommendState, minScore: Number(event.target.value || 50) })} /></label></div><div className="rx-inline-actions"><span className="rx-selected-count">Scoped default SKU: {recommendedTargetSku || 'n/a'}</span><span className="rx-selected-count">Scoped default Regions: {recommendedRegions || 'n/a'}</span>{selectedScopedSku ? <span className="rx-selected-count">Sidebar SKU pinned: {selectedScopedSku}</span> : null}{recommenderFamilySkuOptions.length > 0 ? <span className="rx-selected-count">Known SKUs in family: {recommenderFamilySkuOptions.length}</span> : null}<label className="rx-check"><input type="checkbox" checked={recommendState.showPricing} onChange={(event) => setRecommendState({ ...recommendState, showPricing: event.target.checked })} />Show pricing</label><label className="rx-check"><input type="checkbox" checked={recommendState.showSpot} onChange={(event) => setRecommendState({ ...recommendState, showSpot: event.target.checked })} />Show spot</label><button className="rx-button" type="button" disabled={recommendState.busy} onClick={runRecommendation}>{recommendState.busy ? 'Running...' : 'Run Recommendation'}</button></div></section><DataTable title="Recommendation Results" columns={[{ key: 'rank', label: '#' }, { key: 'sku', label: 'SKU', render: (row) => normalizeSkuName(row.sku) || 'n/a' }, { key: 'region', label: 'Region' }, { key: 'vCPU', label: 'vCPU' }, { key: 'memGiB', label: 'Mem(GB)' }, { key: 'score', label: 'Score', render: (row) => `${row.score || 0}%` }, { key: 'cpu', label: 'CPU' }, { key: 'disk', label: 'Disk' }, { key: 'purpose', label: 'Type' }, { key: 'capacity', label: 'Capacity', render: (row) => <StatusPill value={row.capacity} /> }, { key: 'zonesOK', label: 'Zones' }, { key: 'priceHr', label: '$/Hr', render: (row) => formatMoney(row.priceHr, 2) }, { key: 'priceMo', label: '$/Mo', render: (row) => formatMoney(row.priceMo, 0) }]} rows={recommendations} emptyMessage="Run a recommendation to see results." /></div>;
     }
     if (activeView === 'paas-availability') {
       return <div className="rx-view-stack"><section className="rx-panel rx-panel--compact"><div className="rx-panel__header"><div><h2>PaaS Availability</h2><p>Runs the vendored Get-AzPaaSAvailability scanner, then serves the latest saved snapshot from SQL for fast reloads.</p></div></div><div className="rx-field-grid rx-field-grid--filters"><label className="rx-field"><span>Service Scope</span><select value={paasState.filters.service} onChange={(event) => setPaaSState((current) => ({ ...current, filters: { ...current.filters, service: event.target.value } }))}>{PAAS_SERVICE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label></div><div className="rx-inline-actions"><span className="rx-selected-count">Regional scope: {filters.region && filters.region !== 'all' ? filters.region : (filters.regionPreset || 'all preset')}</span><span className="rx-selected-count">Subscription scope: {paasSubscriptionScope}</span><span className="rx-selected-count">Latest run: {paasState.capturedAtUtc ? formatTimestamp(paasState.capturedAtUtc) : 'none yet'}</span><button className="rx-button" type="button" disabled={paasState.busy.refresh} onClick={refreshPaaSAvailability}>{paasState.busy.refresh ? 'Refreshing...' : 'Refresh PaaS Availability'}</button></div><Banner tone={paasState.status.tone} message={paasState.status.message} detail={paasSubscriptionNote} /></section><section className="rx-panel rx-panel--compact rx-panel--muted"><div className="rx-panel__header"><div><h2>Snapshot Summary</h2><p>Displayed counts honor the sidebar regional scope. Refresh uses the same scope, but subscription selection does not apply to PaaS yet.</p></div></div><div className="rx-summary-grid"><article className="rx-metric-card"><span>Entries</span><strong>{formatNumber(filteredPaaSData.rowCount)}</strong></article><article className="rx-metric-card"><span>Services</span><strong>{formatNumber(filteredPaaSData.facets.services.length)}</strong></article><article className="rx-metric-card"><span>Regions</span><strong>{formatNumber(filteredPaaSData.facets.regions.length)}</strong></article><article className="rx-metric-card"><span>Categories</span><strong>{formatNumber(filteredPaaSData.facets.categories.length)}</strong></article></div><p className="rx-selected-count">Snapshot subscription scope: {paasSubscriptionScope}. {paasSubscriptionNote}</p></section><SortableMatrixTable title="PaaS Region Matrix" subtitle="Service-by-region readiness across the current sidebar scope using the latest saved PaaS scan rows." tableClassName="rx-matrix-table rx-matrix-table--paas" primaryColumn={{ key: 'service', label: 'Service', render: (row) => formatPaaSMatrixServiceLabel(row.service) }} statusColumn={{ key: 'rowStatus', label: 'Key', render: (row) => <StatusPill value={row.rowStatus === 'CAUTION' ? 'PARTIAL' : row.rowStatus} />, sortValue: (row) => getStatusSortValue(row.rowStatus) }} readyColumn={{ key: 'readyRegionCount', label: 'Ready', render: (row) => formatNumber(row.readyRegionCount) }} dynamicColumns={transposedPaaSMatrix.regions.map((region) => ({ key: region, label: region }))} rows={transposedPaaSMatrix.rows} emptyMessage="No PaaS matrix rows available for the current scope." rowKey={(row) => row.service} getRowClassName={(row) => `rx-matrix-row rx-matrix-row--${String(row.rowStatus || 'blocked').toLowerCase()}`} getDynamicSortValue={(row, region) => { const cell = row.regionMap[region]; return getStatusSortValue(transposedPaaSMatrix.resolveCellStatus(cell), cell && cell.availableCount); }} renderDynamicCell={(row, region) => { const cell = row.regionMap[region]; const status = transposedPaaSMatrix.resolveCellStatus(cell); return <div className="rx-matrix-cell">{status === 'EMPTY' ? <span className="rx-matrix-cell__empty">-</span> : <><StatusPill value={status} />{cell && cell.availableCount > 1 ? <span className="rx-matrix-cell__count">{formatNumber(cell.availableCount)}</span> : null}</>}</div>; }} /><DataTable title="PaaS Snapshot Rows" subtitle="Latest persisted scan rows served from SQL, filtered by the sidebar regional scope. Subscription scope is shown above." tableClassName="rx-table--dense" sectionClassName="rx-panel--compact" columns={[{ key: 'service', label: 'Service' }, { key: 'region', label: 'Region' }, { key: 'category', label: 'Category' }, { key: 'name', label: 'Name', render: (row) => row.displayName || row.name || 'n/a' }, { key: 'edition', label: 'Edition', render: (row) => row.edition || 'n/a' }, { key: 'tier', label: 'Tier', render: (row) => row.tier || 'n/a' }, { key: 'status', label: 'Status', render: (row) => <StatusPill value={row.status || (row.available ? 'Available' : 'Unknown')} /> }, { key: 'quotaCurrent', label: 'Quota Used', render: (row) => formatNullableNumber(row.quotaCurrent) }, { key: 'quotaLimit', label: 'Quota Limit', render: (row) => formatNullableNumber(row.quotaLimit) }, { key: 'metric', label: 'Metric', render: (row) => formatPaaSMetric(row), sortValue: (row) => `${row.metricPrimary || ''}|${row.metricSecondary || ''}` }]} rows={filteredPaaSRows} pageSize={25} emptyMessage="No PaaS snapshot rows available for the current sidebar scope." /></div>;

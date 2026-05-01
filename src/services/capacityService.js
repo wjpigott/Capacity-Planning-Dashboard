@@ -1,5 +1,5 @@
 const sql = require('mssql');
-const { getSqlPool, getSubscriptionsFromTable, getLatestLivePlacementSnapshots } = require('../store/sql');
+const { getSqlPool, getSubscriptionsFromTable, getLatestLivePlacementSnapshots, ensureVmSkuCatalogSchema } = require('../store/sql');
 const { mockRows } = require('../store/mockCapacity');
 const { getRegionsForPreset } = require('../config/regionPresets');
 const { CapacityDetailDTO, SubscriptionSummaryDTO, FamilySummaryDTO, TrendDTO, PaginationDTO } = require('../models/dtos');
@@ -1288,6 +1288,96 @@ async function getCapacityScoreSummaryPaginated(filters = {}, pageNumber = 1, pa
   };
 }
 
+let skuFamilyCatalogCache = { fetchedAt: 0, payload: null };
+const SKU_FAMILY_CATALOG_TTL_MS = Number(process.env.SKU_FAMILY_CATALOG_TTL_MS || 5 * 60 * 1000);
+
+async function getSkuFamilyCatalog({ forceRefresh = false } = {}) {
+  const now = Date.now();
+  if (!forceRefresh && skuFamilyCatalogCache.payload && (now - skuFamilyCatalogCache.fetchedAt) < SKU_FAMILY_CATALOG_TTL_MS) {
+    return skuFamilyCatalogCache.payload;
+  }
+
+  const pool = await getSqlPool();
+  if (!pool) {
+    const families = {};
+    mockRows.forEach((row) => {
+      const family = String(row?.family || '').trim();
+      const sku = String(row?.sku || '').trim();
+      if (!family || !sku) return;
+      if (!families[family]) families[family] = new Set();
+      families[family].add(sku);
+    });
+    const payload = {
+      source: 'mock',
+      fetchedAt: new Date().toISOString(),
+      families: Object.fromEntries(Object.entries(families).map(([key, set]) => [key, [...set].sort()]))
+    };
+    skuFamilyCatalogCache = { fetchedAt: now, payload };
+    return payload;
+  }
+
+  // Make sure the catalog table exists even if startup warmup hasn't completed yet.
+  try {
+    await ensureVmSkuCatalogSchema(pool);
+  } catch (err) {
+    console.warn('[getSkuFamilyCatalog] ensureVmSkuCatalogSchema failed, falling back to CapacitySnapshot only:', err?.message || err);
+  }
+
+  // Trigger a non-blocking ARM seed if the catalog is currently empty. The first
+  // request returns whatever is in CapacitySnapshot (typically just the
+  // representative SKU per family); later requests pick up the seeded rows.
+  try {
+    const empty = await pool.request().query(`SELECT TOP 1 1 AS hit FROM dbo.VmSkuCatalog`);
+    if (!empty.recordset || empty.recordset.length === 0) {
+      const livePlacementService = require('./livePlacementService');
+      if (typeof livePlacementService.seedVmSkuCatalogIfEmpty === 'function') {
+        livePlacementService.seedVmSkuCatalogIfEmpty().then((result) => {
+          if (result?.seeded) {
+            console.log(`[VmSkuCatalog] Seeded ${result.count} rows from ARM (region=${result.region}).`);
+          }
+        }).catch((err) => {
+          console.warn('[VmSkuCatalog] background seed failed:', err?.message || err);
+        });
+      }
+    }
+  } catch (err) {
+    // Table may not exist yet — already handled above; ignore here.
+  }
+
+  const result = await pool.request().query(`
+    SELECT skuFamily, skuName
+    FROM dbo.VmSkuCatalog
+    WHERE skuFamily IS NOT NULL AND LEN(skuFamily) > 0
+      AND skuName IS NOT NULL AND LEN(skuName) > 0
+    UNION
+    SELECT DISTINCT skuFamily, skuName
+    FROM dbo.CapacitySnapshot
+    WHERE skuFamily IS NOT NULL AND LEN(skuFamily) > 0
+      AND skuName IS NOT NULL AND LEN(skuName) > 0
+  `);
+
+  const families = {};
+  for (const row of result.recordset) {
+    const family = String(row.skuFamily || '').trim();
+    const sku = String(row.skuName || '').trim();
+    if (!family || !sku) continue;
+    if (!families[family]) families[family] = new Set();
+    families[family].add(sku);
+  }
+  const familyMap = {};
+  Object.keys(families).sort().forEach((key) => {
+    familyMap[key] = [...families[key]].sort();
+  });
+
+  const payload = {
+    source: 'VmSkuCatalog+CapacitySnapshot',
+    fetchedAt: new Date().toISOString(),
+    families: familyMap
+  };
+  skuFamilyCatalogCache = { fetchedAt: now, payload };
+  return payload;
+}
+
 module.exports = {
   getCapacityRows,
   getCapacityRowsPaginated,
@@ -1299,5 +1389,6 @@ module.exports = {
   deriveCapacityTrendRows,
   deriveCapacityScoreRows,
   getCapacityScoreSummary,
-  getCapacityScoreSummaryPaginated
+  getCapacityScoreSummaryPaginated,
+  getSkuFamilyCatalog
 };

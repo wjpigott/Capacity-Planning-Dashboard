@@ -1060,6 +1060,7 @@ $script:RunContext = [pscustomobject]@{
     UsingActualPricing = $false
     ScanOutput         = $null
     RecommendOutput    = $null
+    Performance        = [ordered]@{}
     ShowPlacement      = $false
     DesiredCount       = 1
     Caches             = [ordered]@{
@@ -2179,6 +2180,24 @@ function Get-ValidAzureRegions {
     }
 }
 
+function Get-ComputeRegionsFromAzLocation {
+    <#
+    .SYNOPSIS
+        Returns compute-capable Azure regions using Get-AzLocation.
+    .DESCRIPTION
+        Used as a targeted fallback when the subscription locations REST API omits a
+        region that was explicitly requested. This keeps validation strict for typos
+        without dropping legitimate regions because of environment-specific metadata.
+    #>
+    [OutputType([string[]])]
+    param()
+
+    return @(Get-AzLocation -ErrorAction Stop |
+        Where-Object { $_.Providers -contains 'Microsoft.Compute' } |
+        Select-Object -ExpandProperty Location |
+        ForEach-Object { $_.ToLower() })
+}
+
 function Get-RestrictionReason {
     param([object]$Sku)
     if ($Sku.Restrictions -and $Sku.Restrictions.Count -gt 0) {
@@ -3201,6 +3220,37 @@ function Invoke-RecommendMode {
 
     $targetSku = $null
     $targetRegionStatus = @()
+    $recommendStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $targetLookupStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+    function Add-RecommendDiagnostics {
+        param(
+            [Parameter(Mandatory)][pscustomobject]$Contract,
+            [Parameter(Mandatory)][hashtable]$RecommendMetrics,
+            [Parameter(Mandatory)][int]$CandidateCount,
+            [Parameter(Mandatory)][int]$RankedCount,
+            [Parameter(Mandatory)][int]$BelowMinSpecCount,
+            [Parameter(Mandatory)][int]$TargetRegionCount,
+            [Parameter(Mandatory)][int]$SubscriptionCount,
+            [Parameter(Mandatory)][int]$RegionCount
+        )
+
+        $Contract | Add-Member -NotePropertyName diagnostics -NotePropertyValue ([pscustomobject]@{
+            performance = [ordered]@{
+                pricing = $RunContext.Performance.Pricing
+                dataCollection = $RunContext.Performance.DataCollection
+                recommend = $RecommendMetrics
+            }
+            counts = [ordered]@{
+                subscriptionCount = $SubscriptionCount
+                scannedRegionCount = $RegionCount
+                targetRegionCount = $TargetRegionCount
+                candidateCount = $CandidateCount
+                rankedCount = $RankedCount
+                belowMinSpecCount = $BelowMinSpecCount
+            }
+        }) -Force
+    }
 
     foreach ($subData in $SubscriptionData) {
         foreach ($data in $subData.RegionData) {
@@ -3219,6 +3269,7 @@ function Invoke-RecommendMode {
             }
         }
     }
+    $targetLookupStopwatch.Stop()
 
     if (-not $targetSku) {
         Write-Host "`nSKU '$TargetSkuName' was not found in any scanned region." -ForegroundColor Red
@@ -3226,6 +3277,7 @@ function Invoke-RecommendMode {
         return
     }
 
+    $targetProfileStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $targetCaps = Get-SkuCapabilities -Sku $targetSku
     $targetProcessor = Get-ProcessorVendor -SkuName $targetSku.Name
     $targetHasNvme = $targetCaps.NvmeSupport
@@ -3251,8 +3303,10 @@ function Invoke-RecommendMode {
         UncachedDiskBytesPerSecond = $targetCaps.UncachedDiskBytesPerSecond
         EncryptionAtHostSupported = $targetCaps.EncryptionAtHostSupported
     }
+    $targetProfileStopwatch.Stop()
 
     # Score all candidate SKUs across all regions
+    $candidateBuildStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $candidates = [System.Collections.Generic.List[object]]::new()
     foreach ($subData in $SubscriptionData) {
         foreach ($data in $subData.RegionData) {
@@ -3369,8 +3423,10 @@ function Invoke-RecommendMode {
             }
         }
     }
+    $candidateBuildStopwatch.Stop()
 
     # Apply minimum spec filters and separate smaller options for callout
+    $filterRankStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $belowMinSpecDict = @{}
     $filtered = @($candidates)
     if ($MinvCPU) {
@@ -3442,7 +3498,9 @@ function Invoke-RecommendMode {
             }
         }
     }
+    $filterRankStopwatch.Stop()
 
+    $placementLookupStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     if ($ShowPlacement) {
         $placementScores = Get-PlacementScores -SkuNames @($ranked | Select-Object -ExpandProperty SKU) -Regions @($ranked | Select-Object -ExpandProperty Region) -DesiredCount $DesiredCount -MaxRetries $MaxRetries -Caches $RunContext.Caches
         $ranked = @($ranked | ForEach-Object {
@@ -3506,6 +3564,9 @@ function Invoke-RecommendMode {
                 }
             })
     }
+    $placementLookupStopwatch.Stop()
+
+    $compatWarningStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
     # Compatibility warning detection (shared by JSON and console output)
     $compatWarnings = @()
@@ -3533,9 +3594,30 @@ function Invoke-RecommendMode {
     if ($uniqueAccelNet.Count -gt 1) {
         $compatWarnings += "Mixed accelerated networking support — network performance will vary across the inventory."
     }
+    $compatWarningStopwatch.Stop()
+
+    $outputBuildStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
     $RunContext.RecommendOutput = New-RecommendOutputContract -TargetProfile $targetProfile -TargetAvailability @($targetRegionStatus) -RankedRecommendations @($ranked) -Warnings @($compatWarnings) -BelowMinSpec @($belowMinSpec) -MinScore $MinScore -TopN $TopN -FetchPricing ([bool]$FetchPricing) -ShowPlacement ([bool]$ShowPlacement) -ShowSpot ([bool]$ShowSpot
     )
+    $outputBuildStopwatch.Stop()
+    $recommendStopwatch.Stop()
+
+    $recommendMetrics = [ordered]@{
+        totalMs = [math]::Round($recommendStopwatch.Elapsed.TotalMilliseconds, 0)
+        targetLookupMs = [math]::Round($targetLookupStopwatch.Elapsed.TotalMilliseconds, 0)
+        targetProfileMs = [math]::Round($targetProfileStopwatch.Elapsed.TotalMilliseconds, 0)
+        candidateBuildMs = [math]::Round($candidateBuildStopwatch.Elapsed.TotalMilliseconds, 0)
+        filterRankMs = [math]::Round($filterRankStopwatch.Elapsed.TotalMilliseconds, 0)
+        placementLookupMs = [math]::Round($placementLookupStopwatch.Elapsed.TotalMilliseconds, 0)
+        compatWarningMs = [math]::Round($compatWarningStopwatch.Elapsed.TotalMilliseconds, 0)
+        outputBuildMs = [math]::Round($outputBuildStopwatch.Elapsed.TotalMilliseconds, 0)
+    }
+    $RunContext.Performance.RecommendMode = $recommendMetrics
+
+    $subscriptionCount = @($SubscriptionData).Count
+    $regionCount = [int](@($SubscriptionData | ForEach-Object { @($_.RegionData).Count } | Measure-Object -Sum).Sum)
+    Add-RecommendDiagnostics -Contract $RunContext.RecommendOutput -RecommendMetrics $recommendMetrics -CandidateCount $candidates.Count -RankedCount @($ranked).Count -BelowMinSpecCount @($belowMinSpec).Count -TargetRegionCount @($targetRegionStatus).Count -SubscriptionCount $subscriptionCount -RegionCount $regionCount
 
     if ($JsonOutput) {
         $RunContext.RecommendOutput | ConvertTo-Json -Depth 6
@@ -4443,6 +4525,28 @@ else {
             $invalidRegions += $region
         }
     }
+
+    if ($invalidRegions.Count -gt 0) {
+        try {
+            $fallbackRegions = Get-ComputeRegionsFromAzLocation
+            if ($fallbackRegions.Count -gt 0) {
+                $stillInvalidRegions = @()
+                foreach ($region in $invalidRegions) {
+                    if ($fallbackRegions -contains $region) {
+                        $validatedRegions += $region
+                        Write-Verbose "Accepted region '$region' via Get-AzLocation fallback."
+                    }
+                    else {
+                        $stillInvalidRegions += $region
+                    }
+                }
+                $invalidRegions = @($stillInvalidRegions)
+            }
+        }
+        catch {
+            Write-Verbose "Get-AzLocation fallback validation failed: $($_.Exception.Message)"
+        }
+    }
 }
 
 if ($invalidRegions.Count -gt 0) {
@@ -4459,6 +4563,8 @@ if ($validatedRegions.Count -eq 0) {
     Write-Host "Example valid regions: eastus, westus2, centralus, westeurope, eastasia" -ForegroundColor Gray
     throw "No valid regions to scan. Specify valid Azure region names."
 }
+
+$Regions = @($validatedRegions | Select-Object -Unique)
 
 $Regions = $validatedRegions
 
@@ -4791,6 +4897,7 @@ Write-Host ""
 # Fetch pricing data if enabled
 $script:RunContext.RegionPricing = @{}
 $script:RunContext.UsingActualPricing = $false
+$pricingStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
 if ($FetchPricing) {
     # Auto-detect: Try negotiated pricing first, fall back to retail
@@ -4825,6 +4932,13 @@ if ($FetchPricing) {
         Write-Host "$($Icons.Check) Using retail pricing (Linux pay-as-you-go)" -ForegroundColor DarkGray
     }
 }
+$pricingStopwatch.Stop()
+$script:RunContext.Performance.Pricing = [ordered]@{
+    enabled = [bool]$FetchPricing
+    usingActualPricing = [bool]$script:RunContext.UsingActualPricing
+    totalMs = [math]::Round($pricingStopwatch.Elapsed.TotalMilliseconds, 0)
+    regionCount = $script:RunContext.RegionPricing.Count
+}
 
 $allSubscriptionData = @()
 
@@ -4834,6 +4948,8 @@ $initialSubscriptionId = if ($initialAzContext -and $initialAzContext.Subscripti
 # Outer try/finally ensures Az context is restored even if Ctrl+C or PipelineStoppedException
 # interrupts parallel scanning, results processing, or export
 $scanStartTime = Get-Date
+$dataCollectionStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+$subscriptionScanTimings = [System.Collections.Generic.List[object]]::new()
 try {
     try {
         foreach ($subId in $TargetSubIds) {
@@ -5108,6 +5224,13 @@ try {
 
         $scanElapsed = (Get-Date) - $subscriptionScanStartTime
         Write-Host "[$subName] Scan complete in $([math]::Round($scanElapsed.TotalSeconds, 1))s" -ForegroundColor Green
+        $subscriptionScanTimings.Add([pscustomobject]@{
+            subscriptionId = $subId
+            subscriptionName = $subName
+            regionCount = @($regionData).Count
+            scanMode = if ($canUseParallel) { 'parallel' } else { 'sequential' }
+            scanMs = [math]::Round($scanElapsed.TotalMilliseconds, 0)
+        }) | Out-Null
 
         $allSubscriptionData += @{
             SubscriptionId   = $subId
@@ -5119,6 +5242,13 @@ try {
 catch {
     Write-Verbose "Scan loop interrupted: $($_.Exception.Message)"
     throw
+}
+$dataCollectionStopwatch.Stop()
+$script:RunContext.Performance.DataCollection = [ordered]@{
+    totalMs = [math]::Round($dataCollectionStopwatch.Elapsed.TotalMilliseconds, 0)
+    subscriptionCount = @($allSubscriptionData).Count
+    requestedRegions = @($Regions).Count
+    perSubscription = @($subscriptionScanTimings)
 }
 
 #endregion Data Collection
@@ -6510,13 +6640,15 @@ if (($LifecycleRecommendations -or $LifecycleScan) -and $lifecycleEntries.Count 
 #region Recommend Mode
 
 if ($Recommend) {
+    $recommendProfileCache = @{}
     Invoke-RecommendMode -TargetSkuName $Recommend -SubscriptionData $allSubscriptionData `
         -FamilyInfo $FamilyInfo -Icons $Icons -FetchPricing ([bool]$FetchPricing) `
         -ShowSpot $ShowSpot.IsPresent -ShowPlacement $ShowPlacement.IsPresent `
         -AllowMixedArch $AllowMixedArch.IsPresent -MinvCPU $MinvCPU -MinMemoryGB $MinMemoryGB `
         -MinScore $MinScore -TopN $TopN -DesiredCount $DesiredCount `
         -JsonOutput $JsonOutput.IsPresent -MaxRetries $MaxRetries `
-        -RunContext $script:RunContext -OutputWidth $script:OutputWidth
+        -RunContext $script:RunContext -OutputWidth $script:OutputWidth `
+        -SkuProfileCache $recommendProfileCache
     return
 }
 

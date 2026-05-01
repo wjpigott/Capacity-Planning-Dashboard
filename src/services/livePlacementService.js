@@ -3,6 +3,7 @@ const { execFile } = require('child_process');
 const https = require('https');
 const path = require('path');
 const { pipeline } = require('stream/promises');
+const { DefaultAzureCredential } = require('@azure/identity');
 const { getCapacityScoreSummary } = require('./capacityService');
 const { getRegionsForPreset } = require('../config/regionPresets');
 const { saveLivePlacementSnapshots, logDashboardOperation, insertDashboardErrorLog } = require('../store/sql');
@@ -14,7 +15,11 @@ const DEFAULT_MAX_REGIONS_PER_CALL = 8;
 const POWERSHELL_RELEASE_API = 'https://api.github.com/repos/PowerShell/PowerShell/releases/latest';
 const DEFAULT_WORKER_TIMEOUT_MS = 60000;
 const DEFAULT_RECOMMENDATION_WORKER_TIMEOUT_MS = 180000;
+const DEFAULT_RECOMMENDATION_OUTPUT_BUFFER_BYTES = 8 * 1024 * 1024;
 const DEFAULT_MAX_LIVE_PLACEMENT_CALLS = 10;
+const ARM_SCOPE = 'https://management.azure.com/.default';
+const ARM_BASE = 'https://management.azure.com';
+const PLACEMENT_API_VERSION = '2025-06-05';
 
 let portablePowerShellPromise;
 let azModuleBootstrapPromise;
@@ -26,6 +31,7 @@ let livePlacementSchedulerConfig = {
   runOnStartup: false
 };
 let livePlacementRefreshInProgress = false;
+let armCredential;
 
 function normalizeSkuName(value) {
   const trimmed = String(value || '').trim();
@@ -221,6 +227,134 @@ function resolvePlacementRepoRoot() {
   }
 
   return path.resolve(__dirname, '..', '..', '..', 'Get-AzVMAvailability');
+}
+
+function getArmCredential() {
+  if (!armCredential) {
+    const managedIdentityClientId = process.env.INGEST_MSI_CLIENT_ID || process.env.AZURE_CLIENT_ID || process.env.SQL_MSI_CLIENT_ID;
+    armCredential = new DefaultAzureCredential({ managedIdentityClientId });
+  }
+
+  return armCredential;
+}
+
+async function getArmAccessToken() {
+  const token = await getArmCredential().getToken(ARM_SCOPE);
+  if (!token || !token.token) {
+    throw new Error('Failed to acquire an Azure Resource Manager token with DefaultAzureCredential.');
+  }
+
+  return token.token;
+}
+
+function extractPlacementRows(payload) {
+  if (Array.isArray(payload?.placementScores)) {
+    return payload.placementScores;
+  }
+
+  if (Array.isArray(payload?.rows)) {
+    return payload.rows;
+  }
+
+  if (Array.isArray(payload?.value)) {
+    return payload.value;
+  }
+
+  return [];
+}
+
+function normalizePlacementScoreRows(payload) {
+  return extractPlacementRows(payload)
+    .map((row) => {
+      const sku = normalizeSkuName(row?.sku || row?.Sku || row?.skuName || row?.SkuName || row?.vmSize || row?.VmSize || row?.armSkuName || row?.ArmSkuName || '');
+      const region = String(row?.region || row?.Region || row?.location || row?.Location || row?.armRegionName || row?.ArmRegionName || '')
+        .trim()
+        .toLowerCase();
+      const scoreValue = row?.score ?? row?.Score ?? row?.placementScore ?? row?.PlacementScore ?? row?.availabilityScore ?? row?.AvailabilityScore ?? null;
+      const score = scoreValue == null || scoreValue === '' ? 'N/A' : String(scoreValue);
+      const isAvailable = row?.isQuotaAvailable ?? row?.IsQuotaAvailable ?? row?.isAvailable ?? row?.IsAvailable ?? null;
+      const isRestricted = row?.isRestricted ?? row?.IsRestricted ?? null;
+
+      if (!sku || !region) {
+        return null;
+      }
+
+      return {
+        sku,
+        region,
+        score,
+        isAvailable: typeof isAvailable === 'boolean' ? isAvailable : null,
+        isRestricted: typeof isRestricted === 'boolean' ? isRestricted : null
+      };
+    })
+    .filter(Boolean);
+}
+
+async function runPlacementLookupDirect({ subscriptionId, skus, regions, desiredCount }) {
+  const normalizedSubscriptionId = String(subscriptionId || '').trim();
+  const normalizedSkus = [...new Set((Array.isArray(skus) ? skus : []).map(normalizeSkuName).filter(Boolean))];
+  const normalizedRegions = [...new Set((Array.isArray(regions) ? regions : []).map((region) => String(region || '').trim().toLowerCase()).filter(Boolean))];
+
+  if (!normalizedSubscriptionId) {
+    throw new Error('Live placement direct lookup requires a subscription id.');
+  }
+
+  if (normalizedSkus.length === 0 || normalizedRegions.length === 0) {
+    return {
+      rows: [],
+      diagnostics: {
+        executionMode: 'local-app-service-direct-rest',
+        transport: 'arm-rest',
+        warning: 'Live placement direct lookup skipped because no valid SKU or region values were provided.'
+      }
+    };
+  }
+
+  const anchorRegion = normalizedRegions[0];
+  const token = await getArmAccessToken();
+  const url = `${ARM_BASE}/subscriptions/${encodeURIComponent(normalizedSubscriptionId)}/providers/Microsoft.Compute/locations/${encodeURIComponent(anchorRegion)}/placementScores/spot/generate?api-version=${PLACEMENT_API_VERSION}`;
+  const requestBody = {
+    desiredLocations: normalizedRegions,
+    desiredSizes: normalizedSkus.map((sku) => ({ sku })),
+    desiredCount: Math.max(1, Math.min(Number(desiredCount) || 1, 1000))
+  };
+  const startedAt = Date.now();
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(requestBody)
+  });
+  const elapsedMs = Date.now() - startedAt;
+  const rawText = await response.text();
+  const payload = parseJsonFromMixedOutput(rawText) ?? rawText;
+
+  if (!response.ok) {
+    const detail = typeof payload === 'string'
+      ? payload
+      : (payload?.error?.message || payload?.message || JSON.stringify(payload));
+    const error = new Error(`Direct placement REST failed (${response.status}) for ${anchorRegion}: ${detail}`);
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
+  }
+
+  return {
+    rows: normalizePlacementScoreRows(payload),
+    diagnostics: {
+      executionMode: 'local-app-service-direct-rest',
+      transport: 'arm-rest',
+      subscriptionId: normalizedSubscriptionId,
+      anchorRegion,
+      requestedSkus: normalizedSkus,
+      requestedRegions: normalizedRegions,
+      requestedDesiredCount: requestBody.desiredCount,
+      elapsedMs,
+      apiVersion: PLACEMENT_API_VERSION
+    }
+  };
 }
 
 function resolveRuntimeRoot() {
@@ -711,7 +845,16 @@ function chunk(items, size) {
   return output;
 }
 
-async function runPlacementLookupLocal({ skus, regions, desiredCount }) {
+async function runPlacementLookupLocal({ subscriptionId, skus, regions, desiredCount }) {
+  let directError = null;
+  if (subscriptionId) {
+    try {
+      return await runPlacementLookupDirect({ subscriptionId, skus, regions, desiredCount });
+    } catch (error) {
+      directError = error;
+    }
+  }
+
   const wrapperPath = resolvePlacementWrapperPath();
   const repoRoot = resolvePlacementRepoRoot();
   const powerShellRuntime = await getPowerShellCommands();
@@ -759,7 +902,10 @@ async function runPlacementLookupLocal({ skus, regions, desiredCount }) {
             }
 
             const detail = stderr?.trim() || stdout?.trim() || error.message;
-            reject(new Error(`Live placement lookup failed: ${detail}`));
+            const combinedDetail = directError
+              ? `Live placement lookup failed after direct REST fallback. Direct REST: ${directError.message}. PowerShell: ${detail}`
+              : `Live placement lookup failed: ${detail}`;
+            reject(new Error(combinedDetail));
             return;
           }
 
@@ -780,6 +926,7 @@ async function runPlacementLookupLocal({ skus, regions, desiredCount }) {
               ? {
                   ...parsed.diagnostics,
                   executionMode: parsed?.diagnostics?.executionMode || 'local-app-service',
+                  transport: parsed?.diagnostics?.transport || 'powershell-wrapper',
                   shellCommand: command,
                   runtimeRoot: powerShellRuntime.diagnostics.runtimeRoot,
                   portablePwshPath: powerShellRuntime.diagnostics.portablePwshPath,
@@ -789,10 +936,12 @@ async function runPlacementLookupLocal({ skus, regions, desiredCount }) {
                   archiveSizeBytes: powerShellRuntime.diagnostics.archiveSizeBytes,
                   extractedEntries: powerShellRuntime.diagnostics.extractedEntries,
                   bootstrapError: powerShellRuntime.diagnostics.bootstrapError,
-                  moduleBootstrapError: powerShellRuntime.diagnostics.moduleBootstrapError
+                  moduleBootstrapError: powerShellRuntime.diagnostics.moduleBootstrapError,
+                  directRestFallbackReason: directError?.message || null
                 }
               : {
                   executionMode: 'local-app-service',
+                  transport: 'powershell-wrapper',
                   shellCommand: command,
                   runtimeRoot: powerShellRuntime.diagnostics.runtimeRoot,
                   portablePwshPath: powerShellRuntime.diagnostics.portablePwshPath,
@@ -802,7 +951,8 @@ async function runPlacementLookupLocal({ skus, regions, desiredCount }) {
                   archiveSizeBytes: powerShellRuntime.diagnostics.archiveSizeBytes,
                   extractedEntries: powerShellRuntime.diagnostics.extractedEntries,
                   bootstrapError: powerShellRuntime.diagnostics.bootstrapError,
-                  moduleBootstrapError: powerShellRuntime.diagnostics.moduleBootstrapError
+                  moduleBootstrapError: powerShellRuntime.diagnostics.moduleBootstrapError,
+                  directRestFallbackReason: directError?.message || null
                 };
 
             resolve({
@@ -824,7 +974,7 @@ async function runPlacementLookupLocal({ skus, regions, desiredCount }) {
   });
 }
 
-async function runPlacementLookup({ skus, regions, desiredCount }) {
+async function runPlacementLookup({ subscriptionId, skus, regions, desiredCount }) {
   if (useWorkerFirstMode()) {
     try {
       const remoteResult = await runRemotePlacementLookup({ skus, regions, desiredCount });
@@ -836,7 +986,7 @@ async function runPlacementLookup({ skus, regions, desiredCount }) {
         throw error;
       }
 
-      const localResult = await runPlacementLookupLocal({ skus, regions, desiredCount });
+      const localResult = await runPlacementLookupLocal({ subscriptionId, skus, regions, desiredCount });
       return {
         ...localResult,
         diagnostics: localResult.diagnostics
@@ -855,7 +1005,7 @@ async function runPlacementLookup({ skus, regions, desiredCount }) {
     }
   }
 
-  return runPlacementLookupLocal({ skus, regions, desiredCount });
+  return runPlacementLookupLocal({ subscriptionId, skus, regions, desiredCount });
 }
 
 function buildRegionUnavailableWarning(skus, region) {
@@ -889,11 +1039,11 @@ function batchProducedNoUsefulRows(result) {
   return false;
 }
 
-async function runPlacementLookupResilient({ skus, regions, desiredCount }) {
+async function runPlacementLookupResilient({ subscriptionId, skus, regions, desiredCount }) {
   let initialResult = null;
   let initialError = null;
   try {
-    initialResult = await runPlacementLookup({ skus, regions, desiredCount });
+    initialResult = await runPlacementLookup({ subscriptionId, skus, regions, desiredCount });
   } catch (error) {
     initialError = error;
   }
@@ -959,7 +1109,7 @@ async function runPlacementLookupResilient({ skus, regions, desiredCount }) {
 
   for (const region of regions) {
     try {
-      const result = await runPlacementLookup({ skus, regions: [region], desiredCount });
+      const result = await runPlacementLookup({ subscriptionId, skus, regions: [region], desiredCount });
       const regionRows = Array.isArray(result?.rows) ? result.rows : [];
       const regionWarning = result?.diagnostics?.warning || null;
 
@@ -1049,6 +1199,7 @@ async function runRecommendationLookupLocal({ targetSku, regions, topN, minScore
   }
 
   const timeoutMs = resolveRecommendationWorkerTimeoutMs(Array.isArray(regions) ? regions.length : 1);
+  const maxBufferBytes = Number(process.env.CAPACITY_RECOMMEND_MAX_BUFFER_BYTES || DEFAULT_RECOMMENDATION_OUTPUT_BUFFER_BYTES);
 
   function tryCommand(commandIndex, resolve, reject) {
     if (commandIndex >= commands.length) {
@@ -1066,7 +1217,7 @@ async function runRecommendationLookupLocal({ targetSku, regions, topN, minScore
         {
           cwd: resolveProjectRoot(),
           env,
-          maxBuffer: 2 * 1024 * 1024,
+          maxBuffer: maxBufferBytes,
           timeout: timeoutMs
         },
         (error, stdout, stderr) => {
@@ -1087,6 +1238,8 @@ async function runRecommendationLookupLocal({ targetSku, regions, topN, minScore
             minScore,
             showPricing,
             showSpot,
+            timeoutMs,
+            maxBufferBytes,
             stdoutLength: stdoutText.length,
             stderrLength: stderrText.length,
             stdoutSnippet: stdoutText.slice(0, 500),
@@ -1096,6 +1249,11 @@ async function runRecommendationLookupLocal({ targetSku, regions, topN, minScore
           if (error) {
             if (error.code === 'ENOENT') {
               tryCommand(commandIndex + 1, resolve, reject);
+              return;
+            }
+
+            if (error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' || /maxBuffer/i.test(String(error.message || ''))) {
+              reject(new Error(`Capacity recommendation failed: recommendation output exceeded the child-process buffer (${maxBufferBytes} bytes). Reduce the request scope or increase CAPACITY_RECOMMEND_MAX_BUFFER_BYTES. | Context: ${JSON.stringify(outputContext)}`));
               return;
             }
 
@@ -1330,6 +1488,7 @@ async function getCapacityRecommendations(options = {}) {
 
 async function getLivePlacementScoreRows(filters = {}) {
   const selectedSubscriptionIds = parseCsv(filters.subscriptionIds);
+  const selectedSubscriptionId = selectedSubscriptionIds[0] || null;
   if (selectedSubscriptionIds.length !== 1) {
     const scopeError = new Error(selectedSubscriptionIds.length === 0
       ? 'Live placement refresh requires exactly one selected subscription. Choose the specific subscription that needs additional capacity before refreshing.'
@@ -1450,6 +1609,7 @@ async function getLivePlacementScoreRows(filters = {}) {
     for (const regionChunk of regionChunks) {
       try {
         const chunkResult = await runPlacementLookupResilient({
+          subscriptionId: selectedSubscriptionId,
           skus: skuChunk,
           regions: regionChunk,
           desiredCount: effectiveDesiredCount
@@ -1757,6 +1917,8 @@ module.exports = {
     normalizeSkuName,
     isAggregateSkuName,
     normalizeRecommendationContract,
-    parseExtraSkus
+    parseExtraSkus,
+    runPlacementLookupDirect,
+    runPlacementLookupLocal
   }
 };

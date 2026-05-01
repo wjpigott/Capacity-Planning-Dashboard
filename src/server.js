@@ -2323,7 +2323,15 @@ app.post('/api/capacity/recommendations', async (req, res) => {
     res.json({ ok: true, result });
   } catch (err) {
     const status = err.statusCode || (err.message.includes('not found') || err.message.includes('not configured') ? 503 : 500);
-    sendErrorResponse(res, { status, clientMessage: 'Failed to retrieve capacity recommendations.', err, scope: 'api/capacity/recommendations' });
+    sendErrorResponse(res, {
+      status,
+      clientMessage: 'Failed to retrieve capacity recommendations.',
+      err,
+      scope: 'api/capacity/recommendations',
+      extra: {
+        detail: err && err.message ? String(err.message).slice(0, 4000) : null
+      }
+    });
   }
 });
 

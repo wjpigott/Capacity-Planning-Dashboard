@@ -52,6 +52,8 @@ Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
             loginAttempted = [bool]$caches.LoginAttempted
             currentSubscriptionId = $caches.CurrentSubscriptionId
             warning = $caches.LastPlacementWarning
+            transport = $caches.LastPlacementTransport
+            restError = $caches.LastPlacementRestError
             errorType = $caches.LastPlacementErrorType
             errorRecord = $caches.LastPlacementErrorRecord
         }

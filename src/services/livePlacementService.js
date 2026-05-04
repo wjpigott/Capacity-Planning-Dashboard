@@ -8,9 +8,10 @@ const { getCapacityScoreSummary } = require('./capacityService');
 const { getRegionsForPreset } = require('../config/regionPresets');
 const { saveLivePlacementSnapshots, logDashboardOperation, insertDashboardErrorLog } = require('../store/sql');
 
-// The current Dev worker/Az.Compute path is reliable for one SKU per request.
-// Larger multi-SKU batches can return a non-JSON service payload that the cmdlet cannot parse.
-const DEFAULT_MAX_SKUS_PER_CALL = 1;
+// The ARM placement score API supports up to five SKUs per request. The worker and
+// web fallback use direct REST before falling back to the Az.Compute cmdlet, which
+// avoids the cmdlet parser issue and reduces API throttling from one-call-per-SKU.
+const DEFAULT_MAX_SKUS_PER_CALL = 5;
 const DEFAULT_MAX_REGIONS_PER_CALL = 8;
 const POWERSHELL_RELEASE_API = 'https://api.github.com/repos/PowerShell/PowerShell/releases/latest';
 const DEFAULT_WORKER_TIMEOUT_MS = 60000;
@@ -207,6 +208,10 @@ function useWorkerFirstMode() {
 
 function shouldDisableLocalFallback() {
   return String(process.env.CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK || '').toLowerCase() === 'true';
+}
+
+function shouldUseRemotePlacementWorker() {
+  return useWorkerFirstMode() && String(process.env.CAPACITY_LIVE_PLACEMENT_USE_WORKER || 'true').toLowerCase() !== 'false';
 }
 
 function shouldUseDirectRecommendationApi() {
@@ -1704,10 +1709,28 @@ async function runPlacementLookupLocal({ subscriptionId, skus, regions, desiredC
 }
 
 async function runPlacementLookup({ subscriptionId, skus, regions, desiredCount }) {
-  if (useWorkerFirstMode()) {
+  if (shouldUseRemotePlacementWorker()) {
     try {
       const remoteResult = await runRemotePlacementLookup({ skus, regions, desiredCount });
       if (remoteResult) {
+        if (remotePlacementResultShouldFallback(remoteResult) && !shouldDisableLocalFallback()) {
+          const localResult = await runPlacementLookupLocal({ subscriptionId, skus, regions, desiredCount });
+          return {
+            ...localResult,
+            diagnostics: localResult.diagnostics
+              ? {
+                  ...localResult.diagnostics,
+                  executionMode: 'function-app-empty-result-fallback',
+                  workerUrl: resolveWorkerBaseUrl(),
+                  fallbackReason: remoteResult.diagnostics?.warning || remoteResult.diagnostics?.restError || 'Remote worker returned no live placement rows.'
+                }
+              : {
+                  executionMode: 'function-app-empty-result-fallback',
+                  workerUrl: resolveWorkerBaseUrl(),
+                  fallbackReason: remoteResult.diagnostics?.warning || remoteResult.diagnostics?.restError || 'Remote worker returned no live placement rows.'
+                }
+          };
+        }
         return remoteResult;
       }
     } catch (error) {
@@ -1766,6 +1789,12 @@ function batchProducedNoUsefulRows(result) {
     return true;
   }
   return false;
+}
+
+function remotePlacementResultShouldFallback(result) {
+  const rows = Array.isArray(result?.rows) ? result.rows : [];
+  const warning = result?.diagnostics?.warning || result?.diagnostics?.restError || null;
+  return rows.length === 0 && warning && isRegionUnavailableWarningText(warning);
 }
 
 async function runPlacementLookupResilient({ subscriptionId, skus, regions, desiredCount }) {

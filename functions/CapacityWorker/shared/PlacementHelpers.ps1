@@ -161,6 +161,103 @@ function Ensure-AzureContext {
     return $false
 }
 
+function Get-ArmAccessTokenValue {
+    $tokenResult = Get-AzAccessToken -ResourceUrl 'https://management.azure.com/' -ErrorAction Stop
+    $tokenValue = $tokenResult.Token
+
+    if ($tokenValue -is [System.Security.SecureString]) {
+        $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($tokenValue)
+        try {
+            return [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+        }
+        finally {
+            [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+        }
+    }
+
+    return [string]$tokenValue
+}
+
+function Add-PlacementRowsToScoreMap {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Scores,
+
+        [object[]]$PlacementRows
+    )
+
+    foreach ($row in @($PlacementRows)) {
+        if ($null -eq $row) { continue }
+
+        $sku = @($row.Sku, $row.sku, $row.SkuName, $row.VmSize, $row.ArmSkuName) | Where-Object { $_ } | Select-Object -First 1
+        $region = @($row.Region, $row.region, $row.Location, $row.ArmRegionName) | Where-Object { $_ } | Select-Object -First 1
+        $score = @($row.Score, $row.score, $row.PlacementScore, $row.AvailabilityScore) | Where-Object { $_ } | Select-Object -First 1
+
+        if (-not $sku -or -not $region) { continue }
+
+        $isAvailable = $null
+        if ($null -ne $row.IsAvailable) { $isAvailable = [bool]$row.IsAvailable }
+        elseif ($null -ne $row.isAvailable) { $isAvailable = [bool]$row.isAvailable }
+        elseif ($null -ne $row.isQuotaAvailable) { $isAvailable = [bool]$row.isQuotaAvailable }
+
+        $isRestricted = $null
+        if ($null -ne $row.IsRestricted) { $isRestricted = [bool]$row.IsRestricted }
+        elseif ($null -ne $row.isRestricted) { $isRestricted = [bool]$row.isRestricted }
+
+        $Scores["$sku|$($region.ToString().ToLower())"] = [pscustomobject]@{
+            Score        = if ($score) { $score.ToString() } else { 'N/A' }
+            IsAvailable  = $isAvailable
+            IsRestricted = $isRestricted
+        }
+    }
+}
+
+function Invoke-SpotPlacementScoreRest {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SubscriptionId,
+
+        [Parameter(Mandatory = $true)]
+        [string]$AnchorRegion,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$SkuNames,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$Regions,
+
+        [ValidateRange(1, 1000)]
+        [int]$DesiredCount = 1,
+
+        [switch]$IncludeAvailabilityZone,
+
+        [int]$MaxRetries = 3
+    )
+
+    $encodedSubscriptionId = [System.Uri]::EscapeDataString($SubscriptionId)
+    $encodedAnchorRegion = [System.Uri]::EscapeDataString($AnchorRegion)
+    $uri = "https://management.azure.com/subscriptions/$encodedSubscriptionId/providers/Microsoft.Compute/locations/$encodedAnchorRegion/placementScores/spot/generate?api-version=2025-06-05"
+    $body = @{
+        desiredLocations = @($Regions)
+        desiredSizes = @($SkuNames | ForEach-Object { @{ sku = $_ } })
+        desiredCount = $DesiredCount
+    }
+
+    if ($IncludeAvailabilityZone.IsPresent) {
+        $body.availabilityZones = $true
+    }
+
+    $accessToken = Get-ArmAccessTokenValue
+    return Invoke-WithRetry -MaxRetries $MaxRetries -OperationName 'Spot Placement Score REST API' -ScriptBlock {
+        Invoke-RestMethod `
+            -Method Post `
+            -Uri $uri `
+            -Headers @{ Authorization = "Bearer $accessToken"; 'Content-Type' = 'application/json' } `
+            -Body ($body | ConvertTo-Json -Depth 8 -Compress) `
+            -ErrorAction Stop
+    }
+}
+
 function Get-PlacementScores {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'DesiredCount', Justification = 'Used inside Invoke-WithRetry scriptblock closure')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'IncludeAvailabilityZone', Justification = 'Used inside Invoke-WithRetry scriptblock closure')]
@@ -208,6 +305,29 @@ function Get-PlacementScores {
         @{ sku = $_ }
     })
 
+    $subscriptionId = @(
+        $Caches.CurrentSubscriptionId,
+        [System.Environment]::GetEnvironmentVariable('CAPACITY_SUBSCRIPTION_ID'),
+        [System.Environment]::GetEnvironmentVariable('AZURE_SUBSCRIPTION_ID'),
+        [System.Environment]::GetEnvironmentVariable('ARM_SUBSCRIPTION_ID')
+    ) | Where-Object { $_ } | Select-Object -First 1
+
+    if ($subscriptionId -and (Get-Command -Name 'Get-AzAccessToken' -ErrorAction SilentlyContinue)) {
+        try {
+            $restResponse = Invoke-SpotPlacementScoreRest -SubscriptionId $subscriptionId -AnchorRegion $anchorRegion -SkuNames $normalizedSkus -Regions $normalizedRegions -DesiredCount $DesiredCount -IncludeAvailabilityZone:$IncludeAvailabilityZone.IsPresent -MaxRetries $MaxRetries
+            $restRows = @($restResponse.placementScores)
+            if ($restRows.Count -gt 0) {
+                Add-PlacementRowsToScoreMap -Scores $scores -PlacementRows $restRows
+                $Caches.LastPlacementWarning = $null
+                $Caches.LastPlacementTransport = 'arm-rest'
+                return $scores
+            }
+        }
+        catch {
+            $Caches.LastPlacementRestError = $_.Exception.Message
+        }
+    }
+
     try {
         $response = Invoke-WithRetry -MaxRetries $MaxRetries -OperationName 'Spot Placement Score API' -ScriptBlock {
             Invoke-AzSpotPlacementScore -Location $anchorRegion -DesiredLocation $normalizedRegions -DesiredSize $desiredSizes -DesiredCount $DesiredCount -AvailabilityZone:$IncludeAvailabilityZone.IsPresent -ErrorAction Stop
@@ -246,19 +366,7 @@ function Get-PlacementScores {
     }
 
     foreach ($row in $placementRows) {
-        if ($null -eq $row) { continue }
-
-        $sku = @($row.Sku, $row.SkuName, $row.VmSize, $row.ArmSkuName) | Where-Object { $_ } | Select-Object -First 1
-        $region = @($row.Region, $row.Location, $row.ArmRegionName) | Where-Object { $_ } | Select-Object -First 1
-        $score = @($row.Score, $row.PlacementScore, $row.AvailabilityScore) | Where-Object { $_ } | Select-Object -First 1
-
-        if (-not $sku -or -not $region) { continue }
-
-        $scores["$sku|$($region.ToString().ToLower())"] = [pscustomobject]@{
-            Score        = if ($score) { $score.ToString() } else { 'N/A' }
-            IsAvailable  = if ($null -ne $row.IsAvailable) { [bool]$row.IsAvailable } else { $null }
-            IsRestricted = if ($null -ne $row.IsRestricted) { [bool]$row.IsRestricted } else { $null }
-        }
+        Add-PlacementRowsToScoreMap -Scores $scores -PlacementRows @($row)
     }
 
     return $scores

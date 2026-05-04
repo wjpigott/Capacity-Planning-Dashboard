@@ -325,6 +325,18 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
           value: 'https://${functionApp.properties.defaultHostName}'
         }
         {
+          name: 'CAPACITY_RECOMMEND_USE_DIRECT_API'
+          value: 'true'
+        }
+        {
+          name: 'CAPACITY_RECOMMEND_SUBSCRIPTION_ID'
+          value: subscription().subscriptionId
+        }
+        {
+          name: 'CAPACITY_RECOMMEND_WORKER_TIMEOUT_MS'
+          value: '180000'
+        }
+        {
           name: 'CAPACITY_WORKER_SHARED_SECRET'
           value: workerSharedSecretKeyVaultReference
         }

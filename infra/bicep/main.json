@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.42.1.51946",
-      "templateHash": "3312965050892631690"
+      "templateHash": "12867441080284439969"
     }
   },
   "parameters": {
@@ -487,6 +487,18 @@
             {
               "name": "CAPACITY_WORKER_BASE_URL",
               "value": "[format('https://{0}', reference('functionApp').defaultHostName)]"
+            },
+            {
+              "name": "CAPACITY_RECOMMEND_USE_DIRECT_API",
+              "value": "true"
+            },
+            {
+              "name": "CAPACITY_RECOMMEND_SUBSCRIPTION_ID",
+              "value": "[subscription().subscriptionId]"
+            },
+            {
+              "name": "CAPACITY_RECOMMEND_WORKER_TIMEOUT_MS",
+              "value": "180000"
             },
             {
               "name": "CAPACITY_WORKER_SHARED_SECRET",

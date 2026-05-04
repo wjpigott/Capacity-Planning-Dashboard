@@ -176,6 +176,8 @@ Optional worker-first settings:
 - `CAPACITY_WORKER_SHARED_SECRET`
 - `CAPACITY_WORKER_TOKEN_AUDIENCE`
 - `CAPACITY_WORKER_TIMEOUT_MS`
+- `CAPACITY_RECOMMEND_USE_DIRECT_API` - defaults to `true` in the Bicep/Terraform web app deployments so Capacity Recommender uses the faster in-process Azure REST path first
+- `CAPACITY_RECOMMEND_SUBSCRIPTION_ID` - defaults to the deployment subscription in Bicep/Terraform
 - `CAPACITY_RECOMMEND_WORKER_TIMEOUT_MS`
 - `CAPACITY_LIVE_REFRESH_MAX_CALLS`
 - `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK`

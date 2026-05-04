@@ -1,36 +1,36 @@
 locals {
-  use_existing_sql_server              = trimspace(var.existing_sql_server_name) != ""
-  use_existing_sql_database            = trimspace(var.existing_sql_database_name) != ""
-  use_existing_key_vault               = trimspace(var.existing_key_vault_name) != ""
-  use_existing_worker_storage_account  = trimspace(var.existing_worker_storage_account_name) != ""
-  app_service_plan_name              = "asp-capdash-${var.environment}-${var.workload_suffix}"
-  worker_plan_name                   = "asp-capdash-worker-${var.environment}-${var.workload_suffix}"
-  web_app_name                       = "app-capdash-${var.environment}-${var.workload_suffix}"
-  function_app_name                  = "func-capdash-${var.environment}-${var.workload_suffix}-appsvc"
-  function_storage_name              = "stcap${var.environment}${random_string.storage_suffix.result}"
-  app_insights_name                  = "appi-capdash-${var.environment}-${var.workload_suffix}"
-  log_analytics_name                 = "log-capdash-${var.environment}-${var.workload_suffix}"
-  key_vault_name                     = var.key_vault_name_override != "" ? var.key_vault_name_override : "kv-capdash-${var.environment}-${var.workload_suffix}"
-  sql_server_name                    = "sql-capdash-${var.environment}-${var.workload_suffix}"
-  sql_database_name                  = "sqldb-capdash-${var.environment}"
-  vnet_name                          = "vnet-capdash-${var.environment}-${var.workload_suffix}"
-  app_service_integration_subnet     = "snet-appsvc-integration"
-  private_endpoint_subnet            = "snet-private-endpoints"
-  sql_private_endpoint_name          = "pep-sql-capdash-${var.environment}-${var.workload_suffix}"
-  sql_private_dns_zone_name          = "privatelink.database.windows.net"
-  sql_private_dns_zone_vnet_link     = "pdz-link-capdash-${var.environment}-${var.workload_suffix}"
-  kv_private_endpoint_name           = "pep-kv-capdash-${var.environment}-${var.workload_suffix}"
-  kv_private_dns_zone_name           = "privatelink.vaultcore.azure.net"
-  kv_private_dns_zone_vnet_link      = "pdz-link-kv-capdash-${var.environment}-${var.workload_suffix}"
-  effective_auth_redirect_uri        = var.auth_redirect_uri != "" ? var.auth_redirect_uri : "https://${local.web_app_name}.azurewebsites.net/auth/callback"
-  effective_sql_server_resource_group_name = var.existing_sql_server_resource_group_name != "" ? var.existing_sql_server_resource_group_name : azurerm_resource_group.rg.name
-  effective_sql_server_name                = local.use_existing_sql_server ? var.existing_sql_server_name : local.sql_server_name
-  effective_sql_server_fqdn                = endswith(local.effective_sql_server_name, ".database.windows.net") ? local.effective_sql_server_name : "${local.effective_sql_server_name}.database.windows.net"
-  effective_sql_database_name              = local.use_existing_sql_database ? var.existing_sql_database_name : local.sql_database_name
-  effective_key_vault_resource_group_name  = var.existing_key_vault_resource_group_name != "" ? var.existing_key_vault_resource_group_name : azurerm_resource_group.rg.name
-  effective_key_vault_name                 = local.use_existing_key_vault ? var.existing_key_vault_name : local.key_vault_name
-  effective_key_vault_id                   = local.use_existing_key_vault ? data.azurerm_key_vault.kv[0].id : azurerm_key_vault.kv[0].id
-  effective_key_vault_uri                  = local.use_existing_key_vault ? data.azurerm_key_vault.kv[0].vault_uri : azurerm_key_vault.kv[0].vault_uri
+  use_existing_sql_server                      = trimspace(var.existing_sql_server_name) != ""
+  use_existing_sql_database                    = trimspace(var.existing_sql_database_name) != ""
+  use_existing_key_vault                       = trimspace(var.existing_key_vault_name) != ""
+  use_existing_worker_storage_account          = trimspace(var.existing_worker_storage_account_name) != ""
+  app_service_plan_name                        = "asp-capdash-${var.environment}-${var.workload_suffix}"
+  worker_plan_name                             = "asp-capdash-worker-${var.environment}-${var.workload_suffix}"
+  web_app_name                                 = "app-capdash-${var.environment}-${var.workload_suffix}"
+  function_app_name                            = "func-capdash-${var.environment}-${var.workload_suffix}-appsvc"
+  function_storage_name                        = "stcap${var.environment}${random_string.storage_suffix.result}"
+  app_insights_name                            = "appi-capdash-${var.environment}-${var.workload_suffix}"
+  log_analytics_name                           = "log-capdash-${var.environment}-${var.workload_suffix}"
+  key_vault_name                               = var.key_vault_name_override != "" ? var.key_vault_name_override : "kv-capdash-${var.environment}-${var.workload_suffix}"
+  sql_server_name                              = "sql-capdash-${var.environment}-${var.workload_suffix}"
+  sql_database_name                            = "sqldb-capdash-${var.environment}"
+  vnet_name                                    = "vnet-capdash-${var.environment}-${var.workload_suffix}"
+  app_service_integration_subnet               = "snet-appsvc-integration"
+  private_endpoint_subnet                      = "snet-private-endpoints"
+  sql_private_endpoint_name                    = "pep-sql-capdash-${var.environment}-${var.workload_suffix}"
+  sql_private_dns_zone_name                    = "privatelink.database.windows.net"
+  sql_private_dns_zone_vnet_link               = "pdz-link-capdash-${var.environment}-${var.workload_suffix}"
+  kv_private_endpoint_name                     = "pep-kv-capdash-${var.environment}-${var.workload_suffix}"
+  kv_private_dns_zone_name                     = "privatelink.vaultcore.azure.net"
+  kv_private_dns_zone_vnet_link                = "pdz-link-kv-capdash-${var.environment}-${var.workload_suffix}"
+  effective_auth_redirect_uri                  = var.auth_redirect_uri != "" ? var.auth_redirect_uri : "https://${local.web_app_name}.azurewebsites.net/auth/callback"
+  effective_sql_server_resource_group_name     = var.existing_sql_server_resource_group_name != "" ? var.existing_sql_server_resource_group_name : azurerm_resource_group.rg.name
+  effective_sql_server_name                    = local.use_existing_sql_server ? var.existing_sql_server_name : local.sql_server_name
+  effective_sql_server_fqdn                    = endswith(local.effective_sql_server_name, ".database.windows.net") ? local.effective_sql_server_name : "${local.effective_sql_server_name}.database.windows.net"
+  effective_sql_database_name                  = local.use_existing_sql_database ? var.existing_sql_database_name : local.sql_database_name
+  effective_key_vault_resource_group_name      = var.existing_key_vault_resource_group_name != "" ? var.existing_key_vault_resource_group_name : azurerm_resource_group.rg.name
+  effective_key_vault_name                     = local.use_existing_key_vault ? var.existing_key_vault_name : local.key_vault_name
+  effective_key_vault_id                       = local.use_existing_key_vault ? data.azurerm_key_vault.kv[0].id : azurerm_key_vault.kv[0].id
+  effective_key_vault_uri                      = local.use_existing_key_vault ? data.azurerm_key_vault.kv[0].vault_uri : azurerm_key_vault.kv[0].vault_uri
   effective_worker_storage_resource_group_name = var.existing_worker_storage_account_resource_group_name != "" ? var.existing_worker_storage_account_resource_group_name : azurerm_resource_group.rg.name
   effective_worker_storage_name                = local.use_existing_worker_storage_account ? var.existing_worker_storage_account_name : local.function_storage_name
   ingest_api_key_secret_name                   = "capdash-ingest-api-key"
@@ -154,11 +154,11 @@ resource "azurerm_service_plan" "worker" {
 # Web App
 # ──────────────────────────────────────────────
 resource "azurerm_windows_web_app" "web" {
-  name                = local.web_app_name
-  location            = var.location
-  resource_group_name = azurerm_resource_group.rg.name
-  service_plan_id     = azurerm_service_plan.web.id
-  https_only          = true
+  name                      = local.web_app_name
+  location                  = var.location
+  resource_group_name       = azurerm_resource_group.rg.name
+  service_plan_id           = azurerm_service_plan.web.id
+  https_only                = true
   virtual_network_subnet_id = azurerm_subnet.app_service_integration.id
 
   identity {
@@ -166,9 +166,9 @@ resource "azurerm_windows_web_app" "web" {
   }
 
   site_config {
-    ftps_state        = "Disabled"
-    minimum_tls_version = "1.2"
-    http2_enabled     = true
+    ftps_state             = "Disabled"
+    minimum_tls_version    = "1.2"
+    http2_enabled          = true
     vnet_route_all_enabled = true
   }
 
@@ -186,6 +186,9 @@ resource "azurerm_windows_web_app" "web" {
     "SQL_DATABASE"                          = local.effective_sql_database_name
     "SQL_AUTH_MODE"                         = "managed-identity"
     "CAPACITY_WORKER_BASE_URL"              = "https://${azurerm_windows_function_app.worker.default_hostname}"
+    "CAPACITY_RECOMMEND_USE_DIRECT_API"     = "true"
+    "CAPACITY_RECOMMEND_SUBSCRIPTION_ID"    = data.azurerm_client_config.current.subscription_id
+    "CAPACITY_RECOMMEND_WORKER_TIMEOUT_MS"  = "180000"
     "CAPACITY_WORKER_SHARED_SECRET"         = local.worker_shared_secret_key_vault_reference
     "INGEST_API_KEY"                        = local.ingest_api_key_key_vault_reference
     "SESSION_SECRET"                        = local.session_secret_key_vault_reference
@@ -209,9 +212,9 @@ module "dashboard_web_redirect_uris" {
   count  = var.manage_entra_web_redirect_uri && var.auth_enabled && var.entra_client_id != "" ? 1 : 0
   source = "./modules/dashboard-web-redirect-uris"
 
-  client_id             = var.entra_client_id
+  client_id              = var.entra_client_id
   generated_redirect_uri = local.effective_auth_redirect_uri
-  extra_redirect_uris   = var.extra_entra_web_redirect_uris
+  extra_redirect_uris    = var.extra_entra_web_redirect_uris
 
   depends_on = [azurerm_windows_web_app.web]
 }
@@ -220,28 +223,28 @@ module "dashboard_web_redirect_uris" {
 # Function App (Worker)
 # ──────────────────────────────────────────────
 resource "azurerm_windows_function_app" "worker" {
-  name                       = local.function_app_name
-  location                   = var.location
-  resource_group_name        = azurerm_resource_group.rg.name
-  service_plan_id            = azurerm_service_plan.worker.id
-  storage_account_name       = local.effective_worker_storage_name
+  name                          = local.function_app_name
+  location                      = var.location
+  resource_group_name           = azurerm_resource_group.rg.name
+  service_plan_id               = azurerm_service_plan.worker.id
+  storage_account_name          = local.effective_worker_storage_name
   storage_uses_managed_identity = true
-  https_only                 = true
-  virtual_network_subnet_id  = azurerm_subnet.app_service_integration.id
+  https_only                    = true
+  virtual_network_subnet_id     = azurerm_subnet.app_service_integration.id
 
   identity {
     type = "SystemAssigned"
   }
 
   site_config {
-    ftps_state              = "Disabled"
-    minimum_tls_version     = "1.2"
-    http2_enabled           = true
-    always_on               = true
+    ftps_state          = "Disabled"
+    minimum_tls_version = "1.2"
+    http2_enabled       = true
+    always_on           = true
     application_stack {
       powershell_core_version = "7.4"
     }
-    vnet_route_all_enabled  = true
+    vnet_route_all_enabled = true
   }
 
   depends_on = [
@@ -251,10 +254,10 @@ resource "azurerm_windows_function_app" "worker" {
   app_settings = {
     "APPLICATIONINSIGHTS_CONNECTION_STRING" = azurerm_application_insights.ai.connection_string
     "FUNCTIONS_EXTENSION_VERSION"           = "~4"
-    "FUNCTIONS_WORKER_RUNTIME"             = "powershell"
-    "WEBSITE_RUN_FROM_PACKAGE"             = "1"
-    "WEBSITE_DNS_SERVER"                   = "168.63.129.16"
-    "WORKER_SHARED_SECRET"                 = local.worker_shared_secret_key_vault_reference
+    "FUNCTIONS_WORKER_RUNTIME"              = "powershell"
+    "WEBSITE_RUN_FROM_PACKAGE"              = "1"
+    "WEBSITE_DNS_SERVER"                    = "168.63.129.16"
+    "WORKER_SHARED_SECRET"                  = local.worker_shared_secret_key_vault_reference
   }
 }
 
@@ -310,12 +313,12 @@ resource "azurerm_key_vault_secret" "entra_client_secret" {
 # SQL Server & Database
 # ──────────────────────────────────────────────
 resource "azurerm_mssql_server" "sql" {
-  count                          = local.use_existing_sql_server ? 0 : 1
-  name                         = local.sql_server_name
-  resource_group_name          = azurerm_resource_group.rg.name
-  location                     = var.location
-  version                      = "12.0"
-  minimum_tls_version          = "1.2"
+  count                         = local.use_existing_sql_server ? 0 : 1
+  name                          = local.sql_server_name
+  resource_group_name           = azurerm_resource_group.rg.name
+  location                      = var.location
+  version                       = "12.0"
+  minimum_tls_version           = "1.2"
   public_network_access_enabled = var.sql_public_network_access == "Enabled"
 
   azuread_administrator {

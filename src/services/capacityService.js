@@ -354,7 +354,8 @@ function buildCapacityAnalyticsMatrix(matrixRows = []) {
       okCount: Number(row.okCount || 0),
       limitedCount: Number(row.limitedCount || 0),
       constrainedCount: Number(row.constrainedCount || 0),
-      skuCount: Number(row.skuCount || 0)
+      skuCount: Number(row.skuCount || 0),
+      zones: Array.isArray(row.zones) ? row.zones : String(row.zonesCsv || '').split(',').map((zone) => zone.trim()).filter(Boolean)
     };
   });
 
@@ -1169,15 +1170,24 @@ async function getCapacityAnalyticsSummary(filters = {}) {
         const family = normalizeFamilyName(row.family) || row.family || '?';
         const region = row.region;
         const key = `${family}|${region}`;
-        const current = acc.get(key) || { family, region, okCount: 0, limitedCount: 0, constrainedCount: 0, skuCount: new Set() };
+        const current = acc.get(key) || { family, region, okCount: 0, limitedCount: 0, constrainedCount: 0, skuCount: new Set(), zones: new Set() };
         const availability = String(row.availability || '').toUpperCase();
         if (availability === 'OK') current.okCount += 1;
         else if (availability === 'LIMITED') current.limitedCount += 1;
         else if (availability === 'CONSTRAINED' || availability === 'RESTRICTED') current.constrainedCount += 1;
         current.skuCount.add(normalizeSkuName(row.sku));
+        String(row.zonesCsv || '')
+          .split(',')
+          .map((zone) => zone.trim())
+          .filter(Boolean)
+          .forEach((zone) => current.zones.add(zone));
         acc.set(key, current);
         return acc;
-      }, new Map()).values()).map((entry) => ({ ...entry, skuCount: entry.skuCount.size }))),
+      }, new Map()).values()).map((entry) => ({
+        ...entry,
+        skuCount: entry.skuCount.size,
+        zones: [...entry.zones].sort((left, right) => String(left).localeCompare(String(right), undefined, { numeric: true }))
+      }))),
     recommendedTargetSku: topSkuRows[0] ? topSkuRows[0].sku : '',
     aiQuotaProviderOptions: [...new Set(rows
       .filter((row) => getRowResourceType(row) === 'AI')

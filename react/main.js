@@ -746,7 +746,7 @@ function regionMatrixRows(rows, selectedRegion, presetRegions) {
     if (!family || !region) return;
     if (!familyMap.has(family)) familyMap.set(family, {});
     if (!familyMap.get(family)[region]) {
-      familyMap.get(family)[region] = { statuses: new Set(), skus: new Set() };
+      familyMap.get(family)[region] = { statuses: new Set(), skus: new Set(), zones: new Set() };
     }
     const cell = familyMap.get(family)[region];
     const incoming = String(row.availability || '').trim().toUpperCase();
@@ -757,6 +757,7 @@ function regionMatrixRows(rows, selectedRegion, presetRegions) {
     if (sku) {
       cell.skus.add(sku);
     }
+    String(row.zonesCsv || '').split(',').map((zone) => zone.trim()).filter(Boolean).forEach((zone) => cell.zones.add(zone));
   });
 
   function normalizeMatrixStatus(value) {
@@ -807,6 +808,20 @@ function regionMatrixRows(rows, selectedRegion, presetRegions) {
     })),
     resolveCellStatus
   };
+}
+
+function formatMatrixCellZones(cell) {
+  const zones = cell && cell.zones instanceof Set
+    ? [...cell.zones]
+    : (Array.isArray(cell && cell.zones)
+      ? cell.zones
+      : String((cell && cell.zonesCsv) || '').split(','));
+  const normalizedZones = zones.map((zone) => String(zone || '').trim()).filter(Boolean);
+  if (normalizedZones.length === 0) {
+    return 'No zone data';
+  }
+
+  return `Zones ${normalizedZones.sort((left, right) => String(left).localeCompare(String(right), undefined, { numeric: true })).join(', ')}`;
 }
 
 function filterPaaSRowsByScope(rows, regionPreset, selectedRegion) {
@@ -3406,7 +3421,12 @@ function App() {
         { label: 'Family', value: (row) => row.family },
         { label: 'Key', value: (row) => row.rowStatus },
         { label: 'Ready', value: (row) => row.readyRegionCount },
-        ...matrix.regions.map((region) => ({ label: region, value: (row) => matrix.resolveCellStatus(row.regionMap[region]) }))
+        ...matrix.regions.map((region) => ({ label: region, value: (row) => {
+          const cell = row.regionMap[region];
+          const status = matrix.resolveCellStatus(cell);
+          const zones = formatMatrixCellZones(cell);
+          return `${status} (${zones})`;
+        } }))
       ] }];
     }
 
@@ -4826,7 +4846,7 @@ function App() {
       return <DataTable key="family-summary" title="Family Summary" subtitle="Compute-family rollup optimized for quota planning conversations." columns={[{ key: 'family', label: 'Family' }, { key: 'skus', label: 'SKUs', render: (row) => formatNumber(row.skus) }, { key: 'ok', label: 'OK SKUs', render: (row) => formatNumber(row.ok) }, { key: 'largest', label: 'Largest' }, { key: 'zones', label: 'Zones' }, { key: 'status', label: 'Status', render: (row) => <StatusPill value={row.status} /> }, { key: 'quota', label: 'Quota', render: (row) => formatNumber(row.quota) }]} rows={familySummaryRows} emptyMessage="No family summary rows available." />;
     }
     if (activeView === 'region-matrix') {
-      return <div className="rx-view-stack"><section className="rx-panel rx-panel--compact rx-panel--muted"><div className="rx-panel__header"><div><h2>Region Matrix</h2><p>Family-by-region readiness with row rollups and a deployment-status key.</p></div></div><div className="rx-matrix-key"><div className="rx-matrix-key__group"><h3>Row Color</h3><div className="rx-matrix-key__item"><span className="rx-row-swatch rx-row-swatch--ok"></span><div><strong>Green</strong><p>At least one SKU in this family is fully available.</p></div></div><div className="rx-matrix-key__item"><span className="rx-row-swatch rx-row-swatch--caution"></span><div><strong>Yellow</strong><p>Some SKUs may work, but there are constraints.</p></div></div><div className="rx-matrix-key__item"><span className="rx-row-swatch rx-row-swatch--blocked"></span><div><strong>Gray</strong><p>No SKUs from this family available in scanned regions.</p></div></div></div><div className="rx-matrix-key__group"><h3>Cell Status</h3>{['OK', 'CONSTRAINED', 'LIMITED', 'PARTIAL', 'BLOCKED'].map((status) => { const meta = matrixStatusMeta(status); return <div key={status} className="rx-matrix-key__item"><StatusPill value={status} /><div><strong>{meta.short}</strong><p>{meta.description}</p></div></div>; })}</div></div></section><SortableMatrixTable title="Region Matrix Report" subtitle="Rows are highlighted by family-level readiness across the selected region scope." tableClassName="rx-matrix-table" primaryColumn={{ key: 'family', label: 'Family' }} statusColumn={{ key: 'rowStatus', label: 'Key', render: (row) => <StatusPill value={row.rowStatus === 'CAUTION' ? 'PARTIAL' : row.rowStatus} />, sortValue: (row) => getStatusSortValue(row.rowStatus) }} readyColumn={{ key: 'readyRegionCount', label: 'Ready', render: (row) => formatNumber(row.readyRegionCount) }} dynamicColumns={matrix.regions.map((region) => ({ key: region, label: region }))} rows={matrix.rows} emptyMessage="No matrix rows available." rowKey={(row) => row.family} getRowClassName={(row) => `rx-matrix-row rx-matrix-row--${String(row.rowStatus || 'blocked').toLowerCase()}`} getDynamicSortValue={(row, region) => getStatusSortValue(matrix.resolveCellStatus(row.regionMap[region]))} renderDynamicCell={(row, region) => { const status = matrix.resolveCellStatus(row.regionMap[region]); const meta = matrixStatusMeta(status); return <div className="rx-matrix-cell" title={meta.description}><StatusPill value={status} /></div>; }} /></div>;
+      return <div className="rx-view-stack"><section className="rx-panel rx-panel--compact rx-panel--muted"><div className="rx-panel__header"><div><h2>Region Matrix</h2><p>Family-by-region readiness with row rollups and a deployment-status key.</p></div></div><div className="rx-matrix-key"><div className="rx-matrix-key__group"><h3>Row Color</h3><div className="rx-matrix-key__item"><span className="rx-row-swatch rx-row-swatch--ok"></span><div><strong>Green</strong><p>At least one SKU in this family is fully available.</p></div></div><div className="rx-matrix-key__item"><span className="rx-row-swatch rx-row-swatch--caution"></span><div><strong>Yellow</strong><p>Some SKUs may work, but there are constraints.</p></div></div><div className="rx-matrix-key__item"><span className="rx-row-swatch rx-row-swatch--blocked"></span><div><strong>Gray</strong><p>No SKUs from this family available in scanned regions.</p></div></div></div><div className="rx-matrix-key__group"><h3>Cell Status</h3>{['OK', 'CONSTRAINED', 'LIMITED', 'PARTIAL', 'BLOCKED'].map((status) => { const meta = matrixStatusMeta(status); return <div key={status} className="rx-matrix-key__item"><StatusPill value={status} /><div><strong>{meta.short}</strong><p>{meta.description}</p></div></div>; })}</div></div></section><SortableMatrixTable title="Region Matrix Report" subtitle="Rows are highlighted by family-level readiness across the selected region scope." tableClassName="rx-matrix-table" primaryColumn={{ key: 'family', label: 'Family' }} statusColumn={{ key: 'rowStatus', label: 'Key', render: (row) => <StatusPill value={row.rowStatus === 'CAUTION' ? 'PARTIAL' : row.rowStatus} />, sortValue: (row) => getStatusSortValue(row.rowStatus) }} readyColumn={{ key: 'readyRegionCount', label: 'Ready', render: (row) => formatNumber(row.readyRegionCount) }} dynamicColumns={matrix.regions.map((region) => ({ key: region, label: region }))} rows={matrix.rows} emptyMessage="No matrix rows available." rowKey={(row) => row.family} getRowClassName={(row) => `rx-matrix-row rx-matrix-row--${String(row.rowStatus || 'blocked').toLowerCase()}`} getDynamicSortValue={(row, region) => getStatusSortValue(matrix.resolveCellStatus(row.regionMap[region]))} renderDynamicCell={(row, region) => { const cell = row.regionMap[region]; const status = matrix.resolveCellStatus(cell); const meta = matrixStatusMeta(status); const zones = formatMatrixCellZones(cell); const zoneDisplay = zones === 'No zone data' ? 'Zones n/a' : zones; return <div className="rx-matrix-cell rx-matrix-cell--stacked" title={`${meta.description} ${zones}.`}><StatusPill value={status} /><span className="rx-matrix-cell__zones">{zoneDisplay}</span></div>; }} /></div>;
     }
     if (activeView === 'trend') {
       return <TrendReport rows={trendRows} filters={filters} selectedSubscriptionCount={selectedSubscriptionIds.length} totalSubscriptionCount={subscriptionOptions.length} granularity={trendGranularity} onGranularityChange={setTrendGranularity} />;

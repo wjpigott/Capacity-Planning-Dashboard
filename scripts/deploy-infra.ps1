@@ -21,6 +21,10 @@ param(
     [Parameter(Mandatory = $false)][string]$ExistingKeyVaultResourceGroupName,
     [Parameter(Mandatory = $false)][string]$ExistingWorkerStorageAccountName,
     [Parameter(Mandatory = $false)][string]$ExistingWorkerStorageResourceGroupName,
+    [Parameter(Mandatory = $false)][string]$ExistingVirtualNetworkName,
+    [Parameter(Mandatory = $false)][string]$ExistingVirtualNetworkResourceGroupName,
+    [Parameter(Mandatory = $false)][string]$ExistingAppServiceIntegrationSubnetName,
+    [Parameter(Mandatory = $false)][string]$ExistingPrivateEndpointSubnetName,
     [Parameter(Mandatory = $false)][string[]]$WorkerRbacSubscriptionIds = @(),
     [Parameter(Mandatory = $false)][string[]]$WorkerRbacManagementGroupNames = @(),
     [Parameter(Mandatory = $false)][bool]$AssignWorkerComputeRecommendationsRole = $true,
@@ -62,10 +66,18 @@ function Resolve-SqlServerHostName([string]$ServerName) {
 
 $useExistingSqlServer = -not [string]::IsNullOrWhiteSpace($ExistingSqlServerName)
 $useExistingSqlDatabase = -not [string]::IsNullOrWhiteSpace($ExistingSqlDatabaseName)
-$useExistingKeyVault = -not [string]::IsNullOrWhiteSpace($ExistingKeyVaultName)
-$useExistingWorkerStorageAccount = -not [string]::IsNullOrWhiteSpace($ExistingWorkerStorageAccountName)
+$useExistingVirtualNetwork = -not [string]::IsNullOrWhiteSpace($ExistingVirtualNetworkName) -or
+    -not [string]::IsNullOrWhiteSpace($ExistingAppServiceIntegrationSubnetName) -or
+    -not [string]::IsNullOrWhiteSpace($ExistingPrivateEndpointSubnetName)
 if ($useExistingSqlDatabase -and -not $useExistingSqlServer) {
     throw '-ExistingSqlDatabaseName requires -ExistingSqlServerName because an existing Azure SQL database must hang off an existing SQL server.'
+}
+
+if ($useExistingVirtualNetwork -and (
+    [string]::IsNullOrWhiteSpace($ExistingVirtualNetworkName) -or
+    [string]::IsNullOrWhiteSpace($ExistingAppServiceIntegrationSubnetName) -or
+    [string]::IsNullOrWhiteSpace($ExistingPrivateEndpointSubnetName))) {
+    throw '-ExistingVirtualNetworkName, -ExistingAppServiceIntegrationSubnetName, and -ExistingPrivateEndpointSubnetName must be supplied together. -ExistingVirtualNetworkResourceGroupName is optional and defaults to -ResourceGroupName.'
 }
 
 if ([string]::IsNullOrWhiteSpace($ExistingSqlServerResourceGroupName)) {
@@ -78,6 +90,10 @@ if ([string]::IsNullOrWhiteSpace($ExistingKeyVaultResourceGroupName)) {
 
 if ([string]::IsNullOrWhiteSpace($ExistingWorkerStorageResourceGroupName)) {
     $ExistingWorkerStorageResourceGroupName = $ResourceGroupName
+}
+
+if ([string]::IsNullOrWhiteSpace($ExistingVirtualNetworkResourceGroupName)) {
+    $ExistingVirtualNetworkResourceGroupName = $ResourceGroupName
 }
 
 $effectiveSqlServerHostName = if ($useExistingSqlServer) {
@@ -318,6 +334,10 @@ function Deploy-Terraform {
         $tfVars += "-var=existing_key_vault_resource_group_name=$ExistingKeyVaultResourceGroupName"
         $tfVars += "-var=existing_worker_storage_account_name=$ExistingWorkerStorageAccountName"
         $tfVars += "-var=existing_worker_storage_account_resource_group_name=$ExistingWorkerStorageResourceGroupName"
+        $tfVars += "-var=existing_virtual_network_name=$ExistingVirtualNetworkName"
+        $tfVars += "-var=existing_virtual_network_resource_group_name=$ExistingVirtualNetworkResourceGroupName"
+        $tfVars += "-var=existing_app_service_integration_subnet_name=$ExistingAppServiceIntegrationSubnetName"
+        $tfVars += "-var=existing_private_endpoint_subnet_name=$ExistingPrivateEndpointSubnetName"
         if (-not [string]::IsNullOrWhiteSpace($EntraTenantId))         { $tfVars += "-var=entra_tenant_id=$EntraTenantId" }
         if (-not [string]::IsNullOrWhiteSpace($EntraClientId))         { $tfVars += "-var=entra_client_id=$EntraClientId" }
         if (-not [string]::IsNullOrWhiteSpace($EntraClientSecret))     { $tfVars += "-var=entra_client_secret=$EntraClientSecret" }
@@ -384,6 +404,10 @@ $deploymentArgs += @('--parameters', "existingKeyVaultName=$ExistingKeyVaultName
 $deploymentArgs += @('--parameters', "existingKeyVaultResourceGroupName=$ExistingKeyVaultResourceGroupName")
 $deploymentArgs += @('--parameters', "existingWorkerStorageAccountName=$ExistingWorkerStorageAccountName")
 $deploymentArgs += @('--parameters', "existingWorkerStorageAccountResourceGroupName=$ExistingWorkerStorageResourceGroupName")
+$deploymentArgs += @('--parameters', "existingVirtualNetworkName=$ExistingVirtualNetworkName")
+$deploymentArgs += @('--parameters', "existingVirtualNetworkResourceGroupName=$ExistingVirtualNetworkResourceGroupName")
+$deploymentArgs += @('--parameters', "existingAppServiceIntegrationSubnetName=$ExistingAppServiceIntegrationSubnetName")
+$deploymentArgs += @('--parameters', "existingPrivateEndpointSubnetName=$ExistingPrivateEndpointSubnetName")
 
 $deploymentArgs += @('--parameters', "authEnabled=$($AuthEnabled.ToString().ToLowerInvariant())")
 

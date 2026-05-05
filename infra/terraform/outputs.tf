@@ -50,7 +50,7 @@ output "key_vault_name" {
 
 output "virtual_network_name" {
   description = "Virtual network resource name"
-  value       = azurerm_virtual_network.vnet.name
+  value       = local.effective_virtual_network_name
 }
 
 output "sql_private_endpoint_name" {

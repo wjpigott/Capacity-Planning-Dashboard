@@ -93,6 +93,18 @@ param existingWorkerStorageAccountName string = ''
 @description('Resource group that contains the existing worker storage account. Defaults to the deployment resource group when empty.')
 param existingWorkerStorageAccountResourceGroupName string = ''
 
+@description('Existing virtual network name to reuse. When set, the template skips VNet/subnet creation and uses the existing subnet names below.')
+param existingVirtualNetworkName string = ''
+
+@description('Resource group that contains the existing virtual network. Defaults to the deployment resource group when empty.')
+param existingVirtualNetworkResourceGroupName string = ''
+
+@description('Existing subnet name delegated to Microsoft.Web/serverFarms for Web App and Function App VNet integration. Required when existingVirtualNetworkName is set.')
+param existingAppServiceIntegrationSubnetName string = ''
+
+@description('Existing subnet name for SQL and Key Vault private endpoints. Required when existingVirtualNetworkName is set and the template creates private endpoints.')
+param existingPrivateEndpointSubnetName string = ''
+
 @description('Optional subscription IDs where the worker managed identity should receive subscription-level RBAC roles for live placement and pricing lookups.')
 param workerSubscriptionRbacSubscriptionIds array = []
 
@@ -157,6 +169,7 @@ var useExistingSqlServer = !empty(existingSqlServerName)
 var useExistingSqlDatabase = !empty(existingSqlDatabaseName)
 var useExistingKeyVault = !empty(existingKeyVaultName)
 var useExistingWorkerStorageAccount = !empty(existingWorkerStorageAccountName)
+var useExistingVirtualNetwork = !empty(existingVirtualNetworkName) || !empty(existingAppServiceIntegrationSubnetName) || !empty(existingPrivateEndpointSubnetName)
 var effectiveSqlServerResourceGroupName = empty(existingSqlServerResourceGroupName) ? resourceGroup().name : existingSqlServerResourceGroupName
 var effectiveSqlServerName = useExistingSqlServer ? existingSqlServerName : sqlServerName
 var effectiveSqlDatabaseName = useExistingSqlDatabase ? existingSqlDatabaseName : sqlDatabaseName
@@ -166,6 +179,19 @@ var effectiveKeyVaultName = useExistingKeyVault ? existingKeyVaultName : keyVaul
 var effectiveKeyVaultUri = 'https://${effectiveKeyVaultName}.${keyVaultDnsSuffix}/'
 var effectiveWorkerStorageAccountResourceGroupName = empty(existingWorkerStorageAccountResourceGroupName) ? resourceGroup().name : existingWorkerStorageAccountResourceGroupName
 var effectiveWorkerStorageAccountName = useExistingWorkerStorageAccount ? existingWorkerStorageAccountName : functionStorageName
+var effectiveVirtualNetworkResourceGroupName = empty(existingVirtualNetworkResourceGroupName) ? resourceGroup().name : existingVirtualNetworkResourceGroupName
+var effectiveVirtualNetworkName = useExistingVirtualNetwork ? existingVirtualNetworkName : vnetName
+var effectiveAppServiceIntegrationSubnetName = useExistingVirtualNetwork ? existingAppServiceIntegrationSubnetName : appServiceIntegrationSubnetName
+var effectivePrivateEndpointSubnetName = useExistingVirtualNetwork ? existingPrivateEndpointSubnetName : privateEndpointSubnetName
+var effectiveVirtualNetworkId = useExistingVirtualNetwork
+  ? resourceId(effectiveVirtualNetworkResourceGroupName, 'Microsoft.Network/virtualNetworks', effectiveVirtualNetworkName)
+  : resourceId('Microsoft.Network/virtualNetworks', vnetName)
+var effectiveAppServiceIntegrationSubnetId = useExistingVirtualNetwork
+  ? resourceId(effectiveVirtualNetworkResourceGroupName, 'Microsoft.Network/virtualNetworks/subnets', effectiveVirtualNetworkName, effectiveAppServiceIntegrationSubnetName)
+  : resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, appServiceIntegrationSubnetName)
+var effectivePrivateEndpointSubnetId = useExistingVirtualNetwork
+  ? resourceId(effectiveVirtualNetworkResourceGroupName, 'Microsoft.Network/virtualNetworks/subnets', effectiveVirtualNetworkName, effectivePrivateEndpointSubnetName)
+  : resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, privateEndpointSubnetName)
 var ingestApiKeySecretName = 'capdash-ingest-api-key'
 var sessionSecretSecretName = 'capdash-session-secret'
 var workerSharedSecretSecretName = 'capdash-worker-shared-secret'
@@ -175,7 +201,7 @@ var sessionSecretKeyVaultReference = '@Microsoft.KeyVault(SecretUri=${effectiveK
 var workerSharedSecretKeyVaultReference = empty(workerSharedSecret) ? '' : '@Microsoft.KeyVault(SecretUri=${effectiveKeyVaultUri}secrets/${workerSharedSecretSecretName})'
 var entraClientSecretKeyVaultReference = empty(entraClientSecret) ? '' : '@Microsoft.KeyVault(SecretUri=${effectiveKeyVaultUri}secrets/${entraClientSecretSecretName})'
 
-resource vnet 'Microsoft.Network/virtualNetworks@2023-09-01' = {
+resource vnet 'Microsoft.Network/virtualNetworks@2023-09-01' = if (!useExistingVirtualNetwork) {
   name: vnetName
   location: location
   properties: {
@@ -208,16 +234,6 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-09-01' = {
       }
     ]
   }
-}
-
-resource appServiceIntegrationSubnet 'Microsoft.Network/virtualNetworks/subnets@2023-09-01' existing = {
-  parent: vnet
-  name: appServiceIntegrationSubnetName
-}
-
-resource privateEndpointSubnet 'Microsoft.Network/virtualNetworks/subnets@2023-09-01' existing = {
-  parent: vnet
-  name: privateEndpointSubnetName
 }
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
@@ -294,7 +310,7 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
   properties: {
     serverFarmId: plan.id
     httpsOnly: true
-    virtualNetworkSubnetId: appServiceIntegrationSubnet.id
+    virtualNetworkSubnetId: effectiveAppServiceIntegrationSubnetId
     siteConfig: {
       ftpsState: 'Disabled'
       minTlsVersion: '1.2'
@@ -407,15 +423,21 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
       ]
     }
   }
+  dependsOn: [
+    vnet
+  ]
 }
 
 resource webAppVnetIntegration 'Microsoft.Web/sites/networkConfig@2023-12-01' = {
   parent: webApp
   name: 'virtualNetwork'
   properties: {
-    subnetResourceId: appServiceIntegrationSubnet.id
+    subnetResourceId: effectiveAppServiceIntegrationSubnetId
     swiftSupported: true
   }
+  dependsOn: [
+    vnet
+  ]
 }
 
 resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
@@ -428,7 +450,7 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
   properties: {
     serverFarmId: workerPlan.id
     httpsOnly: true
-    virtualNetworkSubnetId: appServiceIntegrationSubnet.id
+    virtualNetworkSubnetId: effectiveAppServiceIntegrationSubnetId
     siteConfig: {
       ftpsState: 'Disabled'
       minTlsVersion: '1.2'
@@ -475,15 +497,21 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
       ]
     }
   }
+  dependsOn: [
+    vnet
+  ]
 }
 
 resource functionAppVnetIntegration 'Microsoft.Web/sites/networkConfig@2023-12-01' = {
   parent: functionApp
   name: 'virtualNetwork'
   properties: {
-    subnetResourceId: appServiceIntegrationSubnet.id
+    subnetResourceId: effectiveAppServiceIntegrationSubnetId
     swiftSupported: true
   }
+  dependsOn: [
+    vnet
+  ]
 }
 
 resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = if (!useExistingKeyVault) {
@@ -558,9 +586,12 @@ resource sqlPrivateDnsZoneVnetLink 'Microsoft.Network/privateDnsZones/virtualNet
   properties: {
     registrationEnabled: false
     virtualNetwork: {
-      id: vnet.id
+      id: effectiveVirtualNetworkId
     }
   }
+  dependsOn: [
+    vnet
+  ]
 }
 
 resource sqlPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01' = if (!useExistingSqlServer) {
@@ -568,7 +599,7 @@ resource sqlPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01' = if
   location: location
   properties: {
     subnet: {
-      id: privateEndpointSubnet.id
+      id: effectivePrivateEndpointSubnetId
     }
     privateLinkServiceConnections: [
       {
@@ -582,6 +613,9 @@ resource sqlPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01' = if
       }
     ]
   }
+  dependsOn: [
+    vnet
+  ]
 }
 
 resource sqlPrivateEndpointDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-09-01' = if (!useExistingSqlServer) {
@@ -611,9 +645,12 @@ resource keyVaultPrivateDnsZoneVnetLink 'Microsoft.Network/privateDnsZones/virtu
   properties: {
     registrationEnabled: false
     virtualNetwork: {
-      id: vnet.id
+      id: effectiveVirtualNetworkId
     }
   }
+  dependsOn: [
+    vnet
+  ]
 }
 
 resource keyVaultPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01' = if (!useExistingKeyVault) {
@@ -621,7 +658,7 @@ resource keyVaultPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01'
   location: location
   properties: {
     subnet: {
-      id: privateEndpointSubnet.id
+      id: effectivePrivateEndpointSubnetId
     }
     privateLinkServiceConnections: [
       {
@@ -635,6 +672,9 @@ resource keyVaultPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01'
       }
     ]
   }
+  dependsOn: [
+    vnet
+  ]
 }
 
 resource keyVaultPrivateEndpointDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-09-01' = if (!useExistingKeyVault) {
@@ -808,6 +848,6 @@ output sqlServerFqdn string = effectiveSqlServerFqdn
 output sqlServerName string = effectiveSqlServerName
 output sqlDatabaseName string = effectiveSqlDatabaseName
 output keyVaultName string = effectiveKeyVaultName
-output virtualNetworkName string = vnet.name
+output virtualNetworkName string = effectiveVirtualNetworkName
 output sqlPrivateEndpointName string = useExistingSqlServer ? '' : sqlPrivateEndpoint.name
 output keyVaultPrivateEndpointName string = useExistingKeyVault ? '' : keyVaultPrivateEndpoint.name

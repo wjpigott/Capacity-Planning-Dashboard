@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.42.1.51946",
-      "templateHash": "12867441080284439969"
+      "templateHash": "12701926729959805274"
     }
   },
   "parameters": {
@@ -195,6 +195,34 @@
         "description": "Resource group that contains the existing worker storage account. Defaults to the deployment resource group when empty."
       }
     },
+    "existingVirtualNetworkName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Existing virtual network name to reuse. When set, the template skips VNet/subnet creation and uses the existing subnet names below."
+      }
+    },
+    "existingVirtualNetworkResourceGroupName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource group that contains the existing virtual network. Defaults to the deployment resource group when empty."
+      }
+    },
+    "existingAppServiceIntegrationSubnetName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Existing subnet name delegated to Microsoft.Web/serverFarms for Web App and Function App VNet integration. Required when existingVirtualNetworkName is set."
+      }
+    },
+    "existingPrivateEndpointSubnetName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Existing subnet name for SQL and Key Vault private endpoints. Required when existingVirtualNetworkName is set and the template creates private endpoints."
+      }
+    },
     "workerSubscriptionRbacSubscriptionIds": {
       "type": "array",
       "defaultValue": [],
@@ -300,6 +328,7 @@
     "useExistingSqlDatabase": "[not(empty(parameters('existingSqlDatabaseName')))]",
     "useExistingKeyVault": "[not(empty(parameters('existingKeyVaultName')))]",
     "useExistingWorkerStorageAccount": "[not(empty(parameters('existingWorkerStorageAccountName')))]",
+    "useExistingVirtualNetwork": "[or(or(not(empty(parameters('existingVirtualNetworkName'))), not(empty(parameters('existingAppServiceIntegrationSubnetName')))), not(empty(parameters('existingPrivateEndpointSubnetName'))))]",
     "effectiveSqlServerResourceGroupName": "[if(empty(parameters('existingSqlServerResourceGroupName')), resourceGroup().name, parameters('existingSqlServerResourceGroupName'))]",
     "effectiveSqlServerName": "[if(variables('useExistingSqlServer'), parameters('existingSqlServerName'), variables('sqlServerName'))]",
     "effectiveSqlDatabaseName": "[if(variables('useExistingSqlDatabase'), parameters('existingSqlDatabaseName'), variables('sqlDatabaseName'))]",
@@ -309,6 +338,13 @@
     "effectiveKeyVaultUri": "[format('https://{0}.{1}/', variables('effectiveKeyVaultName'), variables('keyVaultDnsSuffix'))]",
     "effectiveWorkerStorageAccountResourceGroupName": "[if(empty(parameters('existingWorkerStorageAccountResourceGroupName')), resourceGroup().name, parameters('existingWorkerStorageAccountResourceGroupName'))]",
     "effectiveWorkerStorageAccountName": "[if(variables('useExistingWorkerStorageAccount'), parameters('existingWorkerStorageAccountName'), variables('functionStorageName'))]",
+    "effectiveVirtualNetworkResourceGroupName": "[if(empty(parameters('existingVirtualNetworkResourceGroupName')), resourceGroup().name, parameters('existingVirtualNetworkResourceGroupName'))]",
+    "effectiveVirtualNetworkName": "[if(variables('useExistingVirtualNetwork'), parameters('existingVirtualNetworkName'), variables('vnetName'))]",
+    "effectiveAppServiceIntegrationSubnetName": "[if(variables('useExistingVirtualNetwork'), parameters('existingAppServiceIntegrationSubnetName'), variables('appServiceIntegrationSubnetName'))]",
+    "effectivePrivateEndpointSubnetName": "[if(variables('useExistingVirtualNetwork'), parameters('existingPrivateEndpointSubnetName'), variables('privateEndpointSubnetName'))]",
+    "effectiveVirtualNetworkId": "[if(variables('useExistingVirtualNetwork'), resourceId(variables('effectiveVirtualNetworkResourceGroupName'), 'Microsoft.Network/virtualNetworks', variables('effectiveVirtualNetworkName')), resourceId('Microsoft.Network/virtualNetworks', variables('vnetName')))]",
+    "effectiveAppServiceIntegrationSubnetId": "[if(variables('useExistingVirtualNetwork'), resourceId(variables('effectiveVirtualNetworkResourceGroupName'), 'Microsoft.Network/virtualNetworks/subnets', variables('effectiveVirtualNetworkName'), variables('effectiveAppServiceIntegrationSubnetName')), resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('appServiceIntegrationSubnetName')))]",
+    "effectivePrivateEndpointSubnetId": "[if(variables('useExistingVirtualNetwork'), resourceId(variables('effectiveVirtualNetworkResourceGroupName'), 'Microsoft.Network/virtualNetworks/subnets', variables('effectiveVirtualNetworkName'), variables('effectivePrivateEndpointSubnetName')), resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('privateEndpointSubnetName')))]",
     "ingestApiKeySecretName": "capdash-ingest-api-key",
     "sessionSecretSecretName": "capdash-session-secret",
     "workerSharedSecretSecretName": "capdash-worker-shared-secret",
@@ -320,6 +356,7 @@
   },
   "resources": {
     "vnet": {
+      "condition": "[not(variables('useExistingVirtualNetwork'))]",
       "type": "Microsoft.Network/virtualNetworks",
       "apiVersion": "2023-09-01",
       "name": "[variables('vnetName')]",
@@ -354,24 +391,6 @@
           }
         ]
       }
-    },
-    "appServiceIntegrationSubnet": {
-      "existing": true,
-      "type": "Microsoft.Network/virtualNetworks/subnets",
-      "apiVersion": "2023-09-01",
-      "name": "[format('{0}/{1}', variables('vnetName'), variables('appServiceIntegrationSubnetName'))]",
-      "dependsOn": [
-        "vnet"
-      ]
-    },
-    "privateEndpointSubnet": {
-      "existing": true,
-      "type": "Microsoft.Network/virtualNetworks/subnets",
-      "apiVersion": "2023-09-01",
-      "name": "[format('{0}/{1}', variables('vnetName'), variables('privateEndpointSubnetName'))]",
-      "dependsOn": [
-        "vnet"
-      ]
     },
     "logAnalytics": {
       "type": "Microsoft.OperationalInsights/workspaces",
@@ -458,7 +477,7 @@
       "properties": {
         "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
         "httpsOnly": true,
-        "virtualNetworkSubnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('appServiceIntegrationSubnetName'))]",
+        "virtualNetworkSubnetId": "[variables('effectiveAppServiceIntegrationSubnetId')]",
         "siteConfig": {
           "ftpsState": "Disabled",
           "minTlsVersion": "1.2",
@@ -583,7 +602,7 @@
       "apiVersion": "2023-12-01",
       "name": "[format('{0}/{1}', variables('webAppName'), 'virtualNetwork')]",
       "properties": {
-        "subnetResourceId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('appServiceIntegrationSubnetName'))]",
+        "subnetResourceId": "[variables('effectiveAppServiceIntegrationSubnetId')]",
         "swiftSupported": true
       },
       "dependsOn": [
@@ -603,7 +622,7 @@
       "properties": {
         "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('workerPlanName'))]",
         "httpsOnly": true,
-        "virtualNetworkSubnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('appServiceIntegrationSubnetName'))]",
+        "virtualNetworkSubnetId": "[variables('effectiveAppServiceIntegrationSubnetId')]",
         "siteConfig": {
           "ftpsState": "Disabled",
           "minTlsVersion": "1.2",
@@ -661,7 +680,7 @@
       "apiVersion": "2023-12-01",
       "name": "[format('{0}/{1}', variables('functionAppName'), 'virtualNetwork')]",
       "properties": {
-        "subnetResourceId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('appServiceIntegrationSubnetName'))]",
+        "subnetResourceId": "[variables('effectiveAppServiceIntegrationSubnetId')]",
         "swiftSupported": true
       },
       "dependsOn": [
@@ -723,7 +742,7 @@
       "properties": {
         "registrationEnabled": false,
         "virtualNetwork": {
-          "id": "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+          "id": "[variables('effectiveVirtualNetworkId')]"
         }
       },
       "dependsOn": [
@@ -739,7 +758,7 @@
       "location": "[parameters('location')]",
       "properties": {
         "subnet": {
-          "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('privateEndpointSubnetName'))]"
+          "id": "[variables('effectivePrivateEndpointSubnetId')]"
         },
         "privateLinkServiceConnections": [
           {
@@ -794,7 +813,7 @@
       "properties": {
         "registrationEnabled": false,
         "virtualNetwork": {
-          "id": "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+          "id": "[variables('effectiveVirtualNetworkId')]"
         }
       },
       "dependsOn": [
@@ -810,7 +829,7 @@
       "location": "[parameters('location')]",
       "properties": {
         "subnet": {
-          "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('privateEndpointSubnetName'))]"
+          "id": "[variables('effectivePrivateEndpointSubnetId')]"
         },
         "privateLinkServiceConnections": [
           {
@@ -2081,7 +2100,7 @@
     },
     "virtualNetworkName": {
       "type": "string",
-      "value": "[variables('vnetName')]"
+      "value": "[variables('effectiveVirtualNetworkName')]"
     },
     "sqlPrivateEndpointName": {
       "type": "string",

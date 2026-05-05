@@ -451,10 +451,11 @@ By default, `./scripts/deploy-infra.ps1` now does both steps:
 
 Existing shared-service reuse:
 
-- If the customer already has Azure SQL, Key Vault, or the worker storage account in place, pass the new `deploy-infra.ps1` reuse switches instead of forcing the template to create duplicates.
-- Supported switches are `-ExistingSqlServerName`, `-ExistingSqlDatabaseName`, `-ExistingKeyVaultName`, and `-ExistingWorkerStorageAccountName`.
+- If the customer already has Azure SQL, Key Vault, the worker storage account, or a Virtual Network in place, pass the `deploy-infra.ps1` reuse switches instead of forcing the template to create duplicates.
+- Supported switches are `-ExistingSqlServerName`, `-ExistingSqlDatabaseName`, `-ExistingKeyVaultName`, `-ExistingWorkerStorageAccountName`, `-ExistingVirtualNetworkName`, `-ExistingAppServiceIntegrationSubnetName`, and `-ExistingPrivateEndpointSubnetName`.
 - Providing an existing resource name is enough to switch that dependency into reuse mode. `-ExistingSqlDatabaseName` is optional and only applies when `-ExistingSqlServerName` is also set.
-- Optional resource-group overrides are also available when the reused dependency lives outside the dashboard resource group: `-ExistingSqlServerResourceGroupName`, `-ExistingKeyVaultResourceGroupName`, and `-ExistingWorkerStorageResourceGroupName`.
+- Optional resource-group overrides are also available when the reused dependency lives outside the dashboard resource group: `-ExistingSqlServerResourceGroupName`, `-ExistingKeyVaultResourceGroupName`, `-ExistingWorkerStorageResourceGroupName`, and `-ExistingVirtualNetworkResourceGroupName`.
+- When reusing an existing Virtual Network, provide the VNet name plus both subnet names. The App Service integration subnet must already be delegated to `Microsoft.Web/serverFarms`; the private endpoint subnet must already support private endpoints for any newly-created SQL or Key Vault private endpoints.
 - When reusing an existing SQL server or Key Vault, the infra templates assume the customer-managed private endpoint and DNS path already exists and do not create a new SQL or Key Vault private endpoint for that dependency.
 
 Use `-DeployWebApp $false` only when you explicitly want an infra-only run.

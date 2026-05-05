@@ -17,6 +17,13 @@ param privateEndpointSubnetPrefix = '10.91.2.0/24'
 param sqlPublicNetworkAccess = 'Disabled'
 param keyVaultPublicNetworkAccess = 'Disabled'
 
+// Existing customer-managed network mode for separate-tenant/customer handoff testing.
+// Supply all four names together. When set, Bicep skips VNet/subnet creation.
+// param existingVirtualNetworkName = 'vnet-shared-platform'
+// param existingVirtualNetworkResourceGroupName = 'rg-network-shared'
+// param existingAppServiceIntegrationSubnetName = 'snet-capdash-appsvc'
+// param existingPrivateEndpointSubnetName = 'snet-capdash-private-endpoints'
+
 // Preferred for larger estates: grant dashboard/worker RBAC at one or more management groups.
 // Example:
 // param quotaManagementGroupId = 'Demo-MG'

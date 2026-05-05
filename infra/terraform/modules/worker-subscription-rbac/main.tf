@@ -23,8 +23,8 @@ locals {
 resource "azurerm_role_assignment" "worker" {
   for_each = local.enabled_roles
 
-  scope                = "/subscriptions/${var.subscription_id}"
-  role_definition_id   = "/subscriptions/${var.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${each.value.id}"
-  principal_id         = var.principal_id
-  principal_type       = "ServicePrincipal"
+  scope              = "/subscriptions/${var.subscription_id}"
+  role_definition_id = "/subscriptions/${var.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${each.value.id}"
+  principal_id       = var.principal_id
+  principal_type     = "ServicePrincipal"
 }

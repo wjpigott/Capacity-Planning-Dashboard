@@ -23,7 +23,7 @@ resource "azurerm_role_assignment" "worker" {
   for_each = local.enabled_roles
 
   scope              = local.management_group_scope
-  role_definition_id = "${local.management_group_scope}/providers/Microsoft.Authorization/roleDefinitions/${each.value.id}"
+  role_definition_id = "/providers/Microsoft.Authorization/roleDefinitions/${each.value.id}"
   principal_id       = var.principal_id
   principal_type     = "ServicePrincipal"
 }

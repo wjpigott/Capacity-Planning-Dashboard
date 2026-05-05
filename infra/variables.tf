@@ -52,6 +52,30 @@ variable "private_endpoint_subnet_prefix" {
   default     = "10.90.2.0/24"
 }
 
+variable "existing_virtual_network_name" {
+  type        = string
+  description = "Existing virtual network name to reuse"
+  default     = ""
+}
+
+variable "existing_virtual_network_resource_group_name" {
+  type        = string
+  description = "Resource group that contains the existing virtual network; defaults to the deployment resource group when empty"
+  default     = ""
+}
+
+variable "existing_app_service_integration_subnet_name" {
+  type        = string
+  description = "Existing subnet delegated to Microsoft.Web/serverFarms for App Service integration"
+  default     = ""
+}
+
+variable "existing_private_endpoint_subnet_name" {
+  type        = string
+  description = "Existing subnet for SQL and Key Vault private endpoints"
+  default     = ""
+}
+
 variable "sql_public_network_access" {
   type        = string
   description = "SQL server public network access mode"
@@ -81,15 +105,15 @@ variable "worker_shared_secret" {
 
 variable "ingest_api_key" {
   type        = string
-  description = "Shared secret for internal bootstrap and ingestion routes on the dashboard web app"
-  default     = "change-me-ingest-key"
+  description = "Shared secret for internal bootstrap and ingestion routes on the dashboard web app. Leave empty to generate one with Terraform."
+  default     = ""
   sensitive   = true
 }
 
 variable "session_secret" {
   type        = string
-  description = "Session secret used by the dashboard web app session middleware"
-  default     = "change-me-session-secret"
+  description = "Session secret used by the dashboard web app session middleware. Leave empty to generate one with Terraform."
+  default     = ""
   sensitive   = true
 }
 
@@ -138,7 +162,7 @@ variable "assign_worker_billing_reader_role" {
 variable "auth_enabled" {
   type        = bool
   description = "Enable Microsoft Entra sign-in for the dashboard app routes"
-  default     = false
+  default     = true
 }
 
 variable "entra_tenant_id" {

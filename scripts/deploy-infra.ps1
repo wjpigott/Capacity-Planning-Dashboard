@@ -35,6 +35,7 @@ param(
     [Parameter(Mandatory = $false)][string]$EntraClientId,
     [Parameter(Mandatory = $false)][string]$EntraClientSecret,
     [Parameter(Mandatory = $false)][string]$AuthRedirectUri,
+    [Parameter(Mandatory = $false)][switch]$ManageEntraWebRedirectUri,
     [Parameter(Mandatory = $false)][string]$AdminGroupId,
     [Parameter(Mandatory = $false)][string]$SubscriptionId,
     [Parameter(Mandatory = $false)][switch]$UseAllAccessibleManagementGroups,
@@ -342,6 +343,7 @@ function Deploy-Terraform {
         if (-not [string]::IsNullOrWhiteSpace($EntraClientId))         { $tfVars += "-var=entra_client_id=$EntraClientId" }
         if (-not [string]::IsNullOrWhiteSpace($EntraClientSecret))     { $tfVars += "-var=entra_client_secret=$EntraClientSecret" }
         if (-not [string]::IsNullOrWhiteSpace($AuthRedirectUri))       { $tfVars += "-var=auth_redirect_uri=$AuthRedirectUri" }
+        if ($ManageEntraWebRedirectUri.IsPresent)                      { $tfVars += "-var=manage_entra_web_redirect_uri=true" }
         if (-not [string]::IsNullOrWhiteSpace($AdminGroupId))          { $tfVars += "-var=admin_group_id=$AdminGroupId" }
         $tfVars += "-var=web_reader_subscription_ids=$(ConvertTo-TerraformLiteral $WebReaderSubscriptionIds)"
         $tfVars += "-var=web_reader_management_group_names=$(ConvertTo-TerraformLiteral $WebReaderManagementGroupNames)"

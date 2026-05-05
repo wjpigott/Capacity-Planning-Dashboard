@@ -62,6 +62,7 @@ key_vault_public_network_access = "Disabled"
 # entra_client_id     = "00000000-0000-0000-0000-000000000000"
 # entra_client_secret = "replace-with-secret"
 # auth_redirect_uri   = "https://<web-app-name>.azurewebsites.net/auth/callback"
+# manage_entra_web_redirect_uri = true
 # admin_group_id      = "00000000-0000-0000-0000-000000000000"
 
 # ── Function App (Worker) ────────────────────

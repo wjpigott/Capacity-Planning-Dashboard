@@ -50,7 +50,7 @@ output "key_vault_name" {
 
 output "virtual_network_name" {
   description = "Virtual network resource name"
-  value       = azurerm_virtual_network.vnet.name
+  value       = local.effective_virtual_network_name
 }
 
 output "sql_private_endpoint_name" {
@@ -61,4 +61,10 @@ output "sql_private_endpoint_name" {
 output "key_vault_private_endpoint_name" {
   description = "Key Vault private endpoint resource name"
   value       = local.use_existing_key_vault ? null : azurerm_private_endpoint.kv[0].name
+}
+
+output "effective_ingest_api_key" {
+  description = "Effective ingestion API key generated or supplied for bootstrap workflows"
+  value       = local.effective_ingest_api_key
+  sensitive   = true
 }

@@ -120,6 +120,30 @@ variable "private_endpoint_subnet_prefix" {
   default     = "10.90.2.0/24"
 }
 
+variable "existing_virtual_network_name" {
+  type        = string
+  description = "Existing virtual network name to reuse. When set, Terraform skips VNet/subnet creation and uses the existing subnet names."
+  default     = ""
+}
+
+variable "existing_virtual_network_resource_group_name" {
+  type        = string
+  description = "Resource group that contains the existing virtual network; defaults to resource_group_name when empty"
+  default     = ""
+}
+
+variable "existing_app_service_integration_subnet_name" {
+  type        = string
+  description = "Existing subnet name delegated to Microsoft.Web/serverFarms for Web App and Function App VNet integration; required when existing_virtual_network_name is set"
+  default     = ""
+}
+
+variable "existing_private_endpoint_subnet_name" {
+  type        = string
+  description = "Existing subnet name for SQL and Key Vault private endpoints; required when existing_virtual_network_name is set and Terraform creates private endpoints"
+  default     = ""
+}
+
 # ──────────────────────────────────────────────
 # SQL Server & Database
 # ──────────────────────────────────────────────
@@ -197,15 +221,15 @@ variable "existing_key_vault_resource_group_name" {
 # ──────────────────────────────────────────────
 variable "ingest_api_key" {
   type        = string
-  description = "Shared secret for internal bootstrap and ingestion routes on the dashboard web app"
-  default     = "change-me-ingest-key"
+  description = "Shared secret for internal bootstrap and ingestion routes on the dashboard web app. Leave empty to generate one with Terraform."
+  default     = ""
   sensitive   = true
 }
 
 variable "session_secret" {
   type        = string
-  description = "Session secret used by the dashboard web app session middleware"
-  default     = "change-me-session-secret"
+  description = "Session secret used by the dashboard web app session middleware. Leave empty to generate one with Terraform."
+  default     = ""
   sensitive   = true
 }
 

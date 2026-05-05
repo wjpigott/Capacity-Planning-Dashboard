@@ -162,7 +162,7 @@ variable "assign_worker_billing_reader_role" {
 variable "auth_enabled" {
   type        = bool
   description = "Enable Microsoft Entra sign-in for the dashboard app routes"
-  default     = false
+  default     = true
 }
 
 variable "entra_tenant_id" {

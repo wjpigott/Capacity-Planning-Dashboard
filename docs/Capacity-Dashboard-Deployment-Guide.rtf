@@ -108,19 +108,30 @@ Replace the placeholders in the commands later in this document with your own va
 \par
 \b 6A. What Those Secrets Actually Are\b0\par
 \par
-The guide mentions three application secrets. These are not Azure resources you need to discover in the portal. They are values you create and pass into the deployment.\par
+The guide mentions several application secrets. These are stored in Key Vault for deployed environments and then referenced by App Service app settings. Terraform can generate the ingest API key and session secret when omitted; the Entra client secret comes from the customer-created app registration.\par
+\par
+\b Entra client secret\b0\par
+- Key Vault secret name: \f1 capdash-entra-client-secret\f0\par
+- App setting: \f1 ENTRA_CLIENT_SECRET\f0\par
+- This is the Microsoft Entra app registration client secret used by the dashboard OAuth sign-in flow.\par
+- It is required when \f1 AUTH_ENABLED=true\f0 and the dashboard should require Entra sign-in.\par
 \par
 \b Ingest API key\b0\par
+- Key Vault secret name: \f1 capdash-ingest-api-key\f0\par
+- App setting: \f1 INGEST_API_KEY\f0\par
 - This is a shared secret used to protect the dashboard's internal ingestion and internal database/bootstrap endpoints.\par
 - The server checks it through the \f1 INGEST_API_KEY\f0 app setting.\par
-- You choose this value yourself. It should be a long random string.\par
+- Terraform can generate this value when \f1 ingest_api_key\f0 is omitted. Bicep deployments should supply it through parameters or the wrapper script.\par
 - Think of it as an internal service password, not as an Azure-generated key.\par
 \par
 \b Session secret\b0\par
+- Key Vault secret name: \f1 capdash-session-secret\f0\par
+- App setting: \f1 SESSION_SECRET\f0\par
 - This is the secret used by the web app's session cookie middleware.\par
 - The server reads it from \f1 SESSION_SECRET\f0.\par
-- You choose this value yourself. It should also be a long random string.\par
+- Terraform can generate this value when \f1 session_secret\f0 is omitted. Bicep deployments should supply it through parameters or the wrapper script.\par
 - If sign-in is enabled, this value is important because it protects the signed session cookie state.\par
+- Keep it stable across redeploys unless intentionally rotating sessions, otherwise existing sessions are invalidated.\par
 - The helper script \f1 scripts/New-EntraApp.ps1\f0 already prints an example generated \f1 SESSION_SECRET\f0 for local setup.\par
 \par
 \b Optional worker shared secret\b0\par

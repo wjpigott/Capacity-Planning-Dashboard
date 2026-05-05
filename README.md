@@ -688,6 +688,17 @@ Required app settings:
 - `LIVE_PLACEMENT_REFRESH_ON_STARTUP` (`true`/`false`, fallback default when SQL schedule settings are not present)
 - `LIVE_PLACEMENT_REFRESH_INTERVAL_MINUTES` (`0` disables scheduling; `1440` gives a daily refresh; fallback default when SQL schedule settings are not present)
 - `LIVE_PLACEMENT_REFRESH_REGION_PRESET` (default `USMajor`)
+
+Key Vault secrets used by deployed environments:
+
+| Secret name | App setting | Used for |
+| --- | --- | --- |
+| `capdash-entra-client-secret` | `ENTRA_CLIENT_SECRET` | Microsoft Entra app registration client secret used by the dashboard OAuth sign-in flow. Required when `AUTH_ENABLED=true`. |
+| `capdash-ingest-api-key` | `INGEST_API_KEY` | Shared secret that protects internal ingestion and bootstrap endpoints. Deployment/bootstrap callers send this value as the internal ingest key. |
+| `capdash-session-secret` | `SESSION_SECRET` | Secret used by the web app session middleware to protect signed session cookie state after sign-in. Keep stable across redeploys unless intentionally rotating sessions. |
+
+Terraform can generate `capdash-ingest-api-key` and `capdash-session-secret` when `ingest_api_key` and `session_secret` are omitted. Bicep deployments should supply those values through parameters or the wrapper script. The Entra client secret comes from the customer-created app registration client secret and is stored in Key Vault when supplied.
+
 - `LIVE_PLACEMENT_REFRESH_DESIRED_COUNT` (default `1`; use `1` if you want scheduled results reused automatically in the Capacity Score grid)
 - `LIVE_PLACEMENT_REFRESH_SUBSCRIPTION_IDS` (optional comma-separated list; falls back to `INGEST_SUBSCRIPTION_IDS` when omitted)
 - `LIVE_PLACEMENT_REFRESH_REGION` (optional single-region override, default `all`)

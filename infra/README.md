@@ -27,6 +27,7 @@ Both implementations can also reuse existing shared platform dependencies instea
 - Azure SQL Server and optionally the Azure SQL Database
 - Azure Key Vault
 - Worker host Storage Account
+- Virtual Network with pre-created App Service integration and private endpoint subnets
 
 ## Design principles
 
@@ -42,6 +43,8 @@ Both implementations can also reuse existing shared platform dependencies instea
 - SQL defaults to private-access mode (`sqlPublicNetworkAccess = 'Disabled'`) and is reachable from App Service/Function App via VNet integration and private endpoint.
 - Key Vault defaults to private-access mode (`keyVaultPublicNetworkAccess = 'Disabled'`) and is reachable from App Service/Function App via VNet integration and private endpoint.
 - Customer-managed shared services can now be attached instead of created by passing the existing-resource parameters through `scripts/deploy-infra.ps1` or the raw Bicep/Terraform inputs.
+- Customer-managed virtual networks can now be attached by passing existing VNet/subnet names. In this mode the templates do not create or modify the VNet or its subnets, which is intended for customer or separate-tenant testing where network ownership is centralized.
+- Existing-network mode requires one subnet delegated to `Microsoft.Web/serverFarms` for Web App and Function App VNet integration, plus one subnet that allows private endpoints for SQL and Key Vault when those private endpoints are created by the dashboard deployment.
 - When an existing SQL server or Key Vault is reused, the dashboard templates stop creating a new private endpoint and DNS zone for that dependency and assume the customer-managed private connectivity path already exists.
 - Live placement and pricing RBAC can now be assigned automatically during infra deployment by passing `workerRbacManagementGroupNames` for larger estates, with `workerSubscriptionRbacSubscriptionIds` kept as the fallback for customers without management groups.
 - Dashboard subscription discovery RBAC can now be assigned automatically during infra deployment by passing `webReaderManagementGroupNames` for larger estates, with `webReaderSubscriptionIds` kept as the fallback for customers without management groups.
@@ -81,8 +84,13 @@ Use these deploy-script switches when the customer already has shared Azure depe
 - `-ExistingSqlDatabaseName "<sql-database-name>"`
 - `-ExistingKeyVaultName "<key-vault-name>"`
 - `-ExistingWorkerStorageAccountName "<storage-account-name>"`
+- `-ExistingVirtualNetworkName "<vnet-name>"`
+- `-ExistingVirtualNetworkResourceGroupName "<network-resource-group-name>"`
+- `-ExistingAppServiceIntegrationSubnetName "<delegated-subnet-name>"`
+- `-ExistingPrivateEndpointSubnetName "<private-endpoint-subnet-name>"`
 
 Providing an existing resource name is enough to switch that dependency into reuse mode. `-ExistingSqlDatabaseName` is optional and only applies when you also pass `-ExistingSqlServerName`.
+For existing-network mode, `-ExistingVirtualNetworkResourceGroupName` is optional and defaults to `-ResourceGroupName`, but the VNet name and both subnet names must be supplied together.
 
 Example:
 
@@ -96,7 +104,11 @@ Example:
   -ExistingSqlServerName "sql-shared-test" `
   -ExistingSqlDatabaseName "sqldb-shared-capdash" `
   -ExistingKeyVaultName "kv-shared-test" `
-  -ExistingWorkerStorageAccountName "stsharedworker01"
+  -ExistingWorkerStorageAccountName "stsharedworker01" `
+  -ExistingVirtualNetworkName "vnet-shared-platform" `
+  -ExistingVirtualNetworkResourceGroupName "rg-network-shared" `
+  -ExistingAppServiceIntegrationSubnetName "snet-capdash-appsvc" `
+  -ExistingPrivateEndpointSubnetName "snet-capdash-private-endpoints"
 ```
 
 ### Raw Bicep deploy (infra only)
@@ -117,7 +129,7 @@ See [`bicep/README.md`](bicep/README.md) for full parameter reference, RBAC at s
 
 ### Prerequisites
 
-- Terraform >= 1.5.0 and < 1.6.0
+- Terraform >= 1.5.0
 - Azure CLI authenticated (`az login`) with Contributor + User Access Administrator
 - State is local by default; update `backend.tf` to use a remote backend if needed
 

@@ -20,6 +20,7 @@ Existing shared-service reuse is supported for:
 - Azure SQL Server and optionally the Azure SQL Database
 - Azure Key Vault
 - Worker host Storage Account
+- Virtual Network with pre-created App Service integration and private endpoint subnets
 
 ## Security design
 
@@ -34,6 +35,7 @@ Existing shared-service reuse is supported for:
 - SQL defaults to private-access mode (`sqlPublicNetworkAccess = 'Disabled'`) and is reachable from App Service/Function App via VNet integration and private endpoint.
 - Key Vault defaults to private-access mode (`keyVaultPublicNetworkAccess = 'Disabled'`) and is reachable from App Service/Function App via VNet integration and private endpoint.
 - Existing SQL, Key Vault, and worker storage can now be reused by passing the matching `existing*Name` parameters.
+- Existing customer-managed VNets can now be reused by passing the matching `existingVirtualNetwork*` and existing subnet name parameters. In this mode Bicep does not create or modify the VNet or subnets.
 - When `existingSqlServerName` or `existingKeyVaultName` is set, the template assumes customer-managed private connectivity already exists for that dependency and does not create a new private endpoint or private DNS zone for it.
 - Live placement and pricing RBAC can now be assigned automatically during infra deployment by passing `workerSubscriptionRbacSubscriptionIds` (and optional role toggles) to apply `Compute Recommendations Role`, `Cost Management Reader`, and `Billing Reader` on those subscriptions.
 - Dashboard subscription discovery RBAC can now be assigned automatically during infra deployment by passing `webReaderSubscriptionIds` to apply `Reader` on those subscriptions.
@@ -49,18 +51,35 @@ Existing shared-service reuse is supported for:
 - `sqlPublicNetworkAccess` (`Disabled` by default; set `Enabled` only for temporary break-glass access)
 - `keyVaultPublicNetworkAccess` (`Disabled` by default; set `Enabled` only for temporary break-glass access)
 
+Existing-network mode is intended for customer or separate-tenant testing where the network team owns VNet creation. Supply these names together:
+
+- `existingVirtualNetworkName`
+- `existingVirtualNetworkResourceGroupName` (optional; defaults to the deployment resource group)
+- `existingAppServiceIntegrationSubnetName`
+- `existingPrivateEndpointSubnetName`
+
+Required customer-managed subnet configuration:
+
+- The App Service integration subnet must be delegated to `Microsoft.Web/serverFarms` and have enough free IPs for the Web App and Function App integrations.
+- The private endpoint subnet must allow private endpoints for SQL and Key Vault when those dependencies are created by this template.
+- DNS resolution from the App Service/Function App integration subnet must resolve the SQL and Key Vault private DNS zones used by the customer's network path.
+
 ## Existing resource parameters
 
 - `existingSqlServerName`
 - `existingSqlDatabaseName` (optional; requires `existingSqlServerName`)
 - `existingKeyVaultName`
 - `existingWorkerStorageAccountName`
+- `existingVirtualNetworkName`
+- `existingAppServiceIntegrationSubnetName`
+- `existingPrivateEndpointSubnetName`
 
 Optional resource-group overrides are also available for reuse scenarios:
 
 - `existingSqlServerResourceGroupName`
 - `existingKeyVaultResourceGroupName`
 - `existingWorkerStorageAccountResourceGroupName`
+- `existingVirtualNetworkResourceGroupName`
 
 ## Environment strategy
 
@@ -145,7 +164,11 @@ az deployment group create \
   --parameters existingSqlServerName="sql-shared-test" \
   --parameters existingSqlDatabaseName="sqldb-shared-capdash" \
   --parameters existingKeyVaultName="kv-shared-test" \
-  --parameters existingWorkerStorageAccountName="stsharedworker01"
+  --parameters existingWorkerStorageAccountName="stsharedworker01" \
+  --parameters existingVirtualNetworkName="vnet-shared-platform" \
+  --parameters existingVirtualNetworkResourceGroupName="rg-network-shared" \
+  --parameters existingAppServiceIntegrationSubnetName="snet-capdash-appsvc" \
+  --parameters existingPrivateEndpointSubnetName="snet-capdash-private-endpoints"
 ```
 
 ## RBAC At Scale

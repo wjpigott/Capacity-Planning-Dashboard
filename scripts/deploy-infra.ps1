@@ -21,6 +21,10 @@ param(
     [Parameter(Mandatory = $false)][string]$ExistingKeyVaultResourceGroupName,
     [Parameter(Mandatory = $false)][string]$ExistingWorkerStorageAccountName,
     [Parameter(Mandatory = $false)][string]$ExistingWorkerStorageResourceGroupName,
+    [Parameter(Mandatory = $false)][string]$ExistingVirtualNetworkName,
+    [Parameter(Mandatory = $false)][string]$ExistingVirtualNetworkResourceGroupName,
+    [Parameter(Mandatory = $false)][string]$ExistingAppServiceIntegrationSubnetName,
+    [Parameter(Mandatory = $false)][string]$ExistingPrivateEndpointSubnetName,
     [Parameter(Mandatory = $false)][string[]]$WorkerRbacSubscriptionIds = @(),
     [Parameter(Mandatory = $false)][string[]]$WorkerRbacManagementGroupNames = @(),
     [Parameter(Mandatory = $false)][bool]$AssignWorkerComputeRecommendationsRole = $true,
@@ -31,6 +35,7 @@ param(
     [Parameter(Mandatory = $false)][string]$EntraClientId,
     [Parameter(Mandatory = $false)][string]$EntraClientSecret,
     [Parameter(Mandatory = $false)][string]$AuthRedirectUri,
+    [Parameter(Mandatory = $false)][switch]$ManageEntraWebRedirectUri,
     [Parameter(Mandatory = $false)][string]$AdminGroupId,
     [Parameter(Mandatory = $false)][string]$SubscriptionId,
     [Parameter(Mandatory = $false)][switch]$UseAllAccessibleManagementGroups,
@@ -62,10 +67,18 @@ function Resolve-SqlServerHostName([string]$ServerName) {
 
 $useExistingSqlServer = -not [string]::IsNullOrWhiteSpace($ExistingSqlServerName)
 $useExistingSqlDatabase = -not [string]::IsNullOrWhiteSpace($ExistingSqlDatabaseName)
-$useExistingKeyVault = -not [string]::IsNullOrWhiteSpace($ExistingKeyVaultName)
-$useExistingWorkerStorageAccount = -not [string]::IsNullOrWhiteSpace($ExistingWorkerStorageAccountName)
+$useExistingVirtualNetwork = -not [string]::IsNullOrWhiteSpace($ExistingVirtualNetworkName) -or
+    -not [string]::IsNullOrWhiteSpace($ExistingAppServiceIntegrationSubnetName) -or
+    -not [string]::IsNullOrWhiteSpace($ExistingPrivateEndpointSubnetName)
 if ($useExistingSqlDatabase -and -not $useExistingSqlServer) {
     throw '-ExistingSqlDatabaseName requires -ExistingSqlServerName because an existing Azure SQL database must hang off an existing SQL server.'
+}
+
+if ($useExistingVirtualNetwork -and (
+    [string]::IsNullOrWhiteSpace($ExistingVirtualNetworkName) -or
+    [string]::IsNullOrWhiteSpace($ExistingAppServiceIntegrationSubnetName) -or
+    [string]::IsNullOrWhiteSpace($ExistingPrivateEndpointSubnetName))) {
+    throw '-ExistingVirtualNetworkName, -ExistingAppServiceIntegrationSubnetName, and -ExistingPrivateEndpointSubnetName must be supplied together. -ExistingVirtualNetworkResourceGroupName is optional and defaults to -ResourceGroupName.'
 }
 
 if ([string]::IsNullOrWhiteSpace($ExistingSqlServerResourceGroupName)) {
@@ -78,6 +91,10 @@ if ([string]::IsNullOrWhiteSpace($ExistingKeyVaultResourceGroupName)) {
 
 if ([string]::IsNullOrWhiteSpace($ExistingWorkerStorageResourceGroupName)) {
     $ExistingWorkerStorageResourceGroupName = $ResourceGroupName
+}
+
+if ([string]::IsNullOrWhiteSpace($ExistingVirtualNetworkResourceGroupName)) {
+    $ExistingVirtualNetworkResourceGroupName = $ResourceGroupName
 }
 
 $effectiveSqlServerHostName = if ($useExistingSqlServer) {
@@ -311,24 +328,29 @@ function Deploy-Terraform {
         if (-not [string]::IsNullOrWhiteSpace($WorkerSharedSecret))    { $tfVars += "-var=worker_shared_secret=$WorkerSharedSecret" }
         if (-not [string]::IsNullOrWhiteSpace($KeyVaultNameOverride))  { $tfVars += "-var=key_vault_name_override=$KeyVaultNameOverride" }
         if (-not [string]::IsNullOrWhiteSpace($QuotaManagementGroupId)){ $tfVars += "-var=quota_management_group_id=$QuotaManagementGroupId" }
-        $tfVars += "-var=existing_sql_server_name=$ExistingSqlServerName"
-        $tfVars += "-var=existing_sql_server_resource_group_name=$ExistingSqlServerResourceGroupName"
-        $tfVars += "-var=existing_sql_database_name=$ExistingSqlDatabaseName"
-        $tfVars += "-var=existing_key_vault_name=$ExistingKeyVaultName"
-        $tfVars += "-var=existing_key_vault_resource_group_name=$ExistingKeyVaultResourceGroupName"
-        $tfVars += "-var=existing_worker_storage_account_name=$ExistingWorkerStorageAccountName"
-        $tfVars += "-var=existing_worker_storage_account_resource_group_name=$ExistingWorkerStorageResourceGroupName"
+        if (-not [string]::IsNullOrWhiteSpace($ExistingSqlServerName))                { $tfVars += "-var=existing_sql_server_name=$ExistingSqlServerName" }
+        if (-not [string]::IsNullOrWhiteSpace($ExistingSqlServerResourceGroupName))   { $tfVars += "-var=existing_sql_server_resource_group_name=$ExistingSqlServerResourceGroupName" }
+        if (-not [string]::IsNullOrWhiteSpace($ExistingSqlDatabaseName))              { $tfVars += "-var=existing_sql_database_name=$ExistingSqlDatabaseName" }
+        if (-not [string]::IsNullOrWhiteSpace($ExistingKeyVaultName))                 { $tfVars += "-var=existing_key_vault_name=$ExistingKeyVaultName" }
+        if (-not [string]::IsNullOrWhiteSpace($ExistingKeyVaultResourceGroupName))    { $tfVars += "-var=existing_key_vault_resource_group_name=$ExistingKeyVaultResourceGroupName" }
+        if (-not [string]::IsNullOrWhiteSpace($ExistingWorkerStorageAccountName))     { $tfVars += "-var=existing_worker_storage_account_name=$ExistingWorkerStorageAccountName" }
+        if (-not [string]::IsNullOrWhiteSpace($ExistingWorkerStorageResourceGroupName)){ $tfVars += "-var=existing_worker_storage_account_resource_group_name=$ExistingWorkerStorageResourceGroupName" }
+        if (-not [string]::IsNullOrWhiteSpace($ExistingVirtualNetworkName))           { $tfVars += "-var=existing_virtual_network_name=$ExistingVirtualNetworkName" }
+        if (-not [string]::IsNullOrWhiteSpace($ExistingVirtualNetworkResourceGroupName)){ $tfVars += "-var=existing_virtual_network_resource_group_name=$ExistingVirtualNetworkResourceGroupName" }
+        if (-not [string]::IsNullOrWhiteSpace($ExistingAppServiceIntegrationSubnetName)){ $tfVars += "-var=existing_app_service_integration_subnet_name=$ExistingAppServiceIntegrationSubnetName" }
+        if (-not [string]::IsNullOrWhiteSpace($ExistingPrivateEndpointSubnetName))    { $tfVars += "-var=existing_private_endpoint_subnet_name=$ExistingPrivateEndpointSubnetName" }
         if (-not [string]::IsNullOrWhiteSpace($EntraTenantId))         { $tfVars += "-var=entra_tenant_id=$EntraTenantId" }
         if (-not [string]::IsNullOrWhiteSpace($EntraClientId))         { $tfVars += "-var=entra_client_id=$EntraClientId" }
         if (-not [string]::IsNullOrWhiteSpace($EntraClientSecret))     { $tfVars += "-var=entra_client_secret=$EntraClientSecret" }
         if (-not [string]::IsNullOrWhiteSpace($AuthRedirectUri))       { $tfVars += "-var=auth_redirect_uri=$AuthRedirectUri" }
+        if ($ManageEntraWebRedirectUri.IsPresent)                      { $tfVars += "-var=manage_entra_web_redirect_uri=true" }
         if (-not [string]::IsNullOrWhiteSpace($AdminGroupId))          { $tfVars += "-var=admin_group_id=$AdminGroupId" }
-        $tfVars += "-var=web_reader_subscription_ids=$(ConvertTo-TerraformLiteral $WebReaderSubscriptionIds)"
-        $tfVars += "-var=web_reader_management_group_names=$(ConvertTo-TerraformLiteral $WebReaderManagementGroupNames)"
-        $tfVars += "-var=web_quota_writer_subscription_ids=$(ConvertTo-TerraformLiteral $WebQuotaWriterSubscriptionIds)"
-        $tfVars += "-var=web_quota_writer_management_group_names=$(ConvertTo-TerraformLiteral $WebQuotaWriterManagementGroupNames)"
-        $tfVars += "-var=worker_subscription_rbac_subscription_ids=$(ConvertTo-TerraformLiteral $WorkerRbacSubscriptionIds)"
-        $tfVars += "-var=worker_rbac_management_group_names=$(ConvertTo-TerraformLiteral $WorkerRbacManagementGroupNames)"
+        if ($PSBoundParameters.ContainsKey('WebReaderSubscriptionIds') -or $WebReaderSubscriptionIds.Count -gt 0)                   { $tfVars += "-var=web_reader_subscription_ids=$(ConvertTo-TerraformLiteral $WebReaderSubscriptionIds)" }
+        if ($PSBoundParameters.ContainsKey('WebReaderManagementGroupNames') -or $WebReaderManagementGroupNames.Count -gt 0)         { $tfVars += "-var=web_reader_management_group_names=$(ConvertTo-TerraformLiteral $WebReaderManagementGroupNames)" }
+        if ($PSBoundParameters.ContainsKey('WebQuotaWriterSubscriptionIds') -or $WebQuotaWriterSubscriptionIds.Count -gt 0)         { $tfVars += "-var=web_quota_writer_subscription_ids=$(ConvertTo-TerraformLiteral $WebQuotaWriterSubscriptionIds)" }
+        if ($PSBoundParameters.ContainsKey('WebQuotaWriterManagementGroupNames') -or $WebQuotaWriterManagementGroupNames.Count -gt 0){ $tfVars += "-var=web_quota_writer_management_group_names=$(ConvertTo-TerraformLiteral $WebQuotaWriterManagementGroupNames)" }
+        if ($PSBoundParameters.ContainsKey('WorkerRbacSubscriptionIds') -or $WorkerRbacSubscriptionIds.Count -gt 0)                 { $tfVars += "-var=worker_subscription_rbac_subscription_ids=$(ConvertTo-TerraformLiteral $WorkerRbacSubscriptionIds)" }
+        if ($PSBoundParameters.ContainsKey('WorkerRbacManagementGroupNames') -or $WorkerRbacManagementGroupNames.Count -gt 0)       { $tfVars += "-var=worker_rbac_management_group_names=$(ConvertTo-TerraformLiteral $WorkerRbacManagementGroupNames)" }
 
         if ($ParameterFile -and (Test-Path $ParameterFile)) {
             $tfVars += "-var-file=$((Resolve-Path $ParameterFile).Path)"
@@ -337,6 +359,15 @@ function Deploy-Terraform {
         Write-Host "Running Terraform apply..."
     & $terraform apply -auto-approve -input=false @tfVars
         if ($LASTEXITCODE -ne 0) { throw 'terraform apply failed' }
+
+        if ([string]::IsNullOrWhiteSpace($script:IngestApiKey)) {
+            $generatedIngestApiKey = & $terraform output -raw effective_ingest_api_key 2>$null
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($generatedIngestApiKey)) {
+                throw 'Terraform deployment succeeded, but the generated ingest API key could not be read from Terraform output for database bootstrap.'
+            }
+
+            $script:IngestApiKey = $generatedIngestApiKey.Trim()
+        }
 
         Write-Host "Terraform deployment succeeded." -ForegroundColor Green
     }
@@ -384,6 +415,10 @@ $deploymentArgs += @('--parameters', "existingKeyVaultName=$ExistingKeyVaultName
 $deploymentArgs += @('--parameters', "existingKeyVaultResourceGroupName=$ExistingKeyVaultResourceGroupName")
 $deploymentArgs += @('--parameters', "existingWorkerStorageAccountName=$ExistingWorkerStorageAccountName")
 $deploymentArgs += @('--parameters', "existingWorkerStorageAccountResourceGroupName=$ExistingWorkerStorageResourceGroupName")
+$deploymentArgs += @('--parameters', "existingVirtualNetworkName=$ExistingVirtualNetworkName")
+$deploymentArgs += @('--parameters', "existingVirtualNetworkResourceGroupName=$ExistingVirtualNetworkResourceGroupName")
+$deploymentArgs += @('--parameters', "existingAppServiceIntegrationSubnetName=$ExistingAppServiceIntegrationSubnetName")
+$deploymentArgs += @('--parameters', "existingPrivateEndpointSubnetName=$ExistingPrivateEndpointSubnetName")
 
 $deploymentArgs += @('--parameters', "authEnabled=$($AuthEnabled.ToString().ToLowerInvariant())")
 

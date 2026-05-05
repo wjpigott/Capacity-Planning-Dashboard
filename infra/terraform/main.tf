@@ -1,46 +1,56 @@
 locals {
-  use_existing_sql_server                      = trimspace(var.existing_sql_server_name) != ""
-  use_existing_sql_database                    = trimspace(var.existing_sql_database_name) != ""
-  use_existing_key_vault                       = trimspace(var.existing_key_vault_name) != ""
-  use_existing_worker_storage_account          = trimspace(var.existing_worker_storage_account_name) != ""
-  app_service_plan_name                        = "asp-capdash-${var.environment}-${var.workload_suffix}"
-  worker_plan_name                             = "asp-capdash-worker-${var.environment}-${var.workload_suffix}"
-  web_app_name                                 = "app-capdash-${var.environment}-${var.workload_suffix}"
-  function_app_name                            = "func-capdash-${var.environment}-${var.workload_suffix}-appsvc"
-  function_storage_name                        = "stcap${var.environment}${random_string.storage_suffix.result}"
-  app_insights_name                            = "appi-capdash-${var.environment}-${var.workload_suffix}"
-  log_analytics_name                           = "log-capdash-${var.environment}-${var.workload_suffix}"
-  key_vault_name                               = var.key_vault_name_override != "" ? var.key_vault_name_override : "kv-capdash-${var.environment}-${var.workload_suffix}"
-  sql_server_name                              = "sql-capdash-${var.environment}-${var.workload_suffix}"
-  sql_database_name                            = "sqldb-capdash-${var.environment}"
-  vnet_name                                    = "vnet-capdash-${var.environment}-${var.workload_suffix}"
-  app_service_integration_subnet               = "snet-appsvc-integration"
-  private_endpoint_subnet                      = "snet-private-endpoints"
-  sql_private_endpoint_name                    = "pep-sql-capdash-${var.environment}-${var.workload_suffix}"
-  sql_private_dns_zone_name                    = "privatelink.database.windows.net"
-  sql_private_dns_zone_vnet_link               = "pdz-link-capdash-${var.environment}-${var.workload_suffix}"
-  kv_private_endpoint_name                     = "pep-kv-capdash-${var.environment}-${var.workload_suffix}"
-  kv_private_dns_zone_name                     = "privatelink.vaultcore.azure.net"
-  kv_private_dns_zone_vnet_link                = "pdz-link-kv-capdash-${var.environment}-${var.workload_suffix}"
-  effective_auth_redirect_uri                  = var.auth_redirect_uri != "" ? var.auth_redirect_uri : "https://${local.web_app_name}.azurewebsites.net/auth/callback"
-  effective_sql_server_resource_group_name     = var.existing_sql_server_resource_group_name != "" ? var.existing_sql_server_resource_group_name : azurerm_resource_group.rg.name
-  effective_sql_server_name                    = local.use_existing_sql_server ? var.existing_sql_server_name : local.sql_server_name
-  effective_sql_server_fqdn                    = endswith(local.effective_sql_server_name, ".database.windows.net") ? local.effective_sql_server_name : "${local.effective_sql_server_name}.database.windows.net"
-  effective_sql_database_name                  = local.use_existing_sql_database ? var.existing_sql_database_name : local.sql_database_name
-  effective_key_vault_resource_group_name      = var.existing_key_vault_resource_group_name != "" ? var.existing_key_vault_resource_group_name : azurerm_resource_group.rg.name
-  effective_key_vault_name                     = local.use_existing_key_vault ? var.existing_key_vault_name : local.key_vault_name
-  effective_key_vault_id                       = local.use_existing_key_vault ? data.azurerm_key_vault.kv[0].id : azurerm_key_vault.kv[0].id
-  effective_key_vault_uri                      = local.use_existing_key_vault ? data.azurerm_key_vault.kv[0].vault_uri : azurerm_key_vault.kv[0].vault_uri
-  effective_worker_storage_resource_group_name = var.existing_worker_storage_account_resource_group_name != "" ? var.existing_worker_storage_account_resource_group_name : azurerm_resource_group.rg.name
-  effective_worker_storage_name                = local.use_existing_worker_storage_account ? var.existing_worker_storage_account_name : local.function_storage_name
-  ingest_api_key_secret_name                   = "capdash-ingest-api-key"
-  session_secret_secret_name                   = "capdash-session-secret"
-  worker_shared_secret_secret_name             = "capdash-worker-shared-secret"
-  entra_client_secret_secret_name              = "capdash-entra-client-secret"
-  ingest_api_key_key_vault_reference           = "@Microsoft.KeyVault(SecretUri=${local.effective_key_vault_uri}secrets/${local.ingest_api_key_secret_name})"
-  session_secret_key_vault_reference           = "@Microsoft.KeyVault(SecretUri=${local.effective_key_vault_uri}secrets/${local.session_secret_secret_name})"
-  worker_shared_secret_key_vault_reference     = var.worker_shared_secret != "" ? "@Microsoft.KeyVault(SecretUri=${local.effective_key_vault_uri}secrets/${local.worker_shared_secret_secret_name})" : ""
-  entra_client_secret_key_vault_reference      = var.entra_client_secret != "" ? "@Microsoft.KeyVault(SecretUri=${local.effective_key_vault_uri}secrets/${local.entra_client_secret_secret_name})" : ""
+  use_existing_sql_server                       = trimspace(var.existing_sql_server_name) != ""
+  use_existing_sql_database                     = trimspace(var.existing_sql_database_name) != ""
+  use_existing_key_vault                        = trimspace(var.existing_key_vault_name) != ""
+  use_existing_worker_storage_account           = trimspace(var.existing_worker_storage_account_name) != ""
+  use_existing_virtual_network                  = trimspace(var.existing_virtual_network_name) != "" || trimspace(var.existing_app_service_integration_subnet_name) != "" || trimspace(var.existing_private_endpoint_subnet_name) != ""
+  app_service_plan_name                         = "asp-capdash-${var.environment}-${var.workload_suffix}"
+  worker_plan_name                              = "asp-capdash-worker-${var.environment}-${var.workload_suffix}"
+  web_app_name                                  = "app-capdash-${var.environment}-${var.workload_suffix}"
+  function_app_name                             = "func-capdash-${var.environment}-${var.workload_suffix}-appsvc"
+  function_storage_name                         = "stcap${var.environment}${random_string.storage_suffix.result}"
+  app_insights_name                             = "appi-capdash-${var.environment}-${var.workload_suffix}"
+  log_analytics_name                            = "log-capdash-${var.environment}-${var.workload_suffix}"
+  key_vault_name                                = var.key_vault_name_override != "" ? var.key_vault_name_override : "kv-capdash-${var.environment}-${var.workload_suffix}"
+  sql_server_name                               = "sql-capdash-${var.environment}-${var.workload_suffix}"
+  sql_database_name                             = "sqldb-capdash-${var.environment}"
+  vnet_name                                     = "vnet-capdash-${var.environment}-${var.workload_suffix}"
+  app_service_integration_subnet                = "snet-appsvc-integration"
+  private_endpoint_subnet                       = "snet-private-endpoints"
+  sql_private_endpoint_name                     = "pep-sql-capdash-${var.environment}-${var.workload_suffix}"
+  sql_private_dns_zone_name                     = "privatelink.database.windows.net"
+  sql_private_dns_zone_vnet_link                = "pdz-link-capdash-${var.environment}-${var.workload_suffix}"
+  kv_private_endpoint_name                      = "pep-kv-capdash-${var.environment}-${var.workload_suffix}"
+  kv_private_dns_zone_name                      = "privatelink.vaultcore.azure.net"
+  kv_private_dns_zone_vnet_link                 = "pdz-link-kv-capdash-${var.environment}-${var.workload_suffix}"
+  effective_auth_redirect_uri                   = var.auth_redirect_uri != "" ? var.auth_redirect_uri : "https://${local.web_app_name}.azurewebsites.net/auth/callback"
+  effective_sql_server_resource_group_name      = var.existing_sql_server_resource_group_name != "" ? var.existing_sql_server_resource_group_name : azurerm_resource_group.rg.name
+  effective_sql_server_name                     = local.use_existing_sql_server ? var.existing_sql_server_name : local.sql_server_name
+  effective_sql_server_fqdn                     = endswith(local.effective_sql_server_name, ".database.windows.net") ? local.effective_sql_server_name : "${local.effective_sql_server_name}.database.windows.net"
+  effective_sql_database_name                   = local.use_existing_sql_database ? var.existing_sql_database_name : local.sql_database_name
+  effective_key_vault_resource_group_name       = var.existing_key_vault_resource_group_name != "" ? var.existing_key_vault_resource_group_name : azurerm_resource_group.rg.name
+  effective_key_vault_name                      = local.use_existing_key_vault ? var.existing_key_vault_name : local.key_vault_name
+  effective_key_vault_id                        = local.use_existing_key_vault ? data.azurerm_key_vault.kv[0].id : azurerm_key_vault.kv[0].id
+  effective_key_vault_uri                       = local.use_existing_key_vault ? data.azurerm_key_vault.kv[0].vault_uri : azurerm_key_vault.kv[0].vault_uri
+  effective_worker_storage_resource_group_name  = var.existing_worker_storage_account_resource_group_name != "" ? var.existing_worker_storage_account_resource_group_name : azurerm_resource_group.rg.name
+  effective_worker_storage_name                 = local.use_existing_worker_storage_account ? var.existing_worker_storage_account_name : local.function_storage_name
+  effective_virtual_network_resource_group_name = var.existing_virtual_network_resource_group_name != "" ? var.existing_virtual_network_resource_group_name : azurerm_resource_group.rg.name
+  effective_virtual_network_name                = local.use_existing_virtual_network ? var.existing_virtual_network_name : local.vnet_name
+  effective_app_service_integration_subnet_name = local.use_existing_virtual_network ? var.existing_app_service_integration_subnet_name : local.app_service_integration_subnet
+  effective_private_endpoint_subnet_name        = local.use_existing_virtual_network ? var.existing_private_endpoint_subnet_name : local.private_endpoint_subnet
+  effective_virtual_network_id                  = local.use_existing_virtual_network ? data.azurerm_virtual_network.existing[0].id : azurerm_virtual_network.vnet[0].id
+  effective_app_service_integration_subnet_id   = local.use_existing_virtual_network ? data.azurerm_subnet.existing_app_service_integration[0].id : azurerm_subnet.app_service_integration[0].id
+  effective_private_endpoint_subnet_id          = local.use_existing_virtual_network ? data.azurerm_subnet.existing_private_endpoints[0].id : azurerm_subnet.private_endpoints[0].id
+  effective_ingest_api_key                      = trimspace(var.ingest_api_key) != "" ? var.ingest_api_key : random_password.ingest_api_key.result
+  effective_session_secret                      = trimspace(var.session_secret) != "" ? var.session_secret : random_password.session_secret.result
+  ingest_api_key_secret_name                    = "capdash-ingest-api-key"
+  session_secret_secret_name                    = "capdash-session-secret"
+  worker_shared_secret_secret_name              = "capdash-worker-shared-secret"
+  entra_client_secret_secret_name               = "capdash-entra-client-secret"
+  ingest_api_key_key_vault_reference            = "@Microsoft.KeyVault(SecretUri=${local.effective_key_vault_uri}secrets/${local.ingest_api_key_secret_name})"
+  session_secret_key_vault_reference            = "@Microsoft.KeyVault(SecretUri=${local.effective_key_vault_uri}secrets/${local.session_secret_secret_name})"
+  worker_shared_secret_key_vault_reference      = var.worker_shared_secret != "" ? "@Microsoft.KeyVault(SecretUri=${local.effective_key_vault_uri}secrets/${local.worker_shared_secret_secret_name})" : ""
+  entra_client_secret_key_vault_reference       = var.entra_client_secret != "" ? "@Microsoft.KeyVault(SecretUri=${local.effective_key_vault_uri}secrets/${local.entra_client_secret_secret_name})" : ""
 }
 
 resource "random_string" "storage_suffix" {
@@ -49,9 +59,33 @@ resource "random_string" "storage_suffix" {
   upper   = false
 }
 
+resource "random_password" "ingest_api_key" {
+  length  = 48
+  special = false
+}
+
+resource "random_password" "session_secret" {
+  length  = 64
+  special = false
+}
+
 resource "azurerm_resource_group" "rg" {
   name     = var.resource_group_name
   location = var.resource_group_location != "" ? var.resource_group_location : var.location
+
+  lifecycle {
+    precondition {
+      condition = (
+        !local.use_existing_virtual_network ||
+        (
+          trimspace(var.existing_virtual_network_name) != "" &&
+          trimspace(var.existing_app_service_integration_subnet_name) != "" &&
+          trimspace(var.existing_private_endpoint_subnet_name) != ""
+        )
+      )
+      error_message = "Existing network mode requires existing_virtual_network_name, existing_app_service_integration_subnet_name, and existing_private_endpoint_subnet_name. existing_virtual_network_resource_group_name is optional and defaults to resource_group_name."
+    }
+  }
 }
 
 data "azurerm_client_config" "current" {}
@@ -60,6 +94,7 @@ data "azurerm_client_config" "current" {}
 # Virtual Network
 # ──────────────────────────────────────────────
 resource "azurerm_virtual_network" "vnet" {
+  count               = local.use_existing_virtual_network ? 0 : 1
   name                = local.vnet_name
   location            = var.location
   resource_group_name = azurerm_resource_group.rg.name
@@ -67,9 +102,10 @@ resource "azurerm_virtual_network" "vnet" {
 }
 
 resource "azurerm_subnet" "app_service_integration" {
+  count                = local.use_existing_virtual_network ? 0 : 1
   name                 = local.app_service_integration_subnet
   resource_group_name  = azurerm_resource_group.rg.name
-  virtual_network_name = azurerm_virtual_network.vnet.name
+  virtual_network_name = azurerm_virtual_network.vnet[0].name
   address_prefixes     = [var.app_service_integration_subnet_prefix]
 
   delegation {
@@ -81,11 +117,32 @@ resource "azurerm_subnet" "app_service_integration" {
 }
 
 resource "azurerm_subnet" "private_endpoints" {
+  count                             = local.use_existing_virtual_network ? 0 : 1
   name                              = local.private_endpoint_subnet
   resource_group_name               = azurerm_resource_group.rg.name
-  virtual_network_name              = azurerm_virtual_network.vnet.name
+  virtual_network_name              = azurerm_virtual_network.vnet[0].name
   address_prefixes                  = [var.private_endpoint_subnet_prefix]
   private_endpoint_network_policies = "Disabled"
+}
+
+data "azurerm_virtual_network" "existing" {
+  count               = local.use_existing_virtual_network ? 1 : 0
+  name                = local.effective_virtual_network_name
+  resource_group_name = local.effective_virtual_network_resource_group_name
+}
+
+data "azurerm_subnet" "existing_app_service_integration" {
+  count                = local.use_existing_virtual_network ? 1 : 0
+  name                 = local.effective_app_service_integration_subnet_name
+  virtual_network_name = local.effective_virtual_network_name
+  resource_group_name  = local.effective_virtual_network_resource_group_name
+}
+
+data "azurerm_subnet" "existing_private_endpoints" {
+  count                = local.use_existing_virtual_network ? 1 : 0
+  name                 = local.effective_private_endpoint_subnet_name
+  virtual_network_name = local.effective_virtual_network_name
+  resource_group_name  = local.effective_virtual_network_resource_group_name
 }
 
 # ──────────────────────────────────────────────
@@ -159,7 +216,7 @@ resource "azurerm_windows_web_app" "web" {
   resource_group_name       = azurerm_resource_group.rg.name
   service_plan_id           = azurerm_service_plan.web.id
   https_only                = true
-  virtual_network_subnet_id = azurerm_subnet.app_service_integration.id
+  virtual_network_subnet_id = local.effective_app_service_integration_subnet_id
 
   identity {
     type = "SystemAssigned"
@@ -206,6 +263,12 @@ resource "azurerm_windows_web_app" "web" {
     "SESSION_STORE_SQL_ENABLED"             = var.auth_enabled ? "true" : "false"
     "SCM_DO_BUILD_DURING_DEPLOYMENT"        = "true"
   }
+
+  lifecycle {
+    ignore_changes = [
+      app_settings["WEBSITE_NODE_DEFAULT_VERSION"],
+    ]
+  }
 }
 
 module "dashboard_web_redirect_uris" {
@@ -230,7 +293,7 @@ resource "azurerm_windows_function_app" "worker" {
   storage_account_name          = local.effective_worker_storage_name
   storage_uses_managed_identity = true
   https_only                    = true
-  virtual_network_subnet_id     = azurerm_subnet.app_service_integration.id
+  virtual_network_subnet_id     = local.effective_app_service_integration_subnet_id
 
   identity {
     type = "SystemAssigned"
@@ -259,6 +322,14 @@ resource "azurerm_windows_function_app" "worker" {
     "WEBSITE_DNS_SERVER"                    = "168.63.129.16"
     "WORKER_SHARED_SECRET"                  = local.worker_shared_secret_key_vault_reference
   }
+
+  lifecycle {
+    ignore_changes = [
+      app_settings["APPLICATIONINSIGHTS_CONNECTION_STRING"],
+      app_settings["FUNCTIONS_EXTENSION_VERSION"],
+      site_config[0].application_insights_connection_string,
+    ]
+  }
 }
 
 # ──────────────────────────────────────────────
@@ -285,13 +356,13 @@ data "azurerm_key_vault" "kv" {
 
 resource "azurerm_key_vault_secret" "ingest_api_key" {
   name         = local.ingest_api_key_secret_name
-  value        = var.ingest_api_key
+  value        = local.effective_ingest_api_key
   key_vault_id = local.effective_key_vault_id
 }
 
 resource "azurerm_key_vault_secret" "session_secret" {
   name         = local.session_secret_secret_name
-  value        = var.session_secret
+  value        = local.effective_session_secret
   key_vault_id = local.effective_key_vault_id
 }
 
@@ -357,7 +428,7 @@ resource "azurerm_private_dns_zone_virtual_network_link" "sql" {
   name                  = local.sql_private_dns_zone_vnet_link
   resource_group_name   = azurerm_resource_group.rg.name
   private_dns_zone_name = azurerm_private_dns_zone.sql[0].name
-  virtual_network_id    = azurerm_virtual_network.vnet.id
+  virtual_network_id    = local.effective_virtual_network_id
   registration_enabled  = false
 }
 
@@ -366,7 +437,7 @@ resource "azurerm_private_endpoint" "sql" {
   name                = local.sql_private_endpoint_name
   location            = var.location
   resource_group_name = azurerm_resource_group.rg.name
-  subnet_id           = azurerm_subnet.private_endpoints.id
+  subnet_id           = local.effective_private_endpoint_subnet_id
 
   private_service_connection {
     name                           = "sqlServerConnection"
@@ -395,7 +466,7 @@ resource "azurerm_private_dns_zone_virtual_network_link" "kv" {
   name                  = local.kv_private_dns_zone_vnet_link
   resource_group_name   = azurerm_resource_group.rg.name
   private_dns_zone_name = azurerm_private_dns_zone.kv[0].name
-  virtual_network_id    = azurerm_virtual_network.vnet.id
+  virtual_network_id    = local.effective_virtual_network_id
   registration_enabled  = false
 }
 
@@ -404,7 +475,7 @@ resource "azurerm_private_endpoint" "kv" {
   name                = local.kv_private_endpoint_name
   location            = var.location
   resource_group_name = azurerm_resource_group.rg.name
-  subnet_id           = azurerm_subnet.private_endpoints.id
+  subnet_id           = local.effective_private_endpoint_subnet_id
 
   private_service_connection {
     name                           = "keyVaultConnection"

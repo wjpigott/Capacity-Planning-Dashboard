@@ -360,6 +360,15 @@ function Deploy-Terraform {
     & $terraform apply -auto-approve -input=false @tfVars
         if ($LASTEXITCODE -ne 0) { throw 'terraform apply failed' }
 
+        if ([string]::IsNullOrWhiteSpace($script:IngestApiKey)) {
+            $generatedIngestApiKey = & $terraform output -raw effective_ingest_api_key 2>$null
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($generatedIngestApiKey)) {
+                throw 'Terraform deployment succeeded, but the generated ingest API key could not be read from Terraform output for database bootstrap.'
+            }
+
+            $script:IngestApiKey = $generatedIngestApiKey.Trim()
+        }
+
         Write-Host "Terraform deployment succeeded." -ForegroundColor Green
     }
     finally {

@@ -26,6 +26,8 @@ The next execution split is now scaffolded in-repo: a dedicated Azure Functions 
 
 Use Draw.io for edits when readability/layout precision matters; keep the Mermaid file for quick text-based diffs and automation-friendly rendering.
 
+## When using this tool keep in mind: Quota doesn't equal Capacity! - Make sure to understand the differences here: [Understanding Capacity](https://jpigott.com/2026/03/capacity-models/)
+
 ## Implementation Status
 
 Status legend:

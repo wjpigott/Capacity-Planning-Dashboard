@@ -12,6 +12,7 @@ This repository contains the initial platform scaffold for a native Azure capaci
 - Deployment and sample data scripts
 - Non-technical Word-friendly deployment guide in `docs/Capacity-Dashboard-Deployment-Guide.rtf`
 - Current-state architecture diagram source and rendered image in `docs/`
+<img width="1904" height="866" alt="CapacityDashboard" src="https://github.com/user-attachments/assets/a76ede35-e06c-4d3f-a7be-a89e0b3ef47c" />
 
 ## Architecture
 

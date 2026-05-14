@@ -43,9 +43,6 @@ const {
   getLivePlacementScoreRows,
   getCapacityRecommendations,
   getRecommendationDiagnostics,
-  startLivePlacementScheduler,
-  updateLivePlacementScheduler,
-  getLivePlacementSchedulerConfig,
   seedVmSkuCatalogIfEmpty
 } = require('./services/livePlacementService');
 const {
@@ -62,7 +59,8 @@ const {
   getIngestionStatus,
   startIngestionScheduler,
   updateIngestionScheduler,
-  getIngestionSchedulerConfig
+  getIngestionSchedulerConfig,
+  inspectCapacityIngestionScope
 } = require('./services/azureIngestionService');
 const { listManagementGroups, listQuotaGroups, listQuotaGroupShareableQuota } = require('./services/quotaDiscoveryService');
 const {
@@ -82,6 +80,7 @@ const {
 } = require('./store/sql');
 const { applyIndexes } = require('./maintenance/applyPerformanceIndexes');
 const { getAIQuotaProviderFromSnapshot, isAIQuotaSourceType } = require('./services/aiIngestionService');
+const { getRegionsForPreset } = require('./config/regionPresets');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -93,8 +92,10 @@ const ingestionJobs = new Map();
 const DASHBOARD_SETTING_KEYS = {
   ingestIntervalMinutes: 'schedule.ingest.intervalMinutes',
   ingestRunOnStartup: 'schedule.ingest.runOnStartup',
-  livePlacementIntervalMinutes: 'schedule.livePlacement.intervalMinutes',
-  livePlacementRunOnStartup: 'schedule.livePlacement.runOnStartup',
+  ingestRegionPreset: 'schedule.ingest.regionPreset',
+  ingestSubscriptionIds: 'schedule.ingest.subscriptionIds',
+  ingestManagementGroupNames: 'schedule.ingest.managementGroupNames',
+  ingestFamilyFilters: 'schedule.ingest.familyFilters',
   aiModelCatalogIntervalMinutes: 'schedule.aiModelCatalog.intervalMinutes',
   showSqlPreview: 'ui.showSqlPreview'
 };
@@ -479,6 +480,16 @@ function buildCapacityIngestionOptions(body = {}) {
     managementGroupNames: body.managementGroupNames,
     familyFilters: body.familyFilters
   };
+}
+
+function buildCapacityIngestionOptionsFromSettings(settings = {}) {
+  const ingest = settings?.ingest || {};
+  return buildCapacityIngestionOptions({
+    regionPreset: ingest.regionPreset,
+    subscriptionIds: ingest.subscriptionIds,
+    managementGroupNames: ingest.managementGroupNames,
+    familyFilters: ingest.familyFilters
+  });
 }
 
 function serializeIngestionJob(job) {
@@ -1191,17 +1202,71 @@ function getDefaultSchedulerSettings() {
   return {
     ingest: {
       intervalMinutes: normalizeIntervalMinutes(process.env.INGEST_INTERVAL_MINUTES, 0),
-      runOnStartup: normalizeBoolean(process.env.INGEST_ON_STARTUP, false)
-    },
-    livePlacement: {
-      intervalMinutes: normalizeIntervalMinutes(process.env.LIVE_PLACEMENT_REFRESH_INTERVAL_MINUTES, 0),
-      runOnStartup: normalizeBoolean(process.env.LIVE_PLACEMENT_REFRESH_ON_STARTUP, false)
+      runOnStartup: normalizeBoolean(process.env.INGEST_ON_STARTUP, false),
+      regionPreset: process.env.INGEST_REGION_PRESET || 'USMajor',
+      subscriptionIds: process.env.INGEST_SUBSCRIPTION_IDS || '',
+      managementGroupNames: process.env.INGEST_MANAGEMENT_GROUP_NAMES || '',
+      familyFilters: ''
     },
     aiModelCatalog: {
       intervalMinutes: normalizeIntervalMinutes(
         process.env.INGEST_AI_MODEL_CATALOG_INTERVAL_MINUTES || process.env.INGEST_OPENAI_MODEL_CATALOG_INTERVAL_MINUTES,
         1440
       )
+    }
+  };
+}
+
+function parseConfigList(value) {
+  if (!value) {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => parseConfigList(entry));
+  }
+
+  return String(value)
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function normalizeSettingText(value, fallback = '') {
+  if (value == null) {
+    return fallback || '';
+  }
+
+  if (Array.isArray(value)) {
+    return parseConfigList(value).join(',');
+  }
+
+  return String(value).trim();
+}
+
+function resolvePresetRegions(regionPreset) {
+  const preset = regionPreset || 'USMajor';
+  return getRegionsForPreset(preset) || ['eastus', 'eastus2', 'centralus', 'westus', 'westus2'];
+}
+
+function getSchedulerScopeSummary(settings = getDefaultSchedulerSettings()) {
+  const ingestSettings = settings?.ingest || getDefaultSchedulerSettings().ingest;
+  const ingestSubscriptionIds = parseConfigList(ingestSettings.subscriptionIds);
+  const ingestManagementGroups = parseConfigList(ingestSettings.managementGroupNames);
+  const ingestFamilyFilters = parseConfigList(ingestSettings.familyFilters);
+  const ingestRegionPreset = normalizeSettingText(ingestSettings.regionPreset, 'USMajor') || 'USMajor';
+
+  return {
+    ingest: {
+      subscriptionIds: ingestSubscriptionIds,
+      managementGroupNames: ingestManagementGroups,
+      subscriptionSource: ingestSubscriptionIds.length > 0
+        ? 'INGEST_SUBSCRIPTION_IDS'
+        : (ingestManagementGroups.length > 0 ? 'INGEST_MANAGEMENT_GROUP_NAMES' : 'managed identity visible subscriptions'),
+      regionPreset: ingestRegionPreset,
+      regions: resolvePresetRegions(ingestRegionPreset),
+      familyFilters: ingestFamilyFilters,
+      updates: ['Saved capacity snapshot data', 'Capacity Grid', 'Region Health', 'Family Summary']
     }
   };
 }
@@ -1213,11 +1278,11 @@ function parseSchedulerSettingsFromDb(dbMap = {}) {
   return {
     ingest: {
       intervalMinutes: normalizeIntervalMinutes(readValue(DASHBOARD_SETTING_KEYS.ingestIntervalMinutes), defaults.ingest.intervalMinutes),
-      runOnStartup: normalizeBoolean(readValue(DASHBOARD_SETTING_KEYS.ingestRunOnStartup), defaults.ingest.runOnStartup)
-    },
-    livePlacement: {
-      intervalMinutes: normalizeIntervalMinutes(readValue(DASHBOARD_SETTING_KEYS.livePlacementIntervalMinutes), defaults.livePlacement.intervalMinutes),
-      runOnStartup: normalizeBoolean(readValue(DASHBOARD_SETTING_KEYS.livePlacementRunOnStartup), defaults.livePlacement.runOnStartup)
+      runOnStartup: normalizeBoolean(readValue(DASHBOARD_SETTING_KEYS.ingestRunOnStartup), defaults.ingest.runOnStartup),
+      regionPreset: normalizeSettingText(readValue(DASHBOARD_SETTING_KEYS.ingestRegionPreset), defaults.ingest.regionPreset),
+      subscriptionIds: normalizeSettingText(readValue(DASHBOARD_SETTING_KEYS.ingestSubscriptionIds), defaults.ingest.subscriptionIds),
+      managementGroupNames: normalizeSettingText(readValue(DASHBOARD_SETTING_KEYS.ingestManagementGroupNames), defaults.ingest.managementGroupNames),
+      familyFilters: normalizeSettingText(readValue(DASHBOARD_SETTING_KEYS.ingestFamilyFilters), defaults.ingest.familyFilters)
     },
     aiModelCatalog: {
       intervalMinutes: normalizeIntervalMinutes(
@@ -1241,11 +1306,11 @@ function applyRuntimeSchedulerSettings(settings = {}) {
   const normalized = {
     ingest: {
       intervalMinutes: normalizeIntervalMinutes(settings?.ingest?.intervalMinutes, 0),
-      runOnStartup: normalizeBoolean(settings?.ingest?.runOnStartup, false)
-    },
-    livePlacement: {
-      intervalMinutes: normalizeIntervalMinutes(settings?.livePlacement?.intervalMinutes, 0),
-      runOnStartup: normalizeBoolean(settings?.livePlacement?.runOnStartup, false)
+      runOnStartup: normalizeBoolean(settings?.ingest?.runOnStartup, false),
+      regionPreset: normalizeSettingText(settings?.ingest?.regionPreset, 'USMajor') || 'USMajor',
+      subscriptionIds: normalizeSettingText(settings?.ingest?.subscriptionIds, ''),
+      managementGroupNames: normalizeSettingText(settings?.ingest?.managementGroupNames, ''),
+      familyFilters: normalizeSettingText(settings?.ingest?.familyFilters, '')
     },
     aiModelCatalog: {
       intervalMinutes: normalizeIntervalMinutes(settings?.aiModelCatalog?.intervalMinutes, 1440)
@@ -1253,7 +1318,6 @@ function applyRuntimeSchedulerSettings(settings = {}) {
   };
 
   updateIngestionScheduler(normalized.ingest);
-  updateLivePlacementScheduler(normalized.livePlacement);
   return normalized;
 }
 
@@ -1261,11 +1325,11 @@ async function saveSchedulerSettings(settings = {}) {
   const normalized = {
     ingest: {
       intervalMinutes: normalizeIntervalMinutes(settings?.ingest?.intervalMinutes, 0),
-      runOnStartup: normalizeBoolean(settings?.ingest?.runOnStartup, false)
-    },
-    livePlacement: {
-      intervalMinutes: normalizeIntervalMinutes(settings?.livePlacement?.intervalMinutes, 0),
-      runOnStartup: normalizeBoolean(settings?.livePlacement?.runOnStartup, false)
+      runOnStartup: normalizeBoolean(settings?.ingest?.runOnStartup, false),
+      regionPreset: normalizeSettingText(settings?.ingest?.regionPreset, 'USMajor') || 'USMajor',
+      subscriptionIds: normalizeSettingText(settings?.ingest?.subscriptionIds, ''),
+      managementGroupNames: normalizeSettingText(settings?.ingest?.managementGroupNames, ''),
+      familyFilters: normalizeSettingText(settings?.ingest?.familyFilters, '')
     },
     aiModelCatalog: {
       intervalMinutes: normalizeIntervalMinutes(settings?.aiModelCatalog?.intervalMinutes, 1440)
@@ -1275,12 +1339,14 @@ async function saveSchedulerSettings(settings = {}) {
   const savedCount = await upsertDashboardSettings({
     [DASHBOARD_SETTING_KEYS.ingestIntervalMinutes]: String(normalized.ingest.intervalMinutes),
     [DASHBOARD_SETTING_KEYS.ingestRunOnStartup]: normalized.ingest.runOnStartup ? 'true' : 'false',
-    [DASHBOARD_SETTING_KEYS.livePlacementIntervalMinutes]: String(normalized.livePlacement.intervalMinutes),
-    [DASHBOARD_SETTING_KEYS.livePlacementRunOnStartup]: normalized.livePlacement.runOnStartup ? 'true' : 'false',
+    [DASHBOARD_SETTING_KEYS.ingestRegionPreset]: normalized.ingest.regionPreset,
+    [DASHBOARD_SETTING_KEYS.ingestSubscriptionIds]: normalized.ingest.subscriptionIds,
+    [DASHBOARD_SETTING_KEYS.ingestManagementGroupNames]: normalized.ingest.managementGroupNames,
+    [DASHBOARD_SETTING_KEYS.ingestFamilyFilters]: normalized.ingest.familyFilters,
     [DASHBOARD_SETTING_KEYS.aiModelCatalogIntervalMinutes]: String(normalized.aiModelCatalog.intervalMinutes)
   });
 
-  if (savedCount < 5) {
+  if (savedCount < 7) {
     throw new Error('SQL scheduler settings could not be saved. Verify SQL connectivity and permissions.');
   }
 
@@ -2694,13 +2760,32 @@ app.post('/api/admin/ingest/capacity', requireAdmin, async (req, res) => {
     return;
   }
 
-  const job = queueCapacityIngestionJob(buildCapacityIngestionOptions(req.body));
+  const bodyOptions = buildCapacityIngestionOptions(req.body);
+  const hasExplicitScope = Object.values(bodyOptions).some((value) => {
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    return value != null && String(value).trim() !== '';
+  });
+  const settings = hasExplicitScope ? null : await getEffectiveSchedulerSettings();
+  const job = queueCapacityIngestionJob(hasExplicitScope ? bodyOptions : buildCapacityIngestionOptionsFromSettings(settings));
   res.status(202).json({ ...serializeIngestionJob(job), statusSnapshot: getIngestionStatus() });
 });
 
 app.get('/api/admin/ingest/status', requireAdmin, (_, res) => {
   const activeJob = getActiveIngestionJob();
   res.json({ ok: true, status: getIngestionStatus(), activeJob: activeJob ? serializeIngestionJob(activeJob) : null });
+});
+
+app.post('/api/admin/ingest/smoke-test', requireAdmin, async (_, res) => {
+  try {
+    const settings = await getEffectiveSchedulerSettings();
+    const options = buildCapacityIngestionOptionsFromSettings(settings);
+    const result = await inspectCapacityIngestionScope(options);
+    res.json({ ok: true, settings, scope: getSchedulerScopeSummary(settings), result });
+  } catch (err) {
+    sendErrorResponse(res, { clientMessage: 'Capacity ingest scope validation failed.', err, scope: 'api/admin/ingest/smoke-test' });
+  }
 });
 
 app.post('/api/admin/ingest/model-catalog', requireAdmin, async (req, res) => {
@@ -2729,13 +2814,12 @@ app.get('/api/admin/ingest/schedule', requireAdmin, async (_, res) => {
     const persistence = await getDashboardSettingsPersistence();
     const runtime = {
       ingest: getIngestionSchedulerConfig(),
-      livePlacement: getLivePlacementSchedulerConfig(),
       aiModelCatalog: {
         intervalMinutes: persisted.aiModelCatalog.intervalMinutes
       }
     };
 
-    res.json({ ok: true, settings: persisted, runtime, persistence });
+    res.json({ ok: true, settings: persisted, runtime, persistence, scope: getSchedulerScopeSummary(persisted) });
   } catch (err) {
     sendErrorResponse(res, { clientMessage: 'Failed to load scheduler settings.', err, scope: 'api/admin/ingest/schedule' });
   }
@@ -2770,7 +2854,6 @@ app.put('/api/admin/ingest/schedule', requireAdmin, async (req, res) => {
         error: `${persistence.message} Runtime schedule remains available, but SQL-backed persistence cannot be updated from the UI.`,
         runtime: {
           ingest: getIngestionSchedulerConfig(),
-          livePlacement: getLivePlacementSchedulerConfig(),
           aiModelCatalog: {
             intervalMinutes: normalizeIntervalMinutes(
               req.body?.aiModelCatalog?.intervalMinutes,
@@ -2785,11 +2868,11 @@ app.put('/api/admin/ingest/schedule', requireAdmin, async (req, res) => {
     const candidate = {
       ingest: {
         intervalMinutes: req.body?.ingest?.intervalMinutes,
-        runOnStartup: req.body?.ingest?.runOnStartup
-      },
-      livePlacement: {
-        intervalMinutes: req.body?.livePlacement?.intervalMinutes,
-        runOnStartup: req.body?.livePlacement?.runOnStartup
+        runOnStartup: req.body?.ingest?.runOnStartup,
+        regionPreset: req.body?.ingest?.regionPreset,
+        subscriptionIds: req.body?.ingest?.subscriptionIds,
+        managementGroupNames: req.body?.ingest?.managementGroupNames,
+        familyFilters: req.body?.ingest?.familyFilters
       },
       aiModelCatalog: {
         intervalMinutes: req.body?.aiModelCatalog?.intervalMinutes
@@ -2799,7 +2882,7 @@ app.put('/api/admin/ingest/schedule', requireAdmin, async (req, res) => {
     const savedSettings = await saveSchedulerSettings(candidate);
     const runtime = applyRuntimeSchedulerSettings(savedSettings);
 
-    res.json({ ok: true, settings: savedSettings, runtime, persistence });
+    res.json({ ok: true, settings: savedSettings, runtime, persistence, scope: getSchedulerScopeSummary(savedSettings) });
   } catch (err) {
     sendErrorResponse(res, { clientMessage: 'Failed to save scheduler settings.', err, scope: 'api/admin/ingest/schedule:put' });
   }
@@ -3164,7 +3247,7 @@ app.get('/react', (req, res) => {
     return sendReactAuthGate(res);
   }
 
-  res.sendFile(path.resolve(__dirname, '..', 'react', 'index.html'));
+  return res.redirect('/');
 });
 
 app.get('/react/*', (req, res, next) => {
@@ -3176,15 +3259,7 @@ app.get('/react/*', (req, res, next) => {
     return sendReactAuthGate(res);
   }
 
-  return res.sendFile(path.resolve(__dirname, '..', 'react', 'index.html'));
-});
-
-app.get('/classic', (req, res) => {
-  return res.sendFile(path.resolve(__dirname, '..', 'index.html'));
-});
-
-app.get('/classic/*', (req, res) => {
-  return res.sendFile(path.resolve(__dirname, '..', 'index.html'));
+  return res.redirect('/');
 });
 
 app.get('/', (req, res) => {
@@ -3192,7 +3267,7 @@ app.get('/', (req, res) => {
     return sendReactAuthGate(res);
   }
 
-  return res.redirect('/react/');
+  return res.sendFile(path.resolve(__dirname, '..', 'react', 'index.html'));
 });
 
 app.get('*', (req, res) => {
@@ -3200,7 +3275,7 @@ app.get('*', (req, res) => {
     return sendReactAuthGate(res);
   }
 
-  return res.redirect('/react/');
+  return res.redirect('/');
 });
 
 async function runStartupWarmup() {
@@ -3224,11 +3299,9 @@ async function runStartupWarmup() {
   try {
     const settings = await getEffectiveSchedulerSettings();
     startIngestionScheduler(settings.ingest);
-    startLivePlacementScheduler(settings.livePlacement);
   } catch (err) {
     console.warn('⚠ Failed to load DB scheduler settings; falling back to environment defaults:', err.message);
     startIngestionScheduler();
-    startLivePlacementScheduler();
   }
 
   if (process.env.SQL_SERVER) {

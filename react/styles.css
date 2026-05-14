@@ -501,6 +501,7 @@ body {
 
 .rx-field select,
 .rx-field input,
+.rx-field textarea,
 .rx-input {
   width: 100%;
   min-height: 44px;
@@ -510,6 +511,13 @@ body {
   background: var(--rx-panel-strong);
   color: var(--rx-ink);
   font: inherit;
+}
+
+.rx-field textarea.rx-input {
+  min-height: 88px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  resize: vertical;
 }
 
 .rx-field--wide {
@@ -558,6 +566,59 @@ body {
 .rx-metric-card--detail strong {
   font-size: 17px;
   line-height: 1.45;
+}
+
+.rx-scope-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px;
+}
+
+.rx-scope-card {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid rgba(213, 224, 235, 0.9);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.rx-scope-card h3 {
+  margin: 0 0 6px;
+  font-size: 17px;
+}
+
+.rx-scope-card p {
+  margin: 0 0 12px;
+  color: var(--rx-muted);
+  line-height: 1.45;
+}
+
+.rx-scope-card dl {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.36fr) minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 0;
+}
+
+.rx-scope-card dt {
+  color: var(--rx-muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.rx-scope-card dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.rx-scope-card__note {
+  margin-top: 14px !important;
+  padding-top: 12px;
+  border-top: 1px solid var(--rx-line);
+  font-weight: 600;
 }
 
 .rx-card,

@@ -152,7 +152,7 @@ Quota move/apply operations require write RBAC in addition to the read access us
 - [x] Admin operation history UI showing recent ingest and refresh events
 - [x] Live placement snapshot persistence (`dbo.LivePlacementSnapshot`) across sessions and desired-count refreshes
 - [ ] Admin error log reviewer/dashboard for support triage
-- [x] Daily scheduled live placement refresh with batching
+- [x] On-demand live placement refresh with last checked snapshot persistence
 - [ ] CI/CD pipeline for build/deploy/migrations
 - [ ] Scheduled ingestion monitoring/alerts
 - [ ] Deployment follow-up: investigate why `Compute Recommendations Role` assigned at the management-group scope did not satisfy `Microsoft.Compute/locations/placementScores/generate/action` for the worker managed identity, while the subscription-level assignment did
@@ -226,14 +226,14 @@ Current recommender behavior:
 
 ### Environment naming and UI theme detection
 
-The dashboard does not read a dedicated environment setting to decide whether to show `Dev`, `Test`, or `Prod` branding in the UI. Both the classic UI and the React UI infer the environment from the request hostname.
+The dashboard does not read a dedicated environment setting to decide whether to show `Dev`, `Test`, or `Prod` branding in the UI. The React UI infers the environment from the request hostname.
 
 Current hostname rules:
 
 - If the hostname contains `test` or `demo`, the UI is treated as `Test`
 - If the hostname contains `dev`, the UI is treated as `Dev`
 - If the hostname contains `prod`, the UI is treated as `Prod`
-- If none of those tokens are present, the classic UI falls back to its default styling and the React UI falls back to generic `React V2` labeling
+- If none of those tokens are present, the React UI falls back to generic `React V2` labeling
 
 Practical guidance for new environments:
 
@@ -330,11 +330,9 @@ Package only the runtime files and folders:
 
 ```powershell
 $items = @(
-	'app.js',
-	'index.html',
 	'server.js',
 	'web.config',
-	'styles.css',
+	'sku-catalog.js',
 	'package.json',
 	'package-lock.json',
 	'react',
@@ -360,7 +358,7 @@ az webapp deploy \
 Verification checks after deploy:
 
 - `curl.exe -i -s "$webAppHost/"`
-- `curl.exe -i -s "$webAppHost/react/"`
+- `curl.exe -i -s "$webAppHost/react/main.js?v=20260514-react-only"`
 - `curl.exe -i -s "$webAppHost/api/auth/me"`
 
 Expected behavior:
@@ -383,17 +381,17 @@ Notes:
 - `deploy-web-app.ps1` now runs `npm test` before packaging and deployment. Use `-SkipTests` only when you intentionally want to bypass the local test gate.
 - The current `npm test` suite is read-only and logic-focused. It does not require on-prem SQL connectivity or Azure API access.
 - The deployment script already stages the correct runtime files and publishes them to the App Service name you pass in.
-- The deployment package stages the repo's `react/` folder, root `server.js`, and root `web.config`, so a fresh pull plus redeploy publishes the current React experience and keeps `/api/*` routed to Express on Windows App Service.
+- The deployment package stages the repo's `react/` folder, root `server.js`, root `web.config`, and shared `sku-catalog.js`, so a fresh pull plus redeploy publishes the current React experience and keeps `/api/*` routed to Express on Windows App Service.
 - Runtime packages should not include repo documentation or design artifacts such as `docs/`, `README.md`, or `api-contract.md`.
 - Keep the package source-shaped. Do not ship local `node_modules`; App Service restores production dependencies during deployment.
-- `/react/` now sends `no-store` cache headers because the React shell uses stable filenames such as `react/main.js`; after a redeploy, the live environment should pick up the current React navigation without relying on a stale browser cache.
+- The root dashboard URL sends `no-store` cache headers because the React shell uses stable filenames such as `react/main.js`; after a redeploy, the live environment should pick up the current React navigation without relying on a stale browser cache.
 - If `az webapp deploy` fails with `AuthorizationFailed`, refresh Azure credentials with `az login`, confirm the correct subscription with `az account show`, and make sure the signed-in identity has App Service access on the resource group that hosts the web app.
-- The React experience is served from `https://<web-app-host>/react/`.
-- Plan the production UI around the React experience. The classic root experience is still present for compatibility, but it should not be treated as the long-term production surface.
+- The React experience is served from `https://<web-app-host>/`; `/react/` remains only as a compatibility alias and static asset path.
+- The legacy classic UI has been removed from the deployment package so the React experience is the only supported dashboard UI.
 
 Repo refresh guidance:
 
-- If someone had an older checkout before the React branding and routing fixes landed, a `git pull` followed by `./deploy-web-app.ps1` is enough to republish the updated React assets and root routing files.
+- If someone had an older checkout before the React-only routing fixes landed, a `git pull` followed by `./deploy-web-app.ps1` is enough to republish the updated React assets and root routing files.
 - If you are provisioning or updating the whole environment, `./scripts/deploy-infra.ps1` also republishes the dashboard web package by default, so the same pull-and-redeploy flow updates both infra settings and the React UI.
 
 Private or DBA-managed SQL note:
@@ -497,8 +495,8 @@ Notes:
 - The migration chain now includes `20260420-add-dashboard-setting.sql` so scheduler persistence is provisioned by bootstrap. If bootstrap stops on an earlier migration, the app falls back to runtime defaults and shows a scheduler provisioning warning instead of creating `dbo.DashboardSetting` on the fly.
 - `sqlcmd` is still required for the manual schema, migration, and sample-data scripts in `scripts/` when you intentionally run them outside the App Service bootstrap flow.
 - The Bicep template now also provisions a Function App plus storage account for the PowerShell 7 worker host.
-- The script-based deployment path now also deploys the dashboard web content, so `/react/` is available immediately after a successful run.
-- The likely production target is React-only. Keep `/react/` as the primary deployed experience and treat the classic root UI as legacy unless a specific environment still requires it.
+- The script-based deployment path now also deploys the dashboard web content, so the root dashboard URL is available immediately after a successful run.
+- The dashboard UI is React-only. Use the site root as the primary deployed experience; `/react/` remains available only as a compatibility alias and static asset path.
 - Raw `az deployment group create` with the Bicep template still provisions infrastructure only; it does not upload the local dashboard or `react/` files.
 - `-ParameterFile` lets you keep environment defaults in a `.bicepparam` file while still overriding secure/runtime values from the command line.
 - `-WebReaderManagementGroupNames` grants the dashboard web app `Reader` at the named management groups. This is the preferred path for larger estates and supports multiple management groups in CAF-style layouts.
@@ -648,11 +646,12 @@ Approvals are required before:
 
 **Configuration options:**
 
-- **Auto-discover**: If `INGEST_SUBSCRIPTION_IDS` is not set, the service calls `/subscriptions` to enumerate all accessible subscriptions.
-- **Explicit list**: Set `INGEST_SUBSCRIPTION_IDS=sub-1,sub-2,sub-3` to ingest only those subscriptions.
-- **Frequency**: Use Admin -> Data Ingestion -> Scheduler Settings to store cadence in SQL (for example 30 = every 30 minutes). `INGEST_INTERVAL_MINUTES` remains the fallback default when SQL settings are unavailable.
+- **Auto-discover**: If no subscription IDs or management groups are saved in Admin -> Data Ingestion, the service calls `/subscriptions` to enumerate all accessible subscriptions.
+- **Explicit list**: Use Admin -> Data Ingestion -> Scheduler Settings to save subscription IDs, management group names, region preset, and optional family filters in SQL for scheduled and manual Admin-triggered Capacity Ingest runs.
+- **Frequency**: Use Admin -> Data Ingestion -> Scheduler Settings to store cadence in SQL (for example 30 = every 30 minutes). `INGEST_INTERVAL_MINUTES`, `INGEST_REGION_PRESET`, `INGEST_SUBSCRIPTION_IDS`, and `INGEST_MANAGEMENT_GROUP_NAMES` remain fallback defaults when SQL settings are unavailable or have not been saved yet.
 - **AI model catalog cadence**: Admin -> Data Ingestion -> Scheduler Settings also stores `schedule.aiModelCatalog.intervalMinutes`. `INGEST_AI_MODEL_CATALOG_INTERVAL_MINUTES` is the primary fallback default when SQL settings are unavailable; `INGEST_OPENAI_MODEL_CATALOG_INTERVAL_MINUTES` remains a backward-compatible alias.
 - **Scheduler persistence**: `Admin -> Data Ingestion -> Scheduler Settings` reads and writes `dbo.DashboardSetting`. If that table is missing, treat it as an incomplete bootstrap/migration state, not as a signal to let the app create tables during normal runtime.
+- **Visible scope**: Admin -> Data Ingestion shows the saved Capacity Ingest scope from `dbo.DashboardSetting` and the on-demand Capacity Score Live behavior. Capacity Ingest can span the configured broad subscription/region scope for saved capacity snapshot-backed reports. Capacity Score Live is on-demand only; `Refresh Live Placement` updates Azure Live Score fields and retains the last checked result in SQL.
 - **Batch tuning**: Subscription batch size (100) and inter-batch delay (2s) are hardcoded; adjust in `azureIngestionService.js` if needed for different ARM throttle profiles.
 
 This design avoids the performance and cost penalties of real-time API calls during dashboard queries — all filtering happens on indexed SQL tables. Batching and retry logic ensure safe ingestion at scale.
@@ -694,9 +693,7 @@ Required app settings:
 - `CAPACITY_WORKER_TIMEOUT_MS` (optional timeout for worker calls, default `60000`)
 - `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK` (`true` disables App Service fallback when the worker is configured but unavailable)
 - `GET_AZ_VM_AVAILABILITY_ROOT` (optional path to Get-AzVMAvailability repository; required in production if Capacity Recommender feature is used; default is relative path `../../Get-AzVMAvailability` from `tools/` folder)
-- `LIVE_PLACEMENT_REFRESH_ON_STARTUP` (`true`/`false`, fallback default when SQL schedule settings are not present)
-- `LIVE_PLACEMENT_REFRESH_INTERVAL_MINUTES` (`0` disables scheduling; `1440` gives a daily refresh; fallback default when SQL schedule settings are not present)
-- `LIVE_PLACEMENT_REFRESH_REGION_PRESET` (default `USMajor`)
+- Capacity Score live placement is on-demand only. The app does not start a scheduled live placement refresh from App Service settings.
 
 Key Vault secrets used by deployed environments:
 
@@ -708,12 +705,7 @@ Key Vault secrets used by deployed environments:
 
 Terraform can generate `capdash-ingest-api-key` and `capdash-session-secret` when `ingest_api_key` and `session_secret` are omitted. Bicep deployments should supply those values through parameters or the wrapper script. The Entra client secret comes from the customer-created app registration client secret and is stored in Key Vault when supplied.
 
-- `LIVE_PLACEMENT_REFRESH_DESIRED_COUNT` (default `1`; use `1` if you want scheduled results reused automatically in the Capacity Score grid)
-- `LIVE_PLACEMENT_REFRESH_SUBSCRIPTION_IDS` (optional comma-separated list; falls back to `INGEST_SUBSCRIPTION_IDS` when omitted)
-- `LIVE_PLACEMENT_REFRESH_REGION` (optional single-region override, default `all`)
-- `LIVE_PLACEMENT_REFRESH_FAMILY` (optional family filter, default `all`)
-- `LIVE_PLACEMENT_REFRESH_AVAILABILITY` (optional availability filter, default `all`)
-- `LIVE_PLACEMENT_REFRESH_EXTRA_SKUS` (optional comma-separated extra SKUs for scheduled placement checks)
+- Live placement scope is selected in the Capacity Score UI when a user runs `Refresh Live Placement`. Results are persisted to `dbo.LivePlacementSnapshot` as the last checked live state for that scope.
 
 DB-backed AI defaults:
 
@@ -933,18 +925,22 @@ Key query behavior:
 - Summary KPI cards are report-aware: Region Matrix shows family/region readiness metrics, while Capacity Grid and other views keep row/quota/cost totals.
 - On the Capacity Grid, the KPI cards use the full filtered result set, not only the currently visible page. Example: `Constrained Rows` reflects all filtered constrained rows across pagination.
 - The High/Medium/Low dashboard score is intentionally separate from the live Azure Placement Score API used by `Get-AzVMAvailability`.
+- Capacity Ingest updates saved capacity/quota snapshot data in `dbo.CapacityLatest`; the Capacity Score report no longer shows a separate `Snapshot Score` column because the user-facing workflow is focused on live placement validation.
+- `Refresh Live Placement` does not create capacity/quota snapshot rows. It only updates `dbo.LivePlacementSnapshot`, which feeds `Azure Live Score`, `Checked`, and live placement state.
 - `Desired Placement Count` in the `Capacity Score` view only affects the on-demand `Refresh Live Placement` action.
 - The value is passed through to `Get-AzVMAvailability` as `DesiredCount`, which tells Azure placement scoring how many VMs you want to place at once. Example: `1` asks "can I likely place one VM here?" while `5` asks for the likelihood of placing five VMs together.
 - The live placement UI clamps `Desired Placement Count` to `1000`. If a larger number is entered, the refresh status line reports the requested value and the effective value sent to the live placement API.
 - Increasing `Desired Placement Count` raises the bar for a `High` live placement result, because the placement API is evaluating a larger simultaneous allocation request.
 - `Desired Placement Count` does not change the persisted dashboard score history in `dbo.CapacityScoreSnapshot`.
 - Live placement refreshes now persist snapshot rows to `dbo.LivePlacementSnapshot` for the effective desired count used by the refresh. The Capacity Score grid auto-hydrates from SQL snapshots for the currently selected desired count.
+- Some rows can come from live placement validation or catalog expansion even when they were not present in the latest capacity ingest result for that exact SKU and region.
 - In the Quota Workbench allocation report, rows are driven by subscriptions whose raw Azure GroupQuota `shareableQuota` is negative; the UI displays the absolute value in the `Quota Group` column and shows the current allocation in `Assigned quota`.
 
 #### Data Ingestion (Admin page)
 
 Admin UI APIs:
 - `POST /api/admin/ingest/capacity`
+- `POST /api/admin/ingest/smoke-test`
 - `GET /api/admin/ingest/status`
 - `GET /api/admin/ingest/schedule`
 - `PUT /api/admin/ingest/schedule`
@@ -957,7 +953,9 @@ Protected internal APIs:
 Current UI behavior:
 - `Refresh Subscriptions` refreshes the subscription catalog and updates the inline status banner.
 - Capacity ingestion now persists both raw `dbo.CapacitySnapshot` rows and aggregated `dbo.CapacityScoreSnapshot` history for the same captured timestamp.
-- `Run Ingest Now` starts a live ingestion run through the app server, updates button/status state, and refreshes report data after completion.
+- `Run Capacity Ingestion` starts a live ingestion run through the app server, updates button/status state, and refreshes report data after completion.
+- `Validate Ingest Scope` resolves the saved SQL scheduler scope through the app server identity and reports subscription, region, management group, and family-filter counts without writing capacity snapshot rows.
+- `Scheduler Scope` cards are read-only in this version. They show the configured Capacity Ingest scope and clarify that Capacity Score Live is on-demand only.
 
 External Azure APIs called by ingestion:
 - `GET https://management.azure.com/subscriptions?api-version=2020-01-01`

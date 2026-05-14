@@ -85,7 +85,7 @@ Optional resource-group overrides are also available for reuse scenarios:
 
 - Keep `dev` as the mutable build-and-verify environment.
 - Stand up `test` as the stable demo environment in the same subscription using the same naming pattern with the environment token changed to `test`.
-- Treat the React app as the primary UI for future production rollout. The classic root UI can remain for compatibility in dev/test, but it should not drive the production deployment shape.
+- Treat the React app as the only supported dashboard UI for future production rollout.
 - Current naming example with `workloadSuffix = demo001`:
 - Web App: `<web-app-name>`
 - Function App: `<function-app-name>`
@@ -203,7 +203,7 @@ Example:
 
 - Raw template deployment still provisions infrastructure only. The script-based workflow now chains the dashboard web app publish and worker Function App zip deployment, but SQL schema migration and some post-deploy app settings remain separate runbook steps.
 - There is no traffic-routing layer in Bicep yet. `dev` and `test` can coexist, but cutover is manual because Front Door, Traffic Manager, or deployment slots are not modeled.
-- A React-only production packaging/deployment path is not modeled separately yet. The next production pass should decide whether the classic UI is omitted entirely or retained only as a compatibility fallback.
+- The web deployment package is React-only for dashboard UI files, with the site root as the canonical dashboard URL; App Service still runs the Node/Express backend for API, auth, and worker coordination routes.
 - SQL database data-plane grants (for example `db_datareader` and `db_datawriter`) are not ARM resources and still require post-deploy SQL role configuration. The repo now includes `scripts/initialize-database.ps1` for that step when SQL is customer-managed.
 - If your organization requires billing-scope role assignments (instead of subscription scope), those billing-scope assignments remain external to this resource-group deployment.
 - Entra app registration creation and tenant-side consent/group assignment remain external to the template. The template now wires the dashboard auth settings, but you still need a real Entra app registration and group/object IDs.

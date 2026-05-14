@@ -1,5 +1,21 @@
 # Release Notes
 
+## Unreleased
+
+Highlights:
+
+- Removed the legacy classic dashboard UI from the web deployment package so the React experience is the only supported dashboard UI.
+- Removed the React sidebar link back to the retired classic UI.
+- Made the site root the canonical dashboard URL while keeping `/react/` as a compatibility alias and asset path.
+- Removed the Snapshot Score column from the Capacity Score report so the view focuses on on-demand Azure live placement results.
+- Clarified the Capacity Score live placement panel so it shows the current reporting region/filter scope used by a refresh.
+- Documented that Capacity Ingest still updates backend snapshot data while Refresh Live Placement updates Azure Live Score.
+- Made Capacity Score live placement on-demand only while retaining the last checked live score in SQL.
+- Added Admin controls for saving Capacity Ingest scope in SQL, including region preset, subscription IDs, management groups, and family filters.
+- Added Admin scope cards showing configured Capacity Ingest scope and the on-demand Capacity Score Live behavior.
+- Added an Admin `Validate Ingest Scope` smoke test that resolves saved SQL scheduler settings through the app identity without writing capacity snapshot rows.
+- Kept the Node/Express backend in place for API, auth, session, ingestion, and worker-coordination routes.
+
 ## v1.0.0-poc - 2026-05-14
 
 This release marks the current deployed `main` branch as the initial proof-of-concept baseline for the Capacity Planning Dashboard.

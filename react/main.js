@@ -640,54 +640,6 @@ function matrixStatusMeta(status) {
   return { short: '✗ BLOCKED', description: 'Cannot deploy. Pick a different region or SKU.' };
 }
 
-function formatCapacityScoreLabel(value) {
-  return String(value || '').toUpperCase() === 'HIGH' ? 'Snapshot OK' : (value || 'n/a');
-}
-
-function getCapacityScoreDisplayMeta(row) {
-  const liveScore = String(row?.livePlacementScore || '').trim();
-  const normalizedLiveScore = liveScore.toUpperCase();
-
-  if (row?.livePlacementRestricted || normalizedLiveScore.includes('RESTRICTED')) {
-    return {
-      value: 'Restricted',
-      label: 'Live Restricted'
-    };
-  }
-
-  if (normalizedLiveScore.includes('NOTAVAILABLE') || normalizedLiveScore.includes('UNAVAILABLE')) {
-    return {
-      value: 'Unavailable',
-      label: 'Live Unavailable'
-    };
-  }
-
-  return {
-    value: row?.score,
-    label: formatCapacityScoreLabel(row?.score)
-  };
-}
-
-function capacityScoreLegendItems() {
-  return [
-    {
-      value: 'High',
-      title: 'Snapshot OK',
-      description: 'Strong derived snapshot posture from the saved OK, Limited, Constrained, and quota observations. If the latest live Azure result is restricted or unavailable, that live state takes precedence in the table.'
-    },
-    {
-      value: 'Medium',
-      title: 'Medium',
-      description: 'Mixed signal. Some headroom exists, but the saved capacity observations show caution.'
-    },
-    {
-      value: 'Low',
-      title: 'Low',
-      description: 'Weak derived capacity posture. Expect constraints, low quota headroom, or both.'
-    }
-  ];
-}
-
 function livePlacementLegendItems() {
   return [
     {
@@ -1938,6 +1890,19 @@ function SubscriptionPicker({ options, selectedIds, search, onSearch, onToggle, 
   );
 }
 
+function formatScopeList(values, emptyLabel = 'Not configured', limit = 6) {
+  const list = (Array.isArray(values) ? values : [])
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+
+  if (list.length === 0) {
+    return emptyLabel;
+  }
+
+  const visible = list.slice(0, limit).join(', ');
+  return list.length > limit ? `${visible}, +${list.length - limit} more` : visible;
+}
+
 function AdminIngestionView(props) {
   const {
     job,
@@ -1945,7 +1910,8 @@ function AdminIngestionView(props) {
     schedule,
     runtime,
     persistence,
-    selectedRegionPreset,
+    scope,
+    smokeTest,
     actions,
     onScheduleChange,
     busy,
@@ -1964,6 +1930,7 @@ function AdminIngestionView(props) {
   const schedulerPersistenceAvailable = persistence?.available !== false;
   const schedulerMessage = persistence?.message || 'Scheduler settings are persisted in SQL and applied to the runtime scheduler when saved.';
   const jobRunning = jobState === 'queued' || jobState === 'running' || status?.inProgress;
+  const ingestScope = scope?.ingest || {};
 
   return (
     <div className="rx-view-stack">
@@ -1971,11 +1938,37 @@ function AdminIngestionView(props) {
       <section className="rx-panel">
         <div className="rx-panel__header"><div><h2>Capacity Ingestion</h2><p>Trigger ingestion runs and manage the background scheduler used by the dashboard.</p></div></div>
         <div className="rx-inline-actions">
-          <span className="rx-selected-count">Using region preset: {selectedRegionPreset || 'all'}</span>
+          <span className="rx-selected-count">Saved ingest region preset: {schedule.ingest.regionPreset || 'USMajor'}</span>
           <button className="rx-button" type="button" onClick={actions.triggerIngest} disabled={busy.trigger || jobRunning}>{busy.trigger || jobRunning ? 'Ingest Running...' : 'Run Capacity Ingestion'}</button>
+          <button className="rx-button rx-button--secondary" type="button" onClick={actions.smokeTestIngestScope} disabled={busy.smokeTest}>{busy.smokeTest ? 'Validating Scope...' : 'Validate Ingest Scope'}</button>
           <button className="rx-button rx-button--secondary" type="button" onClick={actions.refreshModelCatalog} disabled={busy.refreshModelCatalog}>{busy.refreshModelCatalog ? 'Refreshing Models...' : 'Refresh Model Library'}</button>
           <button className="rx-button rx-button--secondary" type="button" onClick={actions.refreshStatus} disabled={busy.refreshStatus}>{busy.refreshStatus ? 'Refreshing...' : 'Refresh Status'}</button>
           <button className="rx-button rx-button--secondary" type="button" onClick={actions.refreshSchedule} disabled={busy.refreshSchedule}>{busy.refreshSchedule ? 'Loading Settings...' : 'Reload Scheduler Settings'}</button>
+        </div>
+      </section>
+      <section className="rx-panel rx-panel--compact rx-panel--muted">
+        <div className="rx-panel__header"><div><h2>Scheduler Scope</h2><p>Read-only view of the configured Capacity Ingest execution scope. Capacity Score live placement is on-demand only and stores the last checked result.</p></div></div>
+        <div className="rx-scope-grid">
+          <article className="rx-scope-card">
+            <h3>Capacity Ingest</h3>
+            <p>Updates saved capacity snapshot data, Capacity Grid, Region Health, and Family Summary.</p>
+            <dl>
+              <dt>Subscription source</dt><dd>{ingestScope.subscriptionSource || 'managed identity visible subscriptions'}</dd>
+              <dt>Subscriptions</dt><dd>{formatScopeList(ingestScope.subscriptionIds, ingestScope.managementGroupNames?.length ? 'Management group scoped' : 'Visible to managed identity', 3)}</dd>
+              <dt>Management groups</dt><dd>{formatScopeList(ingestScope.managementGroupNames, 'None configured', 3)}</dd>
+              <dt>Regions</dt><dd>{ingestScope.regionPreset || 'USMajor'} ({formatScopeList(ingestScope.regions, 'No regions resolved')})</dd>
+              <dt>Family filters</dt><dd>{formatScopeList(ingestScope.familyFilters, 'All families', 4)}</dd>
+            </dl>
+          </article>
+          <article className="rx-scope-card">
+            <h3>Capacity Score Live</h3>
+            <p>Azure Live Score is refreshed only when a user runs Refresh Live Placement from Capacity Score. The last checked result is retained in SQL for the selected scope.</p>
+            <dl>
+              <dt>Scheduling</dt><dd>Not scheduled</dd>
+              <dt>Updates</dt><dd>Azure Live Score, Checked, and live placement state</dd>
+              <dt>Capacity snapshots</dt><dd>Not changed by live placement</dd>
+            </dl>
+          </article>
         </div>
       </section>
       <section className="rx-panel rx-panel--compact rx-panel--muted">
@@ -1995,18 +1988,20 @@ function AdminIngestionView(props) {
           <article className="rx-metric-card rx-metric-card--detail"><span>Last Error</span><strong>{status?.lastError || 'None'}</strong></article>
         </div>
       </section>
+      {smokeTest ? <section className="rx-panel rx-panel--compact rx-panel--muted"><div className="rx-panel__header"><div><h2>Scope Validation</h2><p>Latest dry-run validation of the saved Capacity Ingest scope. This does not write capacity snapshot rows.</p></div></div><div className="rx-summary-grid rx-summary-grid--status"><article className="rx-metric-card"><span>Subscriptions</span><strong>{formatNumber(smokeTest.subscriptionCount || 0)}</strong></article><article className="rx-metric-card"><span>Regions</span><strong>{formatNumber(smokeTest.regionCount || 0)}</strong></article><article className="rx-metric-card"><span>Family Filters</span><strong>{formatNumber(smokeTest.familyFilterCount || 0)}</strong></article><article className="rx-metric-card rx-metric-card--detail"><span>Region Preset</span><strong>{smokeTest.regionPreset || 'n/a'}</strong></article><article className="rx-metric-card rx-metric-card--detail"><span>Management Groups</span><strong>{formatScopeList(smokeTest.managementGroupNames, 'None configured', 4)}</strong></article><article className="rx-metric-card rx-metric-card--detail"><span>Resolved Regions</span><strong>{formatScopeList(smokeTest.regions, 'No regions resolved', 6)}</strong></article><article className="rx-metric-card rx-metric-card--detail"><span>Subscription Preview</span><strong>{formatScopeList((smokeTest.subscriptions || []).map((subscription) => subscription.displayName || subscription.subscriptionId), 'No subscriptions resolved', 5)}{smokeTest.subscriptionPreviewTruncated ? ', ...' : ''}</strong></article></div></section> : null}
       <section className="rx-panel">
         <div className="rx-panel__header"><div><h2>Scheduler Settings</h2><p>{schedulerMessage}</p></div></div>
         <div className="rx-field-grid rx-field-grid--filters">
           <label className="rx-field"><span>Ingest Interval (minutes)</span><input className="rx-input" type="number" min="0" step="1" value={schedule.ingest.intervalMinutes} onChange={(event) => onScheduleChange('ingest', 'intervalMinutes', Number(event.target.value || 0))} disabled={!schedulerPersistenceAvailable} /></label>
-          <label className="rx-field"><span>Live Placement Interval (minutes)</span><input className="rx-input" type="number" min="0" step="1" value={schedule.livePlacement.intervalMinutes} onChange={(event) => onScheduleChange('livePlacement', 'intervalMinutes', Number(event.target.value || 0))} disabled={!schedulerPersistenceAvailable} /></label>
+          <label className="rx-field"><span>Ingest Region Preset</span><select value={schedule.ingest.regionPreset || 'USMajor'} onChange={(event) => onScheduleChange('ingest', 'regionPreset', event.target.value)} disabled={!schedulerPersistenceAvailable}>{REGION_PRESET_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
           <label className="rx-field"><span>AI Model Catalog Interval (hours)</span><input className="rx-input" type="number" min="0" step="1" value={minutesToHours(schedule.aiModelCatalog.intervalMinutes, 1440)} onChange={(event) => onScheduleChange('aiModelCatalog', 'intervalMinutes', hoursToMinutes(event.target.value, 1440))} disabled={!schedulerPersistenceAvailable} /></label>
           <label className="rx-check"><input type="checkbox" checked={schedule.ingest.runOnStartup} onChange={(event) => onScheduleChange('ingest', 'runOnStartup', event.target.checked)} disabled={!schedulerPersistenceAvailable} />Run ingest on startup</label>
-          <label className="rx-check"><input type="checkbox" checked={schedule.livePlacement.runOnStartup} onChange={(event) => onScheduleChange('livePlacement', 'runOnStartup', event.target.checked)} disabled={!schedulerPersistenceAvailable} />Run live placement on startup</label>
+          <label className="rx-field rx-field--wide"><span>Subscription IDs</span><textarea className="rx-input" rows="3" value={schedule.ingest.subscriptionIds || ''} placeholder="Leave blank to use all subscriptions visible to the managed identity" onChange={(event) => onScheduleChange('ingest', 'subscriptionIds', event.target.value)} disabled={!schedulerPersistenceAvailable}></textarea></label>
+          <label className="rx-field rx-field--wide"><span>Management Groups</span><textarea className="rx-input" rows="3" value={schedule.ingest.managementGroupNames || ''} placeholder="Comma-separated management group names; optional" onChange={(event) => onScheduleChange('ingest', 'managementGroupNames', event.target.value)} disabled={!schedulerPersistenceAvailable}></textarea></label>
+          <label className="rx-field rx-field--wide"><span>Family Filters</span><textarea className="rx-input" rows="3" value={schedule.ingest.familyFilters || ''} placeholder="Comma-separated family filters; leave blank for all families" onChange={(event) => onScheduleChange('ingest', 'familyFilters', event.target.value)} disabled={!schedulerPersistenceAvailable}></textarea></label>
         </div>
         <div className="rx-inline-actions">
           <span className="rx-selected-count">Runtime ingest interval: {formatNumber(runtime.ingest.intervalMinutes)} min</span>
-          <span className="rx-selected-count">Runtime live placement interval: {formatNumber(runtime.livePlacement.intervalMinutes)} min</span>
           <span className="rx-selected-count">Runtime AI model catalog interval: {minutesToHours(runtime.aiModelCatalog.intervalMinutes, 1440)} hr</span>
           <button className="rx-button" type="button" onClick={actions.saveSchedule} disabled={!schedulerPersistenceAvailable || busy.saveSchedule}>{busy.saveSchedule ? 'Saving...' : 'Save Scheduler Settings'}</button>
         </div>
@@ -3001,7 +2996,7 @@ function App() {
   const [exportBusyFormat, setExportBusyFormat] = useState('');
   const [recommendState, setRecommendState] = useState({ targetSku: '', autoTargetSku: '', regions: '', autoRegions: '', topN: 10, minScore: 50, showPricing: true, showSpot: false, result: null, status: { tone: 'info', message: 'Run the recommender to populate alternatives.' }, busy: false });
   const [aiModelFilters, setAiModelFilters] = useState({ modelName: '', provider: 'all', deploymentType: 'all', fineTuning: 'all', defaultOnly: false });
-  const [adminState, setAdminState] = useState({ job: null, status: null, schedule: { ingest: { intervalMinutes: 0, runOnStartup: false }, livePlacement: { intervalMinutes: 0, runOnStartup: false }, aiModelCatalog: { intervalMinutes: 1440 } }, runtime: { ingest: { intervalMinutes: 0, runOnStartup: false }, livePlacement: { intervalMinutes: 0, runOnStartup: false }, aiModelCatalog: { intervalMinutes: 1440 } }, persistence: { available: true, source: 'sql', message: 'SQL scheduler settings are available.' }, statusMessage: { tone: 'info', message: 'Data ingestion tools ready.' }, busy: { refreshStatus: false, trigger: false, refreshModelCatalog: false, refreshSchedule: false, saveSchedule: false } });
+  const [adminState, setAdminState] = useState({ job: null, status: null, schedule: { ingest: { intervalMinutes: 0, runOnStartup: false, regionPreset: 'USMajor', subscriptionIds: '', managementGroupNames: '', familyFilters: '' }, aiModelCatalog: { intervalMinutes: 1440 } }, runtime: { ingest: { intervalMinutes: 0, runOnStartup: false, regionPreset: 'USMajor', subscriptionIds: '', managementGroupNames: '', familyFilters: '' }, aiModelCatalog: { intervalMinutes: 1440 } }, scope: { ingest: {} }, smokeTest: null, persistence: { available: true, source: 'sql', message: 'SQL scheduler settings are available.' }, statusMessage: { tone: 'info', message: 'Data ingestion tools ready.' }, busy: { refreshStatus: false, trigger: false, smokeTest: false, refreshModelCatalog: false, refreshSchedule: false, saveSchedule: false } });
   const [quotaState, setQuotaState] = useState({ managementGroups: [], selectedManagementGroup: '', quotaGroups: [], selectedQuotaGroup: 'all', shareableReport: { rows: [], summary: { rowCount: 0, subscriptionCount: 0, regionCount: 0, skuCount: 0, totalShareableQuota: 0 }, generatedAtUtc: null }, candidates: [], quotaRuns: [], selectedAnalysisRunId: '', selectedDonorSubscriptionId: '', selectedMoveCandidate: null, requestedTransferAmount: 0, planRows: [], impactRows: [], applyResults: [], planSummary: {}, candidateFilters: { subscriptionId: 'all', region: 'all', family: '', intent: 'all' }, status: { tone: 'info', message: 'Quota tools ready.' }, busy: { discover: false, shareableReport: false, generate: false, capture: false, refresh: false, refreshRuns: false, plan: false, simulate: false, apply: false } });
   const [showSqlPreview, setShowSqlPreview] = useState(false);
   const [sqlPreviewState, setSqlPreviewState] = useState({ loading: false, error: '', rows: [] });
@@ -3107,9 +3102,31 @@ function App() {
     subscriptionOptions.find((option) => option.subscriptionId === livePlacementSubscriptionId) || null
   ), [livePlacementSubscriptionId, subscriptionOptions]);
   const livePlacementSelectedFamilyLabel = useMemo(() => formatFamilyLabel(livePlacementFamily) || livePlacementFamily || 'n/a', [livePlacementFamily]);
+  const livePlacementRegionScopeLabel = useMemo(() => {
+    if (filters.region && filters.region !== 'all') {
+      return `region ${filters.region}`;
+    }
+
+    const preset = REGION_PRESET_OPTIONS.find((option) => option.value === filters.regionPreset);
+    if (preset) {
+      return `${preset.label} region preset`;
+    }
+
+    return 'all scoped regions';
+  }, [filters.region, filters.regionPreset]);
+  const livePlacementFilterScopeLabel = useMemo(() => {
+    const parts = [livePlacementRegionScopeLabel];
+    if (filters.availability && filters.availability !== 'all') {
+      parts.push(`${filters.availability} availability`);
+    }
+    if (filters.sku && filters.sku !== 'all') {
+      parts.push(`SKU ${normalizeSkuName(filters.sku) || filters.sku}`);
+    }
+    return parts.join(', ');
+  }, [filters.availability, filters.sku, livePlacementRegionScopeLabel]);
   const canRefreshLivePlacement = Boolean(livePlacementSubscriptionId && livePlacementFamily && livePlacementFamily !== 'all');
   const livePlacementScopeMessage = canRefreshLivePlacement
-    ? `Live placement refresh will run only for ${livePlacementSelectedSubscription?.subscriptionName || livePlacementSelectedSubscription?.subscriptionId || selectedSubscriptionIds[0]} in ${livePlacementSelectedFamilyLabel}.`
+    ? `Live placement refresh will run for ${livePlacementSelectedSubscription?.subscriptionName || livePlacementSelectedSubscription?.subscriptionId || selectedSubscriptionIds[0]} in ${livePlacementSelectedFamilyLabel}, using current reporting scope: ${livePlacementFilterScopeLabel}.`
     : (!livePlacementSubscriptionId
       ? 'Select the target subscription for live placement refresh.'
       : 'Select the target family for live placement refresh.');
@@ -3297,14 +3314,15 @@ function App() {
       { section: 'Status', metric: 'Subscriptions', value: summary.subscriptionCount || 0 },
       { section: 'Scheduler', metric: 'Ingest Interval Minutes', value: adminState.schedule.ingest.intervalMinutes },
       { section: 'Scheduler', metric: 'Ingest Run On Startup', value: adminState.schedule.ingest.runOnStartup },
-      { section: 'Scheduler', metric: 'Live Placement Interval Minutes', value: adminState.schedule.livePlacement.intervalMinutes },
-      { section: 'Scheduler', metric: 'Live Placement Run On Startup', value: adminState.schedule.livePlacement.runOnStartup },
+      { section: 'Scheduler', metric: 'Ingest Region Preset', value: adminState.schedule.ingest.regionPreset || '' },
+      { section: 'Scheduler', metric: 'Ingest Subscription IDs', value: adminState.schedule.ingest.subscriptionIds || '' },
+      { section: 'Scheduler', metric: 'Ingest Management Groups', value: adminState.schedule.ingest.managementGroupNames || '' },
+      { section: 'Scheduler', metric: 'Ingest Family Filters', value: adminState.schedule.ingest.familyFilters || '' },
       { section: 'Scheduler', metric: 'AI Model Catalog Interval Minutes', value: adminState.schedule.aiModelCatalog.intervalMinutes },
       { section: 'Runtime', metric: 'Ingest Interval Minutes', value: adminState.runtime.ingest.intervalMinutes },
-      { section: 'Runtime', metric: 'Live Placement Interval Minutes', value: adminState.runtime.livePlacement.intervalMinutes },
       { section: 'Runtime', metric: 'AI Model Catalog Interval Minutes', value: adminState.runtime.aiModelCatalog.intervalMinutes }
     ];
-  }, [adminState.job, adminState.runtime.aiModelCatalog.intervalMinutes, adminState.runtime.ingest.intervalMinutes, adminState.runtime.livePlacement.intervalMinutes, adminState.schedule.aiModelCatalog.intervalMinutes, adminState.schedule.ingest.intervalMinutes, adminState.schedule.ingest.runOnStartup, adminState.schedule.livePlacement.intervalMinutes, adminState.schedule.livePlacement.runOnStartup, adminState.status]);
+  }, [adminState.job, adminState.runtime.aiModelCatalog.intervalMinutes, adminState.runtime.ingest.intervalMinutes, adminState.schedule.aiModelCatalog.intervalMinutes, adminState.schedule.ingest.familyFilters, adminState.schedule.ingest.intervalMinutes, adminState.schedule.ingest.managementGroupNames, adminState.schedule.ingest.regionPreset, adminState.schedule.ingest.runOnStartup, adminState.schedule.ingest.subscriptionIds, adminState.status]);
   const activeReportExportOptions = useMemo(() => {
     if (activeView === 'capacity-grid') {
       return [
@@ -3385,7 +3403,6 @@ function App() {
           { label: 'Region', value: (row) => row.region },
           { label: 'SKU', value: (row) => normalizeSkuName(row.sku) || '' },
           { label: 'Family', value: (row) => formatFamilyLabel(row.family) || row.family || '' },
-          { label: 'Capacity Score', value: (row) => row.score },
           { label: 'Azure Live Score', value: (row) => row.livePlacementScore || '' },
           { label: 'Checked', value: (row) => formatTimestamp(row.liveCheckedAtUtc) },
           { label: 'Subscriptions', value: (row) => row.subscriptionCount },
@@ -4188,6 +4205,7 @@ function App() {
           status: statusPayload.status || null,
           schedule: schedulePayload.settings || current.schedule,
           runtime: schedulePayload.runtime || current.runtime,
+          scope: schedulePayload.scope || current.scope,
           persistence: schedulePayload.persistence || current.persistence,
           busy: { ...current.busy, refreshStatus: false, refreshSchedule: false },
           statusMessage: schedulePayload.persistence && schedulePayload.persistence.available === false
@@ -4460,7 +4478,7 @@ function App() {
       ...current,
       desiredCount: String(desiredCount),
       busy: true,
-      status: { tone: 'info', message: 'Refreshing live placement scores...', detail: null }
+      status: { tone: 'info', message: 'Refreshing live placement scores...', detail: livePlacementScopeMessage }
     }));
 
     try {
@@ -4577,10 +4595,28 @@ function App() {
       if (!auth?.canAccessAdmin) return;
       setAdminState((current) => ({ ...current, busy: { ...current.busy, trigger: true }, statusMessage: { tone: 'info', message: 'Starting capacity ingestion...' } }));
       try {
-        const payload = await fetchJson('/api/admin/ingest/capacity', { method: 'POST', body: JSON.stringify({ regionPreset: filters.regionPreset === 'all' || filters.regionPreset === 'custom' ? undefined : filters.regionPreset }) });
+        const payload = await fetchJson('/api/admin/ingest/capacity', { method: 'POST', body: JSON.stringify({}) });
         setAdminState((current) => ({ ...current, job: payload.jobId ? { jobId: payload.jobId, status: payload.status, createdAtUtc: payload.createdAtUtc, startedAtUtc: payload.startedAtUtc, completedAtUtc: payload.completedAtUtc, error: payload.error || null, result: payload.result || null } : current.job, status: payload.statusSnapshot || current.status, busy: { ...current.busy, trigger: false }, statusMessage: { tone: 'success', message: payload.status === 'queued' ? 'Capacity ingestion queued. Monitoring progress...' : 'Capacity ingestion started. Monitoring progress...' } }));
       } catch (error) {
         setAdminState((current) => ({ ...current, busy: { ...current.busy, trigger: false }, statusMessage: { tone: 'error', message: error.message || 'Failed to start capacity ingestion.' } }));
+      }
+    },
+    smokeTestIngestScope: async () => {
+      if (!auth?.canAccessAdmin) return;
+      setAdminState((current) => ({ ...current, busy: { ...current.busy, smokeTest: true }, statusMessage: { tone: 'info', message: 'Validating saved Capacity Ingest scope...' } }));
+      try {
+        const payload = await fetchJson('/api/admin/ingest/smoke-test', { method: 'POST', body: JSON.stringify({}) });
+        const result = payload.result || null;
+        setAdminState((current) => ({
+          ...current,
+          schedule: payload.settings || current.schedule,
+          scope: payload.scope || current.scope,
+          smokeTest: result,
+          busy: { ...current.busy, smokeTest: false },
+          statusMessage: { tone: 'success', message: `Validated ingest scope: ${formatNumber(result?.subscriptionCount || 0)} subscriptions across ${formatNumber(result?.regionCount || 0)} regions.` }
+        }));
+      } catch (error) {
+        setAdminState((current) => ({ ...current, busy: { ...current.busy, smokeTest: false }, statusMessage: { tone: 'error', message: error.message || 'Failed to validate Capacity Ingest scope.' } }));
       }
     },
     refreshModelCatalog: async () => {
@@ -4598,7 +4634,7 @@ function App() {
       setAdminState((current) => ({ ...current, busy: { ...current.busy, refreshSchedule: true } }));
       try {
         const payload = await fetchJson('/api/admin/ingest/schedule');
-        setAdminState((current) => ({ ...current, schedule: payload.settings || current.schedule, runtime: payload.runtime || current.runtime, persistence: payload.persistence || current.persistence, busy: { ...current.busy, refreshSchedule: false }, statusMessage: payload.persistence && payload.persistence.available === false ? { tone: 'warn', message: payload.persistence.message || 'Scheduler settings are running in read-only runtime mode.' } : { tone: 'success', message: 'Scheduler settings reloaded.' } }));
+        setAdminState((current) => ({ ...current, schedule: payload.settings || current.schedule, runtime: payload.runtime || current.runtime, scope: payload.scope || current.scope, persistence: payload.persistence || current.persistence, busy: { ...current.busy, refreshSchedule: false }, statusMessage: payload.persistence && payload.persistence.available === false ? { tone: 'warn', message: payload.persistence.message || 'Scheduler settings are running in read-only runtime mode.' } : { tone: 'success', message: 'Scheduler settings reloaded.' } }));
       } catch (error) {
         setAdminState((current) => ({ ...current, busy: { ...current.busy, refreshSchedule: false }, statusMessage: { tone: 'error', message: error.message || 'Failed to load scheduler settings.' } }));
       }
@@ -4612,7 +4648,7 @@ function App() {
       setAdminState((current) => ({ ...current, busy: { ...current.busy, saveSchedule: true }, statusMessage: { tone: 'info', message: 'Saving scheduler settings...' } }));
       try {
         const payload = await fetchJson('/api/admin/ingest/schedule', { method: 'PUT', body: JSON.stringify(adminState.schedule) });
-        setAdminState((current) => ({ ...current, schedule: payload.settings || current.schedule, runtime: payload.runtime || current.runtime, persistence: payload.persistence || current.persistence, busy: { ...current.busy, saveSchedule: false }, statusMessage: { tone: 'success', message: 'Scheduler settings saved and applied.' } }));
+        setAdminState((current) => ({ ...current, schedule: payload.settings || current.schedule, runtime: payload.runtime || current.runtime, scope: payload.scope || current.scope, persistence: payload.persistence || current.persistence, busy: { ...current.busy, saveSchedule: false }, statusMessage: { tone: 'success', message: 'Scheduler settings saved and applied.' } }));
       } catch (error) {
         setAdminState((current) => ({ ...current, busy: { ...current.busy, saveSchedule: false }, statusMessage: { tone: 'error', message: error.message || 'Failed to save scheduler settings.' } }));
       }
@@ -4840,7 +4876,7 @@ function App() {
       return <AIModelAvailabilityView rows={aiModelRows} status={aiModelState.status} loading={aiModelState.loading} filters={aiModelFilters} />;
     }
     if (activeView === 'capacity-score') {
-      return <div className="rx-view-stack"><section className="rx-panel rx-panel--compact"><div className="rx-panel__header"><div><h2>Regional SKU Capacity Score</h2><p>Derived capacity score plus the latest saved or refreshed live placement details.</p></div></div><div className="rx-field-grid rx-field-grid--filters"><label className="rx-field"><span>Desired Placement Count</span><input className="rx-input" type="number" min="1" max="1000" value={capacityScores.desiredCount} onChange={(event) => setCapacityScores((current) => ({ ...current, desiredCount: String(normalizeDesiredPlacementCount(event.target.value)), pagination: { ...current.pagination, pageNumber: 1 } }))} /></label><label className="rx-field rx-field--wide"><span>Live Placement Subscription</span><select value={livePlacementSubscriptionId} onChange={(event) => setLivePlacementSubscriptionId(event.target.value)}><option value="">Select subscription</option>{subscriptionOptions.map((option) => <option key={option.subscriptionId} value={option.subscriptionId}>{option.subscriptionName || option.subscriptionId} ({option.subscriptionId})</option>)}</select></label><label className="rx-field"><span>Live Placement Family</span><select value={livePlacementFamily} onChange={(event) => setLivePlacementFamily(event.target.value)}><option value="">Select family</option>{livePlacementFamilyOptions.map((family) => <option key={family} value={family}>{formatFamilyLabel(family) || family}</option>)}</select></label></div><div className="rx-inline-actions"><span className="rx-selected-count">{livePlacementScopeMessage}</span><button className="rx-button" type="button" disabled={capacityScores.busy || !canRefreshLivePlacement} onClick={refreshLivePlacement}>{capacityScores.busy ? 'Refreshing...' : 'Refresh Live Placement'}</button></div><Banner tone={capacityScores.status.tone} message={capacityScores.status.message} detail={capacityScores.status.detail} /></section><section className="rx-panel rx-panel--compact rx-panel--muted"><div className="rx-panel__header"><div><h2>Capacity Score Key</h2><p>Use this legend to distinguish saved capacity signals from live Azure placement responses.</p></div></div><div className="rx-matrix-key rx-matrix-key--compact"><div className="rx-matrix-key__group"><h3>Capacity Score</h3>{capacityScoreLegendItems().map((item) => <div key={item.value} className="rx-matrix-key__item"><StatusPill value={item.value} label={item.title} /><div><p>{item.description}</p></div></div>)}</div><div className="rx-matrix-key__group"><h3>Azure Live Score</h3>{livePlacementLegendItems().map((item) => <div key={item.value} className="rx-matrix-key__item"><StatusPill value={item.value} /><div><p>{item.description}</p></div></div>)}<div className="rx-matrix-key__item"><div><strong>Last Checked</strong><p>The timestamp shows when the latest live result or latest explicit unavailable result was saved.</p></div></div></div></div></section><DataTable title="Capacity Score" subtitle="Derived capacity score plus latest live placement details from SQL snapshots." tableClassName="rx-table--dense rx-capacity-score-table" sectionClassName="rx-panel--compact" columns={[{ key: 'region', label: 'Region' }, { key: 'sku', label: 'SKU', render: (row) => normalizeSkuName(row.sku) || 'n/a' }, { key: 'family', label: 'Family', render: (row) => formatFamilyLabel(row.family) || 'n/a' }, { key: 'score', label: 'Capacity Score', render: (row) => { const display = getCapacityScoreDisplayMeta(row); return <StatusPill value={display.value} label={display.label} />; } }, { key: 'livePlacementScore', label: 'Azure Live Score', render: (row) => row.livePlacementScore || 'n/a' }, { key: 'liveCheckedAtUtc', label: 'Checked', render: (row) => formatTimestamp(row.liveCheckedAtUtc) }, { key: 'subscriptionCount', label: 'Subscriptions', render: (row) => formatNumber(row.subscriptionCount) }, { key: 'okRows', label: 'OK', render: (row) => formatNumber(row.okRows) }, { key: 'limitedRows', label: 'Limited', render: (row) => formatNumber(row.limitedRows) }, { key: 'constrainedRows', label: 'Constrained', render: (row) => formatNumber(row.constrainedRows) }, { key: 'totalQuotaAvailable', label: 'Quota', render: (row) => formatNumber(row.totalQuotaAvailable) }, { key: 'reason', label: 'Reason', headerClassName: 'rx-capacity-score-table__reason', cellClassName: 'rx-capacity-score-table__reason', render: (row) => <span title={row.reason || ''}>{row.reason || 'n/a'}</span> }]} rows={capacityScores.rows} emptyMessage="No capacity score entries available." /><ServerPagination pagination={capacityScores.pagination} onPageChange={(pageNumber) => setCapacityScores((current) => ({ ...current, pagination: { ...current.pagination, pageNumber: Math.max(1, pageNumber) } }))} onPageSizeChange={(pageSize) => setCapacityScores((current) => ({ ...current, pagination: { ...current.pagination, pageNumber: 1, pageSize: Math.max(1, pageSize) } }))} /><DataTable title="Subscription Summary" tableClassName="rx-table--dense" sectionClassName="rx-panel--compact" columns={[{ key: 'subscriptionKey', label: 'Subscription Key' }, { key: 'skuObservations', label: 'SKU Observations', render: (row) => formatNumber(row.skuObservations || row.totalRows) }, { key: 'constrainedObservations', label: 'Constrained', render: (row) => formatNumber(row.constrainedObservations || row.constrainedRows) }, { key: 'totalQuotaAvailable', label: 'Quota Available', render: (row) => formatNumber(row.totalQuotaAvailable) }]} rows={capacityScores.subscriptionSummary} emptyMessage="No subscription summary rows available." /></div>;
+      return <div className="rx-view-stack"><section className="rx-panel rx-panel--compact"><div className="rx-panel__header"><div><h2>Regional SKU Capacity Score</h2><p>Latest saved or refreshed Azure live placement details from SQL.</p></div></div><div className="rx-field-grid rx-field-grid--filters"><label className="rx-field"><span>Desired Placement Count</span><input className="rx-input" type="number" min="1" max="1000" value={capacityScores.desiredCount} onChange={(event) => setCapacityScores((current) => ({ ...current, desiredCount: String(normalizeDesiredPlacementCount(event.target.value)), pagination: { ...current.pagination, pageNumber: 1 } }))} /></label><label className="rx-field rx-field--wide"><span>Live Placement Subscription</span><select value={livePlacementSubscriptionId} onChange={(event) => setLivePlacementSubscriptionId(event.target.value)}><option value="">Select subscription</option>{subscriptionOptions.map((option) => <option key={option.subscriptionId} value={option.subscriptionId}>{option.subscriptionName || option.subscriptionId} ({option.subscriptionId})</option>)}</select></label><label className="rx-field"><span>Live Placement Family</span><select value={livePlacementFamily} onChange={(event) => setLivePlacementFamily(event.target.value)}><option value="">Select family</option>{livePlacementFamilyOptions.map((family) => <option key={family} value={family}>{formatFamilyLabel(family) || family}</option>)}</select></label></div><div className="rx-inline-actions"><span className="rx-selected-count">{livePlacementScopeMessage}</span><button className="rx-button" type="button" disabled={capacityScores.busy || !canRefreshLivePlacement} onClick={refreshLivePlacement}>{capacityScores.busy ? 'Refreshing...' : 'Refresh Live Placement'}</button></div><Banner tone={capacityScores.status.tone} message={capacityScores.status.message} detail={capacityScores.status.detail} /></section><section className="rx-panel rx-panel--compact rx-panel--muted"><div className="rx-panel__header"><div><h2>Capacity Score Key</h2><p>Use this legend to read the latest Azure live placement response.</p></div></div><div className="rx-matrix-key rx-matrix-key--compact"><div className="rx-matrix-key__group"><h3>Azure Live Score</h3>{livePlacementLegendItems().map((item) => <div key={item.value} className="rx-matrix-key__item"><StatusPill value={item.value} /><div><p>{item.description}</p></div></div>)}<div className="rx-matrix-key__item"><div><strong>Last Checked</strong><p>The timestamp shows when the latest live result or latest explicit unavailable result was saved.</p></div></div></div></div></section><DataTable title="Capacity Score" subtitle="Latest Azure live placement details from SQL." tableClassName="rx-table--dense rx-capacity-score-table" sectionClassName="rx-panel--compact" columns={[{ key: 'region', label: 'Region' }, { key: 'sku', label: 'SKU', render: (row) => normalizeSkuName(row.sku) || 'n/a' }, { key: 'family', label: 'Family', render: (row) => formatFamilyLabel(row.family) || 'n/a' }, { key: 'livePlacementScore', label: 'Azure Live Score', render: (row) => row.livePlacementScore || 'n/a' }, { key: 'liveCheckedAtUtc', label: 'Checked', render: (row) => formatTimestamp(row.liveCheckedAtUtc) }, { key: 'subscriptionCount', label: 'Subscriptions', render: (row) => formatNumber(row.subscriptionCount) }, { key: 'okRows', label: 'OK', render: (row) => formatNumber(row.okRows) }, { key: 'limitedRows', label: 'Limited', render: (row) => formatNumber(row.limitedRows) }, { key: 'constrainedRows', label: 'Constrained', render: (row) => formatNumber(row.constrainedRows) }, { key: 'totalQuotaAvailable', label: 'Quota', render: (row) => formatNumber(row.totalQuotaAvailable) }, { key: 'reason', label: 'Reason', headerClassName: 'rx-capacity-score-table__reason', cellClassName: 'rx-capacity-score-table__reason', render: (row) => <span title={row.reason || ''}>{row.reason || 'n/a'}</span> }]} rows={capacityScores.rows} emptyMessage="No capacity score entries available." /><ServerPagination pagination={capacityScores.pagination} onPageChange={(pageNumber) => setCapacityScores((current) => ({ ...current, pagination: { ...current.pagination, pageNumber: Math.max(1, pageNumber) } }))} onPageSizeChange={(pageSize) => setCapacityScores((current) => ({ ...current, pagination: { ...current.pagination, pageNumber: 1, pageSize: Math.max(1, pageSize) } }))} /><DataTable title="Subscription Summary" tableClassName="rx-table--dense" sectionClassName="rx-panel--compact" columns={[{ key: 'subscriptionKey', label: 'Subscription Key' }, { key: 'skuObservations', label: 'SKU Observations', render: (row) => formatNumber(row.skuObservations || row.totalRows) }, { key: 'constrainedObservations', label: 'Constrained', render: (row) => formatNumber(row.constrainedObservations || row.constrainedRows) }, { key: 'totalQuotaAvailable', label: 'Quota Available', render: (row) => formatNumber(row.totalQuotaAvailable) }]} rows={capacityScores.subscriptionSummary} emptyMessage="No subscription summary rows available." /></div>;
     }
     if (activeView === 'family-summary') {
       return <DataTable key="family-summary" title="Family Summary" subtitle="Compute-family rollup optimized for quota planning conversations." columns={[{ key: 'family', label: 'Family' }, { key: 'skus', label: 'SKUs', render: (row) => formatNumber(row.skus) }, { key: 'ok', label: 'OK SKUs', render: (row) => formatNumber(row.ok) }, { key: 'largest', label: 'Largest' }, { key: 'zones', label: 'Zones' }, { key: 'status', label: 'Status', render: (row) => <StatusPill value={row.status} /> }, { key: 'quota', label: 'Quota', render: (row) => formatNumber(row.quota) }]} rows={familySummaryRows} emptyMessage="No family summary rows available." />;
@@ -4861,7 +4897,7 @@ function App() {
       return <ShareableQuotaReportView managementGroups={quotaState.managementGroups} selectedManagementGroup={quotaState.selectedManagementGroup} onManagementGroupChange={(value) => setQuotaState({ ...quotaState, selectedManagementGroup: value, selectedQuotaGroup: 'all', shareableReport: { rows: [], summary: { rowCount: 0, subscriptionCount: 0, regionCount: 0, skuCount: 0, totalShareableQuota: 0 }, generatedAtUtc: null }, selectedAnalysisRunId: '', selectedDonorSubscriptionId: '', selectedMoveCandidate: null, requestedTransferAmount: 0, planRows: [], impactRows: [], applyResults: [], planSummary: {} })} quotaGroups={quotaState.quotaGroups} selectedQuotaGroup={quotaState.selectedQuotaGroup} onQuotaGroupChange={(value) => setQuotaState({ ...quotaState, selectedQuotaGroup: value, shareableReport: { rows: [], summary: { rowCount: 0, subscriptionCount: 0, regionCount: 0, skuCount: 0, totalShareableQuota: 0 }, generatedAtUtc: null }, selectedAnalysisRunId: '', selectedDonorSubscriptionId: '', selectedMoveCandidate: null, requestedTransferAmount: 0, planRows: [], impactRows: [], applyResults: [], planSummary: {} })} shareableReport={quotaState.shareableReport} actions={quotaActions} busy={quotaState.busy} status={quotaState.status} />;
     }
     if (activeView === 'admin') {
-      return <AdminIngestionView job={adminState.job} status={adminState.status} schedule={adminState.schedule} runtime={adminState.runtime} persistence={adminState.persistence} selectedRegionPreset={filters.regionPreset} actions={adminActions} onScheduleChange={(scope, field, value) => setAdminState((current) => ({ ...current, schedule: { ...current.schedule, [scope]: { ...current.schedule[scope], [field]: value } } }))} busy={adminState.busy} viewStatus={adminState.statusMessage} />;
+      return <AdminIngestionView job={adminState.job} status={adminState.status} schedule={adminState.schedule} runtime={adminState.runtime} persistence={adminState.persistence} scope={adminState.scope} smokeTest={adminState.smokeTest} actions={adminActions} onScheduleChange={(scope, field, value) => setAdminState((current) => ({ ...current, schedule: { ...current.schedule, [scope]: { ...current.schedule[scope], [field]: value } } }))} busy={adminState.busy} viewStatus={adminState.statusMessage} />;
     }
     return <section className="rx-panel"><div className="rx-placeholder">View not implemented yet.</div></section>;
   })();
@@ -4874,7 +4910,6 @@ function App() {
             <div className="rx-kicker">React V2</div>
             <h1>Capacity Dashboard</h1>
           </div>
-          <a className="rx-link-button" href="/classic/">Classic UI</a>
         </div>
         <div className="rx-nav-group">Reporting</div>
         <nav className="rx-nav-list">

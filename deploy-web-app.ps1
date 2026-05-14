@@ -44,11 +44,8 @@ New-Item -Path $stagingPath -ItemType Directory -Force | Out-Null
 
 # Copy files - be explicit about what to include
 $filesToCopy = @(
-    'app.js',
-    'index.html',
     'server.js',
     'web.config',
-    'styles.css',
     'sku-catalog.js',
     'package.json',
     'package-lock.json'

@@ -6,7 +6,7 @@ const { pipeline } = require('stream/promises');
 const { DefaultAzureCredential } = require('@azure/identity');
 const { getCapacityScoreSummary } = require('./capacityService');
 const { getRegionsForPreset } = require('../config/regionPresets');
-const { saveLivePlacementSnapshots, logDashboardOperation, insertDashboardErrorLog } = require('../store/sql');
+const { saveLivePlacementSnapshots } = require('../store/sql');
 
 // The ARM placement score API supports up to five SKUs per request. The worker and
 // web fallback use direct REST before falling back to the Az.Compute cmdlet, which
@@ -33,12 +33,6 @@ let portablePowerShellPromise;
 let azModuleBootstrapPromise;
 let portablePowerShellError = null;
 let azModuleBootstrapError = null;
-let livePlacementSchedulerHandle;
-let livePlacementSchedulerConfig = {
-  intervalMinutes: 0,
-  runOnStartup: false
-};
-let livePlacementRefreshInProgress = false;
 let armCredential;
 
 function normalizeSkuName(value) {
@@ -2557,159 +2551,6 @@ async function getLivePlacementScoreRows(filters = {}) {
   };
 }
 
-function getScheduledLivePlacementFilters() {
-  return {
-    regionPreset: process.env.LIVE_PLACEMENT_REFRESH_REGION_PRESET || process.env.INGEST_REGION_PRESET || 'USMajor',
-    subscriptionIds: process.env.LIVE_PLACEMENT_REFRESH_SUBSCRIPTION_IDS || process.env.INGEST_SUBSCRIPTION_IDS || '',
-    region: process.env.LIVE_PLACEMENT_REFRESH_REGION || 'all',
-    family: process.env.LIVE_PLACEMENT_REFRESH_FAMILY || 'all',
-    availability: process.env.LIVE_PLACEMENT_REFRESH_AVAILABILITY || 'all',
-    desiredCount: Number(process.env.LIVE_PLACEMENT_REFRESH_DESIRED_COUNT || 1),
-    extraSkus: parseExtraSkus(process.env.LIVE_PLACEMENT_REFRESH_EXTRA_SKUS)
-  };
-}
-
-async function runScheduledLivePlacementRefresh(options = {}) {
-  if (livePlacementRefreshInProgress) {
-    return { ok: false, skipped: true, reason: 'Live placement refresh is already running.' };
-  }
-
-  const filters = {
-    ...getScheduledLivePlacementFilters(),
-    ...(options.filters || {})
-  };
-  const startedAt = new Date();
-  livePlacementRefreshInProgress = true;
-
-  try {
-    const result = await getLivePlacementScoreRows(filters);
-    const completedAt = new Date();
-    const desiredCount = Number(result.effectiveDesiredCount || filters.desiredCount || 1);
-    const rowsAffected = Array.isArray(result.rows)
-      ? result.rows.filter((row) => row.livePlacementScore && row.livePlacementScore !== 'N/A').length
-      : 0;
-    const subscriptionCount = parseCsv(filters.subscriptionIds).length || null;
-
-    await logDashboardOperation({
-      type: 'live-placement-refresh',
-      name: 'Live Placement Refresh',
-      status: 'success',
-      triggerSource: options.triggerSource || 'scheduler',
-      startedAtUtc: startedAt,
-      completedAtUtc: completedAt,
-      durationMs: completedAt.getTime() - startedAt.getTime(),
-      rowsAffected,
-      subscriptionCount,
-      requestedDesiredCount: Number(filters.desiredCount || 1),
-      effectiveDesiredCount: desiredCount,
-      regionPreset: filters.regionPreset || null,
-      note: result.warning || `Refreshed ${rowsAffected} live placement snapshots.`
-    });
-
-    return { ok: true, rowsAffected, result };
-  } catch (err) {
-    const completedAt = new Date();
-    const errorMessage = err?.message || 'Unknown live placement refresh failure';
-
-    await logDashboardOperation({
-      type: 'live-placement-refresh',
-      name: 'Live Placement Refresh',
-      status: 'failed',
-      triggerSource: options.triggerSource || 'scheduler',
-      startedAtUtc: startedAt,
-      completedAtUtc: completedAt,
-      durationMs: completedAt.getTime() - startedAt.getTime(),
-      subscriptionCount: parseCsv(filters.subscriptionIds).length || null,
-      requestedDesiredCount: Number(filters.desiredCount || 1),
-      effectiveDesiredCount: Number(filters.desiredCount || 1),
-      regionPreset: filters.regionPreset || null,
-      note: 'Scheduled live placement refresh failed.',
-      errorMessage
-    });
-
-    await insertDashboardErrorLog({
-      source: 'live-placement-scheduler',
-      type: 'LivePlacementRefreshError',
-      message: errorMessage,
-      severity: 'error',
-      context: JSON.stringify({
-        triggerSource: options.triggerSource || 'scheduler',
-        regionPreset: filters.regionPreset || null,
-        region: filters.region || null,
-        family: filters.family || null,
-        availability: filters.availability || null
-      }),
-      desiredCount: Number(filters.desiredCount || 1),
-      occurredAtUtc: completedAt
-    });
-
-    throw err;
-  } finally {
-    livePlacementRefreshInProgress = false;
-  }
-}
-
-function normalizeLivePlacementSchedulerConfig(config = {}) {
-  const envInterval = Number(process.env.LIVE_PLACEMENT_REFRESH_INTERVAL_MINUTES || 0);
-  const envRunOnStartup = String(process.env.LIVE_PLACEMENT_REFRESH_ON_STARTUP || '').toLowerCase() === 'true';
-
-  const intervalMinutesRaw = config.intervalMinutes == null ? envInterval : Number(config.intervalMinutes);
-  const intervalMinutes = Number.isFinite(intervalMinutesRaw)
-    ? Math.max(0, Math.min(Math.trunc(intervalMinutesRaw), 7 * 24 * 60))
-    : 0;
-
-  const runOnStartup = config.runOnStartup == null
-    ? envRunOnStartup
-    : String(config.runOnStartup).toLowerCase() === 'true' || config.runOnStartup === true;
-
-  return {
-    intervalMinutes,
-    runOnStartup
-  };
-}
-
-function applyLivePlacementScheduler(config = {}, options = {}) {
-  const normalized = normalizeLivePlacementSchedulerConfig(config);
-  const shouldRunStartup = Boolean(options.runStartup) && normalized.runOnStartup;
-
-  if (livePlacementSchedulerHandle) {
-    clearInterval(livePlacementSchedulerHandle);
-    livePlacementSchedulerHandle = null;
-  }
-
-  livePlacementSchedulerConfig = normalized;
-
-  if (shouldRunStartup) {
-    setTimeout(() => {
-      runScheduledLivePlacementRefresh({ triggerSource: 'startup' }).catch((err) => {
-        console.warn('Scheduled live placement startup refresh failed:', err.message);
-      });
-    }, 1500);
-  }
-
-  if (normalized.intervalMinutes > 0) {
-    livePlacementSchedulerHandle = setInterval(() => {
-      runScheduledLivePlacementRefresh({ triggerSource: 'scheduler' }).catch((err) => {
-        console.warn('Scheduled live placement refresh failed:', err.message);
-      });
-    }, normalized.intervalMinutes * 60 * 1000);
-  }
-
-  return { ...livePlacementSchedulerConfig };
-}
-
-function startLivePlacementScheduler(config = {}) {
-  return applyLivePlacementScheduler(config, { runStartup: true });
-}
-
-function updateLivePlacementScheduler(config = {}) {
-  return applyLivePlacementScheduler(config, { runStartup: false });
-}
-
-function getLivePlacementSchedulerConfig() {
-  return { ...livePlacementSchedulerConfig };
-}
-
 async function seedVmSkuCatalogIfEmpty({ region = process.env.SKU_CATALOG_SEED_REGION || 'eastus' } = {}) {
   const { upsertVmSkuCatalogRows, getVmSkuCatalogFamilies } = require('../store/sql');
   try {
@@ -2753,10 +2594,6 @@ module.exports = {
   getPowerShellCommands,
   ensureAzPlacementModules,
   resolveProjectRoot,
-  runScheduledLivePlacementRefresh,
-  startLivePlacementScheduler,
-  updateLivePlacementScheduler,
-  getLivePlacementSchedulerConfig,
   seedVmSkuCatalogIfEmpty,
   __testHooks: {
     normalizeSkuName,

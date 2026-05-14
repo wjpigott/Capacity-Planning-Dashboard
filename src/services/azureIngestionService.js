@@ -721,7 +721,11 @@ function normalizeSchedulerConfig(config = {}) {
 
   return {
     intervalMinutes,
-    runOnStartup
+    runOnStartup,
+    regionPreset: config.regionPreset || process.env.INGEST_REGION_PRESET || 'USMajor',
+    subscriptionIds: config.subscriptionIds || process.env.INGEST_SUBSCRIPTION_IDS || '',
+    managementGroupNames: config.managementGroupNames || process.env.INGEST_MANAGEMENT_GROUP_NAMES || '',
+    familyFilters: config.familyFilters || ''
   };
 }
 
@@ -738,7 +742,7 @@ function applyIngestionScheduler(config = {}, options = {}) {
 
   if (shouldRunStartup) {
     setTimeout(() => {
-      runCapacityIngestion().catch((err) => {
+      runCapacityIngestion(normalized).catch((err) => {
         ingestStatus.lastError = err.message;
       });
     }, 1000);
@@ -746,7 +750,7 @@ function applyIngestionScheduler(config = {}, options = {}) {
 
   if (normalized.intervalMinutes > 0) {
     schedulerHandle = setInterval(() => {
-      runCapacityIngestion().catch((err) => {
+      runCapacityIngestion(normalized).catch((err) => {
         ingestStatus.lastError = err.message;
       });
     }, normalized.intervalMinutes * 60 * 1000);
@@ -765,6 +769,32 @@ function updateIngestionScheduler(config = {}) {
 
 function getIngestionSchedulerConfig() {
   return { ...schedulerConfig };
+}
+
+async function inspectCapacityIngestionScope(options = {}) {
+  const credential = getCredential();
+  const token = (await credential.getToken(ARM_SCOPE)).token;
+  const subscriptions = await listSubscriptions(token, options.subscriptionIds, options.managementGroupNames);
+  const regions = getRegions(options.regionPreset, options.regions);
+  const familyFilters = parseCsvList(options.familyFilters);
+
+  return {
+    ok: true,
+    regionPreset: options.regionPreset || process.env.INGEST_REGION_PRESET || 'USMajor',
+    regions,
+    regionCount: regions.length,
+    subscriptionCount: subscriptions.length,
+    subscriptions: subscriptions.slice(0, 25).map((subscription) => ({
+      subscriptionId: subscription.subscriptionId,
+      displayName: subscription.displayName || subscription.subscriptionId,
+      managementGroupName: subscription.managementGroupName || null
+    })),
+    subscriptionPreviewTruncated: subscriptions.length > 25,
+    familyFilters,
+    familyFilterCount: familyFilters.length,
+    managementGroupNames: parseCsvList(options.managementGroupNames),
+    subscriptionIds: parseCsvList(options.subscriptionIds)
+  };
 }
 
 async function refreshModelCatalog(options = {}) {
@@ -802,5 +832,6 @@ module.exports = {
   getIngestionStatus,
   startIngestionScheduler,
   updateIngestionScheduler,
-  getIngestionSchedulerConfig
+  getIngestionSchedulerConfig,
+  inspectCapacityIngestionScope
 };

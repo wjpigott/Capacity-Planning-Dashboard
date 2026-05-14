@@ -40,7 +40,7 @@ Existing shared-service reuse is supported for:
 - Live placement and pricing RBAC can now be assigned automatically during infra deployment by passing `workerSubscriptionRbacSubscriptionIds` (and optional role toggles) to apply `Compute Recommendations Role`, `Cost Management Reader`, and `Billing Reader` on those subscriptions.
 - Dashboard subscription discovery RBAC can now be assigned automatically during infra deployment by passing `webReaderSubscriptionIds` to apply `Reader` on those subscriptions.
 - Dashboard quota-apply RBAC can now be assigned automatically during infra deployment by passing `webQuotaWriterSubscriptionIds` to apply `GroupQuota Request Operator` on those subscriptions.
-- Dashboard Entra sign-in can now be configured during infra deployment through app settings (`authEnabled`, `entraTenantId`, `entraClientId`, `entraClientSecret`, `adminGroupId`, and optional `authRedirectUri`).
+- Dashboard Entra sign-in can now be configured during infra deployment through app settings (`authEnabled`, `entraTenantId`, `entraClientId`, `entraClientSecret`, `adminGroupId`, optional `reportViewerGroupIds`, and optional `authRedirectUri`).
 - Split read/write identities in later phases (recommended) for least privilege.
 
 ## Networking parameters
@@ -109,6 +109,7 @@ Optional resource-group overrides are also available for reuse scenarios:
   -EntraClientId "<app-registration-client-id>" \
   -EntraClientSecret "<app-registration-client-secret>" \
   -AdminGroupId "<entra-group-object-id>" \
+  -ReportViewerGroupIds "<report-viewer-group-object-id>" \
   -SqlEntraAdminLogin "<entra-upn>" \
   -SqlEntraAdminObjectId "<entra-object-id>" \
   -SubscriptionId "<subscription-id>"

@@ -84,6 +84,7 @@ Required app registration inputs when `auth_enabled = true`:
 - `entra_client_id`
 - `entra_client_secret`
 - optional `admin_group_id`
+- optional `report_viewer_group_ids`
 - optional `auth_redirect_uri`
 
 Optional app registration management:
@@ -238,6 +239,7 @@ All variables have defaults and can be overridden via tfvars or CLI flags.
 | `manage_entra_web_redirect_uri` | `false` | Update the existing Entra app registration web redirect URIs |
 | `extra_entra_web_redirect_uris` | `[]` | Extra web redirect URIs to preserve when Terraform manages Entra redirects |
 | `admin_group_id` | `""` | Entra group for admin access |
+| `report_viewer_group_ids` | `""` | Comma-separated Entra groups for report access |
 | `web_reader_management_group_names` | `[]` | Management groups for web app Reader role |
 | `web_quota_writer_management_group_names` | `[]` | Management groups for GroupQuota Request Operator |
 | `worker_rbac_management_group_names` | `[]` | Management groups for worker RBAC roles |

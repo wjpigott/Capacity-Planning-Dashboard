@@ -139,6 +139,9 @@ param authRedirectUri string = ''
 @description('Optional Entra group object ID whose members should receive admin access in the dashboard.')
 param adminGroupId string = ''
 
+@description('Optional comma-separated Entra group object IDs whose members can view dashboard reports. Admin group members can also view reports. Leave empty to preserve authenticated-user report access.')
+param reportViewerGroupIds string = ''
+
 var appServicePlanName = 'asp-capdash-${environment}-${workloadSuffix}'
 var workerPlanName = 'asp-capdash-worker-${environment}-${workloadSuffix}'
 var webAppName = 'app-capdash-${environment}-${workloadSuffix}'
@@ -403,6 +406,10 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'ADMIN_GROUP_ID'
           value: adminGroupId
+        }
+        {
+          name: 'REPORT_VIEWER_GROUP_IDS'
+          value: reportViewerGroupIds
         }
         {
           name: 'SESSION_STORE_SQL_ENABLED'

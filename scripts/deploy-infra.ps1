@@ -37,6 +37,7 @@ param(
     [Parameter(Mandatory = $false)][string]$AuthRedirectUri,
     [Parameter(Mandatory = $false)][switch]$ManageEntraWebRedirectUri,
     [Parameter(Mandatory = $false)][string]$AdminGroupId,
+    [Parameter(Mandatory = $false)][string]$ReportViewerGroupIds,
     [Parameter(Mandatory = $false)][string]$SubscriptionId,
     [Parameter(Mandatory = $false)][switch]$UseAllAccessibleManagementGroups,
     [Parameter(Mandatory = $false)][bool]$DeployWebApp = $true,
@@ -345,6 +346,7 @@ function Deploy-Terraform {
         if (-not [string]::IsNullOrWhiteSpace($AuthRedirectUri))       { $tfVars += "-var=auth_redirect_uri=$AuthRedirectUri" }
         if ($ManageEntraWebRedirectUri.IsPresent)                      { $tfVars += "-var=manage_entra_web_redirect_uri=true" }
         if (-not [string]::IsNullOrWhiteSpace($AdminGroupId))          { $tfVars += "-var=admin_group_id=$AdminGroupId" }
+        if (-not [string]::IsNullOrWhiteSpace($ReportViewerGroupIds))  { $tfVars += "-var=report_viewer_group_ids=$ReportViewerGroupIds" }
         if ($PSBoundParameters.ContainsKey('WebReaderSubscriptionIds') -or $WebReaderSubscriptionIds.Count -gt 0)                   { $tfVars += "-var=web_reader_subscription_ids=$(ConvertTo-TerraformLiteral $WebReaderSubscriptionIds)" }
         if ($PSBoundParameters.ContainsKey('WebReaderManagementGroupNames') -or $WebReaderManagementGroupNames.Count -gt 0)         { $tfVars += "-var=web_reader_management_group_names=$(ConvertTo-TerraformLiteral $WebReaderManagementGroupNames)" }
         if ($PSBoundParameters.ContainsKey('WebQuotaWriterSubscriptionIds') -or $WebQuotaWriterSubscriptionIds.Count -gt 0)         { $tfVars += "-var=web_quota_writer_subscription_ids=$(ConvertTo-TerraformLiteral $WebQuotaWriterSubscriptionIds)" }
@@ -440,6 +442,10 @@ if (-not [string]::IsNullOrWhiteSpace($AuthRedirectUri)) {
 
 if (-not [string]::IsNullOrWhiteSpace($AdminGroupId)) {
     $deploymentArgs += @('--parameters', "adminGroupId=$AdminGroupId")
+}
+
+if (-not [string]::IsNullOrWhiteSpace($ReportViewerGroupIds)) {
+    $deploymentArgs += @('--parameters', "reportViewerGroupIds=$ReportViewerGroupIds")
 }
 
 if ($resolvedParameterFile -and [System.IO.Path]::GetExtension($resolvedParameterFile).Equals('.bicepparam', [System.StringComparison]::OrdinalIgnoreCase)) {

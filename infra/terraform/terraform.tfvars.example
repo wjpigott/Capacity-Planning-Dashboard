@@ -64,6 +64,7 @@ key_vault_public_network_access = "Disabled"
 # auth_redirect_uri   = "https://<web-app-name>.azurewebsites.net/auth/callback"
 # manage_entra_web_redirect_uri = true
 # admin_group_id      = "00000000-0000-0000-0000-000000000000"
+# report_viewer_group_ids = "00000000-0000-0000-0000-000000000000"
 
 # ── Function App (Worker) ────────────────────
 # worker_shared_secret = "replace-with-shared-secret"

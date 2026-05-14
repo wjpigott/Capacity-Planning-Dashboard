@@ -260,6 +260,7 @@ resource "azurerm_windows_web_app" "web" {
     "ENTRA_CLIENT_SECRET"                   = local.entra_client_secret_key_vault_reference
     "AUTH_REDIRECT_URI"                     = local.effective_auth_redirect_uri
     "ADMIN_GROUP_ID"                        = var.admin_group_id
+    "REPORT_VIEWER_GROUP_IDS"               = var.report_viewer_group_ids
     "SESSION_STORE_SQL_ENABLED"             = var.auth_enabled ? "true" : "false"
     "SCM_DO_BUILD_DURING_DEPLOYMENT"        = "true"
   }

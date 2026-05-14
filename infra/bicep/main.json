@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.42.1.51946",
-      "templateHash": "12701926729959805274"
+      "templateHash": "11217234703726284105"
     }
   },
   "parameters": {
@@ -299,6 +299,13 @@
       "metadata": {
         "description": "Optional Entra group object ID whose members should receive admin access in the dashboard."
       }
+    },
+    "reportViewerGroupIds": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional comma-separated Entra group object IDs whose members can view dashboard reports. Admin group members can also view reports. Leave empty to preserve authenticated-user report access."
+      }
     }
   },
   "variables": {
@@ -570,6 +577,10 @@
             {
               "name": "ADMIN_GROUP_ID",
               "value": "[parameters('adminGroupId')]"
+            },
+            {
+              "name": "REPORT_VIEWER_GROUP_IDS",
+              "value": "[parameters('reportViewerGroupIds')]"
             },
             {
               "name": "SESSION_STORE_SQL_ENABLED",

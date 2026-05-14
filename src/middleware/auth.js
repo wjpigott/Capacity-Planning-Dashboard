@@ -27,11 +27,19 @@ const crypto = require('crypto');
 
 const AUTH_ENABLED = (process.env.AUTH_ENABLED || 'false').toLowerCase() === 'true';
 const ADMIN_GROUP_ID = (process.env.ADMIN_GROUP_ID || '').trim();
+const REPORT_VIEWER_GROUP_IDS = parseGroupIdList(process.env.REPORT_VIEWER_GROUP_IDS || process.env.REPORT_READER_GROUP_IDS || '');
 const ENTRA_TENANT_ID = (process.env.ENTRA_TENANT_ID || '').trim();
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const OAUTH_STATE_MAX_PENDING = 5;
 
 let _msalClient = null;
+
+function parseGroupIdList(value) {
+  return String(value || '')
+    .split(/[;,\s]+/)
+    .map((groupId) => groupId.trim())
+    .filter(Boolean);
+}
 
 function getMsalClient() {
   if (_msalClient) return _msalClient;
@@ -179,6 +187,30 @@ function isAdmin(account) {
   return (Array.isArray(account.groups) ? account.groups : []).includes(ADMIN_GROUP_ID);
 }
 
+function canAccessAdmin(account) {
+  if (!AUTH_ENABLED) return true;
+  if (!ADMIN_GROUP_ID) return true;
+  return isAdmin(account);
+}
+
+function hasAnyGroup(account, groupIds) {
+  if (!account || !Array.isArray(groupIds) || groupIds.length === 0) return false;
+  const accountGroups = new Set(Array.isArray(account.groups) ? account.groups : []);
+  return groupIds.some((groupId) => accountGroups.has(groupId));
+}
+
+function isReportViewer(account) {
+  return hasAnyGroup(account, REPORT_VIEWER_GROUP_IDS);
+}
+
+function canAccessReports(account) {
+  if (!AUTH_ENABLED) return true;
+  if (!account) return false;
+  if (canAccessAdmin(account)) return true;
+  if (REPORT_VIEWER_GROUP_IDS.length === 0) return true;
+  return isReportViewer(account);
+}
+
 /**
  * Middleware: require the user to be authenticated.
  * No-op when AUTH_ENABLED=false.
@@ -208,6 +240,18 @@ function requireAdmin(req, res, next) {
   }
   if (!isAdmin(account)) {
     return res.status(403).json({ ok: false, error: 'Admin group membership required.' });
+  }
+  return next();
+}
+
+function requireReportAccess(req, res, next) {
+  if (!AUTH_ENABLED) return next();
+  const account = getAccountFromSession(req);
+  if (!account) {
+    return res.status(401).json({ ok: false, error: 'Authentication required.' });
+  }
+  if (!canAccessReports(account)) {
+    return res.status(403).json({ ok: false, error: 'Report viewer group membership required.' });
   }
   return next();
 }
@@ -370,9 +414,14 @@ function buildAuthRouter() {
 module.exports = {
   AUTH_ENABLED,
   ADMIN_GROUP_ID,
+  REPORT_VIEWER_GROUP_IDS,
   buildAuthRouter,
   requireAuth,
   requireAdmin,
+  requireReportAccess,
   getAccountFromSession,
-  isAdmin
+  isAdmin,
+  isReportViewer,
+  canAccessAdmin,
+  canAccessReports
 };

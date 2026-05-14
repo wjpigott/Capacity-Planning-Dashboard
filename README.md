@@ -506,7 +506,7 @@ Notes:
 - `-WebQuotaWriterManagementGroupNames` grants `GroupQuota Request Operator` at the named management groups for quota-apply workflows. Keep `-WebQuotaWriterSubscriptionIds` as the fallback for customers without management groups.
 - `-WorkerRbacManagementGroupNames` triggers management-group-scoped RBAC assignment for the worker identity (`Compute Recommendations Role`, `Cost Management Reader`, `Billing Reader`) and is the preferred path for larger estates.
 - `-WorkerRbacSubscriptionIds` remains available as a fallback for small customers without management groups.
-- `-AuthEnabled` plus `-EntraTenantId`, `-EntraClientId`, `-EntraClientSecret`, and optional `-AdminGroupId` configure the built-in Entra sign-in flow used by the dashboard API.
+- `-AuthEnabled` plus `-EntraTenantId`, `-EntraClientId`, `-EntraClientSecret`, optional `-AdminGroupId`, and optional `-ReportViewerGroupIds` configure the built-in Entra sign-in flow used by the dashboard API.
 
 Example RBAC baseline:
 
@@ -530,6 +530,7 @@ Example with Entra sign-in enabled:
 	-EntraClientId "<app-registration-client-id>" \
 	-EntraClientSecret "<app-registration-client-secret>" \
 	-AdminGroupId "<entra-group-object-id>" \
+	-ReportViewerGroupIds "<report-viewer-group-object-id>" \
 	-SqlEntraAdminLogin "<entra-upn>" \
 	-SqlEntraAdminObjectId "<entra-object-id>" \
 	-SubscriptionId "<subscription-id>"
@@ -686,7 +687,8 @@ Required app settings:
 - `ENTRA_CLIENT_ID` (app registration/client ID for the dashboard)
 - `ENTRA_CLIENT_SECRET` (app registration client secret for the dashboard)
 - `AUTH_REDIRECT_URI` (OAuth callback URI, for example `https://<web-app-host>/auth/callback`)
-- `ADMIN_GROUP_ID` (Object ID of the Entra security group whose members can access Admin sections)
+- `ADMIN_GROUP_ID` (Object ID of the Entra security group whose members can access Admin sections; admins can also view reports)
+- `REPORT_VIEWER_GROUP_IDS` (optional comma-separated Entra security group Object IDs whose members can view reports; leave empty to preserve authenticated-user report access)
 - `QUOTA_MANAGEMENT_GROUP_ID` (required for live quota discovery)
 - `CAPACITY_WORKER_BASE_URL` (optional Function App base URL for worker-first live placement execution)
 - `CAPACITY_WORKER_TOKEN_AUDIENCE` (optional bearer-token audience for worker calls; defaults to `https://management.azure.com/`)

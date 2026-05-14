@@ -14,6 +14,7 @@ Highlights:
 - Added Admin controls for saving Capacity Ingest scope in SQL, including region preset, subscription IDs, management groups, and family filters.
 - Added Admin scope cards showing configured Capacity Ingest scope and the on-demand Capacity Score Live behavior.
 - Added an Admin `Validate Ingest Scope` smoke test that resolves saved SQL scheduler settings through the app identity without writing capacity snapshot rows.
+- Added optional Entra report viewer group gating so report access can be limited to configured reader groups while preserving the existing admin group for Admin features.
 - Kept the Node/Express backend in place for API, auth, session, ingestion, and worker-coordination routes.
 
 ## v1.0.0-poc - 2026-05-14

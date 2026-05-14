@@ -3131,6 +3131,7 @@ function App() {
       ? 'Select the target subscription for live placement refresh.'
       : 'Select the target family for live placement refresh.');
 
+  const canUseReportApis = Boolean(auth?.canAccessReports);
   const visibleViews = useMemo(() => REPORT_VIEWS.filter((view) => !view.adminOnly || auth?.canAccessAdmin), [auth]);
   const reportingViews = useMemo(() => visibleViews.filter((view) => view.navGroup !== 'admin').sort((left, right) => left.label.localeCompare(right.label)), [visibleViews]);
   const adminViews = useMemo(() => visibleViews.filter((view) => view.navGroup === 'admin').sort((left, right) => left.label.localeCompare(right.label)), [visibleViews]);
@@ -3703,6 +3704,11 @@ function App() {
         const authContext = authPayload.auth;
         setAuth(authContext);
 
+        if (!authContext?.isAuthenticated || !authContext.canAccessReports) {
+          setAppStatus({ tone: 'info', message: '' });
+          return;
+        }
+
         const subscriptionPayload = await fetchJson('/api/subscriptions?limit=500');
         let managementGroupPayload = { groups: [], defaultManagementGroupId: '' };
         let uiSettingsPayload = { settings: { showSqlPreview: false } };
@@ -3752,7 +3758,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!authResolved) {
+    if (!authResolved || !canUseReportApis) {
       return;
     }
 
@@ -3800,7 +3806,7 @@ function App() {
     }
 
     loadPaaSSnapshot();
-  }, [authResolved, paasState.filters.service]);
+  }, [authResolved, canUseReportApis, paasState.filters.service]);
 
   useEffect(() => {
     if (filters.region === 'all') {
@@ -3853,7 +3859,7 @@ function App() {
   }
 
   useEffect(() => {
-    if (activeView !== 'capacity-grid' && activeView !== 'recommender') {
+    if (!authResolved || !canUseReportApis || (activeView !== 'capacity-grid' && activeView !== 'recommender')) {
       return;
     }
 
@@ -3888,12 +3894,16 @@ function App() {
       }
     }
     loadCapacityGrid();
-  }, [activeView, queryFilters, capacityData.pagination.pageNumber, capacityData.pagination.pageSize]);
+  }, [activeView, authResolved, canUseReportApis, queryFilters, capacityData.pagination.pageNumber, capacityData.pagination.pageSize]);
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadFamilyCatalog() {
+      if (!authResolved || !canUseReportApis) {
+        return;
+      }
+
       try {
         const query = new URLSearchParams({ ...familyCatalogQueryFilters, pageNumber: '1', pageSize: '500' });
         const payload = await fetchJson(`/api/capacity/paged?${query.toString()}`);
@@ -3916,13 +3926,13 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [familyCatalogQueryFilters]);
+  }, [authResolved, canUseReportApis, familyCatalogQueryFilters]);
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadComputeFamilyCatalog() {
-      if (filters.resourceType !== 'Compute') {
+      if (!authResolved || !canUseReportApis || filters.resourceType !== 'Compute') {
         setComputeFamilyCatalogOptions([]);
         return;
       }
@@ -3951,7 +3961,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [computeFamilyCatalogQueryFilters, filters.resourceType]);
+  }, [authResolved, canUseReportApis, computeFamilyCatalogQueryFilters, filters.resourceType]);
 
   useEffect(() => {
     // Server paging must restart at page 1 when the sidebar query scope changes,
@@ -3971,11 +3981,11 @@ function App() {
   }, [queryFilters]);
 
   useEffect(() => {
-    if (activeView !== 'ai-model-availability' && activeView !== 'ai-summary-report') {
+    if (!authResolved || !canUseReportApis || (activeView !== 'ai-model-availability' && activeView !== 'ai-summary-report')) {
       return;
     }
     refreshAIModelAvailability();
-  }, [activeView]);
+  }, [activeView, authResolved, canUseReportApis]);
 
   useEffect(() => {
     if (filters.resourceType !== 'AI' && filters.provider !== 'all') {
@@ -3992,6 +4002,10 @@ function App() {
     analyticsRequestRef.current = requestId;
 
     async function loadAnalytics() {
+      if (!authResolved || !canUseReportApis) {
+        return;
+      }
+
       const query = new URLSearchParams(queryFilters);
       const trendLookbackDays = trendGranularity === 'hourly' ? '2' : '7';
       const trendQuery = new URLSearchParams({ ...queryFilters, days: trendLookbackDays, granularity: trendGranularity }).toString();
@@ -4065,11 +4079,15 @@ function App() {
       }
     }
     loadAnalytics();
-  }, [queryFilters, trendGranularity]);
+  }, [authResolved, canUseReportApis, queryFilters, trendGranularity]);
 
   useEffect(() => {
     const requestId = capacityScoreRequestRef.current + 1;
     capacityScoreRequestRef.current = requestId;
+    if (!authResolved || !canUseReportApis) {
+      setCapacityScores((current) => ({ ...current, busy: false }));
+      return;
+    }
     setCapacityScores((current) => ({ ...current, busy: true }));
 
     async function loadCapacityScores() {
@@ -4121,7 +4139,7 @@ function App() {
     }
 
     loadCapacityScores();
-  }, [queryFilters, capacityScores.desiredCount, capacityScores.pagination.pageNumber, capacityScores.pagination.pageSize]);
+  }, [authResolved, canUseReportApis, queryFilters, capacityScores.desiredCount, capacityScores.pagination.pageNumber, capacityScores.pagination.pageSize]);
 
   useEffect(() => {
     async function loadQuotaGroups() {
@@ -4847,6 +4865,19 @@ function App() {
           <h1>You do not have access</h1>
           <p>This Capacity Dashboard is only available to authenticated users.</p>
           <a className="rx-link-button" href="/auth/login">Sign In</a>
+        </section>
+      </div>
+    );
+  }
+
+  if (auth?.authEnabled && auth.isAuthenticated && !auth.canAccessReports) {
+    return (
+      <div className="rx-access-gate">
+        <section className="rx-panel rx-access-gate__panel">
+          <div className="rx-kicker">Access Restricted</div>
+          <h1>Report access is not enabled for your account</h1>
+          <p>Your account is signed in, but it is not a member of the configured report viewer group. Contact the dashboard owner if you need access.</p>
+          <a className="rx-link-button" href="/auth/logout">Sign Out</a>
         </section>
       </div>
     );

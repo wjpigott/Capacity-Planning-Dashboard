@@ -24,7 +24,7 @@ if (fs.existsSync(localEnvPath)) {
 
 const session = require('express-session');
 const MSSQLStore = require('connect-mssql-v2');
-const { AUTH_ENABLED, buildAuthRouter, requireAuth, requireAdmin, getAccountFromSession, isAdmin } = require('./middleware/auth');
+const { AUTH_ENABLED, REPORT_VIEWER_GROUP_IDS, buildAuthRouter, requireAuth, requireAdmin, requireReportAccess, getAccountFromSession, isAdmin, canAccessAdmin, canAccessReports, isReportViewer } = require('./middleware/auth');
 
 const {
   getCapacityRows,
@@ -1548,6 +1548,12 @@ app.use('/api', (req, res, next) => {
   return res.status(401).json({ ok: false, error: 'Authentication required.' });
 });
 
+app.use('/api', (req, res, next) => {
+  if (req.path === '/auth/me') return next();
+  if (req.path === '/sku-catalog/families') return next();
+  return requireReportAccess(req, res, next);
+});
+
 function isReactPrototypeHostAllowed(hostname = '') {
   const value = String(hostname || '').toLowerCase();
   return value.includes('localhost')
@@ -1979,8 +1985,10 @@ app.get('/api/auth/me', (req, res) => {
   const account = getAccountFromSession(req);
   const authEnabled = AUTH_ENABLED;
   const adminEnabled = !!process.env.ADMIN_GROUP_ID;
+  const reportAccessEnabled = REPORT_VIEWER_GROUP_IDS.length > 0;
   const isAuthenticated = !authEnabled || account !== null;
-  const adminAccess = !authEnabled || !adminEnabled || isAdmin(account);
+  const adminAccess = canAccessAdmin(account);
+  const reportAccess = canAccessReports(account);
 
   res.json({
     ok: true,
@@ -1989,7 +1997,11 @@ app.get('/api/auth/me', (req, res) => {
       isAuthenticated,
       name: account?.name || null,
       username: account?.username || null,
-      canAccessAdmin: adminAccess
+      canAccessAdmin: adminAccess,
+      canAccessReports: reportAccess,
+      isReportViewer: isReportViewer(account),
+      adminGroupConfigured: adminEnabled,
+      reportViewerGroupConfigured: reportAccessEnabled
     }
   });
 });

@@ -291,6 +291,12 @@ variable "admin_group_id" {
   default     = ""
 }
 
+variable "report_viewer_group_ids" {
+  type        = string
+  description = "Optional comma-separated Entra group object IDs for report access in the dashboard. Admin group members can also view reports."
+  default     = ""
+}
+
 # ──────────────────────────────────────────────
 # Function App (Worker)
 # ──────────────────────────────────────────────

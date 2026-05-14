@@ -49,7 +49,7 @@ Both implementations can also reuse existing shared platform dependencies instea
 - Live placement and pricing RBAC can now be assigned automatically during infra deployment by passing `workerRbacManagementGroupNames` for larger estates, with `workerSubscriptionRbacSubscriptionIds` kept as the fallback for customers without management groups.
 - Dashboard subscription discovery RBAC can now be assigned automatically during infra deployment by passing `webReaderManagementGroupNames` for larger estates, with `webReaderSubscriptionIds` kept as the fallback for customers without management groups.
 - Dashboard quota-apply RBAC can now be assigned automatically during infra deployment by passing `webQuotaWriterManagementGroupNames` for larger estates, with `webQuotaWriterSubscriptionIds` kept as the fallback for customers without management groups.
-- Dashboard Entra sign-in can now be configured during infra deployment through app settings (`authEnabled`, `entraTenantId`, `entraClientId`, `entraClientSecret`, `adminGroupId`, and optional `authRedirectUri`).
+- Dashboard Entra sign-in can now be configured during infra deployment through app settings (`authEnabled`, `entraTenantId`, `entraClientId`, `entraClientSecret`, `adminGroupId`, optional `reportViewerGroupIds`, and optional `authRedirectUri`).
 - Split read/write identities in later phases (recommended) for least privilege.
 
 ---

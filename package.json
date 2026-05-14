@@ -1,6 +1,6 @@
 {
   "name": "capacity-planning-dashboard",
-  "version": "0.1.0",
+  "version": "1.0.0-poc",
   "private": true,
   "description": "Capacity and quota planning dashboard",
   "main": "server.js",

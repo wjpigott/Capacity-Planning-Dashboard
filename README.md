@@ -3,6 +3,14 @@
 This repository contains the initial platform scaffold for a native Azure capacity planning solution.
 - Huge shout out to Zach Luz for builing out many of the API calls this solution utilizes in his repo: https://github.com/ZacharyLuz/Get-AzVMAvailability  
 
+## Current Release
+
+Current version: `v1.0.0-poc`
+
+This version marks the current deployed `main` branch as the initial proof-of-concept baseline. Future compatible feature updates should move to the next minor version, such as `v1.1.0`; patch-only fixes to this baseline should use `v1.0.1`, `v1.0.2`, and so on.
+
+Release history is tracked in `docs/RELEASE-NOTES.md`. Git tags should use the same version string as the release, for example `v1.0.0-poc`, so others can retrieve the exact code behind a deployed version.
+
 ## What is included now
 
 - Web UI with tabs, filters, action buttons, and a data grid

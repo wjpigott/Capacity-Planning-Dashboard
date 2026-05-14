@@ -1,5 +1,21 @@
 # Release Notes
 
+## v1.0.0-poc - 2026-05-14
+
+This release marks the current deployed `main` branch as the initial proof-of-concept baseline for the Capacity Planning Dashboard.
+
+Highlights:
+
+- Established `v1.0.0-poc` as the reference version for the initial POC deployment.
+- Documented the release baseline so future changes can be compared against a known starting point.
+- Preserved the existing implementation status as the POC scope: deployed App Service UI/API, Azure SQL-backed analytics, ingestion, quota insights, live placement/recommendation flows, and infrastructure deployment scripts.
+
+Operational notes:
+
+- Future compatible feature updates should use the next minor version, for example `v1.1.0`.
+- Patch-only fixes to this POC baseline should use `v1.0.1`, `v1.0.2`, and so on.
+- Use a Git tag named `v1.0.0-poc` on the release commit so others can retrieve this exact baseline later.
+
 ## 2026-04-29
 
 This update captures the report regression that followed the recent shared filter and trend work, along with the fixes that restored the reporting views in dev.

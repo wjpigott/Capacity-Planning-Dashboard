@@ -37,12 +37,12 @@ function Get-AzServiceTierAvailability {
         [switch]$Quiet
     )
 
-    # Service catalog: Azure Retail Pricing serviceName → known tiers
+    # Service catalog: Azure Retail Pricing serviceName -> known tiers
     $serviceCatalog = [ordered]@{
-        'Redis'            = @{ PricingName = 'Azure Cache for Redis'; Tiers = @('Basic C0-C6', 'Standard C0-C6', 'Premium P1-P5', 'Enterprise E5-E200', 'Enterprise Flash F300-F1500') }
+        'Redis'            = @{ PricingName = 'Redis Cache'; Tiers = @('Basic C0-C6', 'Standard C0-C6', 'Premium P1-P5', 'Enterprise E5-E200', 'Enterprise Flash F300-F1500') }
         'EventHubs'        = @{ PricingName = 'Event Hubs'; Tiers = @('Basic', 'Standard', 'Premium', 'Dedicated') }
         'ServiceBus'       = @{ PricingName = 'Service Bus'; Tiers = @('Basic', 'Standard', 'Premium') }
-        'AISearch'         = @{ PricingName = 'Azure AI Search'; Tiers = @('Free', 'Basic', 'S1', 'S2', 'S3', 'S3 HD', 'L1', 'L2') }
+        'AISearch'         = @{ PricingName = 'Azure Cognitive Search'; Tiers = @('Free', 'Basic', 'S1', 'S2', 'S3', 'S3 HD', 'L1', 'L2') }
         'APIM'             = @{ PricingName = 'API Management'; Tiers = @('Consumption', 'Developer', 'Basic', 'Standard', 'Premium', 'Isolated') }
         'ACR'              = @{ PricingName = 'Container Registry'; Tiers = @('Basic', 'Standard', 'Premium') }
         'KeyVault'         = @{ PricingName = 'Key Vault'; Tiers = @('Standard', 'Premium (HSM)') }
@@ -50,9 +50,9 @@ function Get-AzServiceTierAvailability {
         'LogAnalytics'     = @{ PricingName = 'Log Analytics'; Tiers = @('Pay-as-you-go', 'Commitment Tier 100GB', 'Commitment Tier 200GB', 'Commitment Tier 500GB') }
         'AppConfig'        = @{ PricingName = 'App Configuration'; Tiers = @('Free', 'Standard') }
         'IoTHub'           = @{ PricingName = 'IoT Hub'; Tiers = @('Free F1', 'Basic B1-B3', 'Standard S1-S3') }
-        'Grafana'          = @{ PricingName = 'Azure Managed Grafana'; Tiers = @('Essential', 'Standard') }
+        'Grafana'          = @{ PricingName = 'Azure Grafana Service'; Tiers = @('Essential', 'Standard') }
         'StaticWebApps'    = @{ PricingName = 'Azure Static Web Apps'; Tiers = @('Free', 'Standard') }
-        'SignalR'          = @{ PricingName = 'SignalR Service'; Tiers = @('Free', 'Standard', 'Premium') }
+        'SignalR'          = @{ PricingName = 'SignalR'; Tiers = @('Free', 'Standard', 'Premium') }
         'NotificationHubs' = @{ PricingName = 'Notification Hubs'; Tiers = @('Free', 'Basic', 'Standard') }
     }
 

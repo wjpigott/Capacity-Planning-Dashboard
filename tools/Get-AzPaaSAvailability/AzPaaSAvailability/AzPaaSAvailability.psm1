@@ -1,5 +1,3 @@
-#Requires -Version 7.0
-
 # AzPaaSAvailability module loader
 # Dot-sources all Private then Public function files.
 
@@ -7,10 +5,10 @@ $ModuleRoot = $PSScriptRoot
 
 # Import private functions first (order: Utility → Azure → Providers → Format)
 $privatePaths = @(
-    (Join-Path $ModuleRoot 'Private' 'Utility' '*.ps1'),
-    (Join-Path $ModuleRoot 'Private' 'Azure' '*.ps1'),
-    (Join-Path $ModuleRoot 'Private' 'Providers' '*.ps1'),
-    (Join-Path $ModuleRoot 'Private' 'Format' '*.ps1')
+    (Join-Path (Join-Path (Join-Path $ModuleRoot 'Private') 'Utility') '*.ps1'),
+    (Join-Path (Join-Path (Join-Path $ModuleRoot 'Private') 'Azure') '*.ps1'),
+    (Join-Path (Join-Path (Join-Path $ModuleRoot 'Private') 'Providers') '*.ps1'),
+    (Join-Path (Join-Path (Join-Path $ModuleRoot 'Private') 'Format') '*.ps1')
 )
 
 foreach ($path in $privatePaths) {
@@ -26,7 +24,7 @@ foreach ($path in $privatePaths) {
 }
 
 # Import public functions
-$publicPath = Join-Path $ModuleRoot 'Public' '*.ps1'
+$publicPath = Join-Path (Join-Path $ModuleRoot 'Public') '*.ps1'
 $publicFiles = Get-ChildItem -Path $publicPath -ErrorAction SilentlyContinue
 
 foreach ($file in $publicFiles) {

@@ -163,6 +163,7 @@ function escapeHtml(value) {
 async function fetchJson(url, options) {
   const response = await fetch(url, {
     credentials: 'same-origin',
+    cache: 'no-store',
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -560,6 +561,35 @@ function getRecommenderFamilySkuOptions(familyValue) {
     .filter((sku) => sku && !isAggregateSkuName(sku)))].sort((left, right) => compareSkuValues(left, right));
 }
 
+function getAllRecommenderSkuOptions() {
+  const options = new Set();
+  const familySkus = skuCatalog?.familySkus && typeof skuCatalog.familySkus === 'object'
+    ? Object.values(skuCatalog.familySkus)
+    : [];
+
+  familySkus.forEach((skus) => {
+    if (!Array.isArray(skus)) return;
+    skus.forEach((sku) => {
+      const normalized = normalizeSkuName(sku);
+      if (normalized && !isAggregateSkuName(normalized)) {
+        options.add(normalized);
+      }
+    });
+  });
+
+  Object.values(RECOMMENDER_FAMILY_SKU_OPTIONS).forEach((skus) => {
+    if (!Array.isArray(skus)) return;
+    skus.forEach((sku) => {
+      const normalized = normalizeSkuName(sku);
+      if (normalized && !isAggregateSkuName(normalized)) {
+        options.add(normalized);
+      }
+    });
+  });
+
+  return [...options].sort((left, right) => compareSkuValues(left, right));
+}
+
 function defaultRecommendTargetSkuFromRows(rows, preferredSkus = []) {
   const preferred = (Array.isArray(preferredSkus) ? preferredSkus : [])
     .map((sku) => normalizeSkuName(sku))
@@ -658,9 +688,9 @@ function livePlacementLegendItems() {
       description: 'Azure returned a weak live placement score. Placement may still fail.'
     },
     {
-      value: 'Restricted',
-      title: 'Restricted',
-      description: 'Azure explicitly returned a restricted result for this SKU and region.'
+      value: 'Limited',
+      title: 'Limited',
+      description: 'Azure returned a subscription or access restriction. The SKU may exist in the region, but this subscription cannot place it as-is.'
     },
     {
       value: 'Unavailable',
@@ -668,9 +698,9 @@ function livePlacementLegendItems() {
       description: 'Azure explicitly said the SKU is not available for placement in that region.'
     },
     {
-      value: 'Unknown',
-      title: 'Unknown',
-      description: 'The live lookup did not return a usable answer. This is not the same as unavailable.'
+      value: 'N/A',
+      title: 'N/A',
+      description: 'No saved live placement result is available for this SKU and region yet. This is not the same as unavailable.'
     }
   ];
 }
@@ -1179,6 +1209,67 @@ function buildCapacityScoreSnapshotMessage(scoreRows, desiredCount) {
   return `Showing saved live placement snapshot for desired count ${desiredCount}, last checked ${formatTimestamp(latestSnapshot)}. Press Refresh Live Placement to update it.`;
 }
 
+function normalizeCapacityScoreValue(value) {
+  const raw = String(value || '').trim().toUpperCase();
+  if (raw === 'HIGH' || raw === 'OK' || raw === 'AVAILABLE') return 'HIGH';
+  if (raw === 'MEDIUM' || raw === 'PARTIAL' || raw === 'LIMITED' || raw === 'RESTRICTEDSKUNOTAVAILABLE' || raw === 'NOTAVAILABLEFORSUBSCRIPTION') return 'MEDIUM';
+  if (raw === 'LOW' || raw === 'CONSTRAINED' || raw === 'RESTRICTED' || raw === 'BLOCKED' || raw === 'UNAVAILABLE' || raw === 'SKUNOTAVAILABLE') return 'LOW';
+  return 'N/A';
+}
+
+function formatLivePlacementLabel(value) {
+  const raw = String(value || '').trim();
+  const normalized = raw.toUpperCase();
+  if (normalized === 'RESTRICTEDSKUNOTAVAILABLE' || normalized === 'NOTAVAILABLEFORSUBSCRIPTION') return 'Limited';
+  if (normalized === 'SKUNOTAVAILABLE') return 'Unavailable';
+  return raw;
+}
+
+function normalizeCapacityScoreStatus(row) {
+  return normalizeCapacityScoreValue(row?.score);
+}
+
+function normalizeLivePlacementStatus(row) {
+  return normalizeCapacityScoreValue(row?.livePlacementScore);
+}
+
+function getRegionalAvailabilityLabel(row) {
+  const status = normalizeCapacityScoreStatus(row);
+  if (status === 'HIGH') return 'Region possible';
+  if (status === 'MEDIUM') return 'Partial signal';
+  if (status === 'LOW') return 'Not observed';
+  return row?.score || 'n/a';
+}
+
+function normalizeQuotaHealthStatus(row) {
+  if (Number(row?.totalQuotaAvailable || 0) <= 0) return 'LOW';
+  if (Number(row?.limitedRows || 0) > 0 || Number(row?.constrainedRows || 0) > 0) return 'MEDIUM';
+  return 'HIGH';
+}
+
+function getQuotaHealthLabel(row) {
+  if (Number(row?.totalQuotaAvailable || 0) <= 0) return 'Quota constrained';
+  if (normalizeQuotaHealthStatus(row) === 'MEDIUM') return 'Quota limited';
+  return 'Quota OK';
+}
+
+function getLivePlacementLabel(row) {
+  return formatLivePlacementLabel(row?.livePlacementScore) || 'Not checked';
+}
+
+function getCapacityScoreRowClassName(row) {
+  const status = normalizeCapacityScoreStatus(row);
+  if (status === 'HIGH') return 'rx-capacity-score-row rx-matrix-row--ok';
+  if (status === 'MEDIUM') return 'rx-capacity-score-row rx-matrix-row--caution';
+  if (status === 'LOW') return 'rx-capacity-score-row rx-matrix-row--blocked';
+  return 'rx-capacity-score-row';
+}
+
+function CapacityScoreCount({ value, tone }) {
+  const count = Number(value || 0);
+  return <span className={classNames('rx-capacity-score-count', count > 0 ? `rx-capacity-score-count--${tone}` : 'rx-capacity-score-count--zero')}>{formatNumber(count)}</span>;
+}
+
 function normalizeSearchText(value) {
   return String(value || '')
     .toLowerCase()
@@ -1255,7 +1346,7 @@ function getStatusSortValue(value, count = 0) {
   return (rank * 1000) + Math.max(0, Number(count) || 0);
 }
 
-function DataTable({ title, subtitle, columns, rows, emptyMessage, tableClassName, sectionClassName, pageSize = 0 }) {
+function DataTable({ title, subtitle, columns, rows, emptyMessage, tableClassName, sectionClassName, pageSize = 0, getRowClassName }) {
   const [sort, setSort] = useState({ key: null, direction: 'asc' });
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -1342,7 +1433,7 @@ function DataTable({ title, subtitle, columns, rows, emptyMessage, tableClassNam
             {pagedRows.length === 0 ? (
               <tr><td className="rx-empty" colSpan={columns.length}>{emptyMessage}</td></tr>
             ) : pagedRows.map((row, index) => (
-              <tr key={[
+              <tr className={getRowClassName ? getRowClassName(row) : undefined} key={[
                 row.id,
                 row.analysisRunId,
                 row.groupQuotaName,
@@ -2973,6 +3064,7 @@ function App() {
   const capacityScoreRequestRef = useRef(0);
   const [auth, setAuth] = useState(null);
   const [authResolved, setAuthResolved] = useState(false);
+  const [reportScopeResolved, setReportScopeResolved] = useState(false);
   const [appStatus, setAppStatus] = useState({ tone: 'info', message: 'Loading React experience...' });
   const [activeView, setActiveView] = useState('capacity-grid');
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -2984,8 +3076,6 @@ function App() {
   const [livePlacementFamily, setLivePlacementFamily] = useState('');
   const [filters, setFilters] = useState({ regionPreset: 'USMajor', region: 'all', familyBase: 'all', family: 'all', sku: 'all', availability: 'all', resourceType: 'all', provider: 'all' });
   const [capacityData, setCapacityData] = useState({ rows: [], summary: null, facets: { regions: [], families: [], skus: [] }, pagination: { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false } });
-  const [allFamilyFacetOptions, setAllFamilyFacetOptions] = useState([]);
-  const [computeFamilyCatalogOptions, setComputeFamilyCatalogOptions] = useState([]);
   const [capacityAnalytics, setCapacityAnalytics] = useState({ regionHealth: [], topSkus: [], matrix: { regions: [], rows: [] }, recommendedTargetSku: '', aiQuotaProviderOptions: [] });
   const [trendRows, setTrendRows] = useState([]);
   const [trendGranularity, setTrendGranularity] = useState('daily');
@@ -3006,6 +3096,10 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
+    if (activeView !== 'recommender') {
+      return () => { cancelled = true; };
+    }
+
     fetch('/api/sku-catalog/families', { credentials: 'same-origin' })
       .then((response) => response.ok ? response.json() : null)
       .then((payload) => {
@@ -3032,7 +3126,7 @@ function App() {
       })
       .catch(() => { /* non-fatal */ });
     return () => { cancelled = true; };
-  }, []);
+  }, [activeView]);
 
   const queryFilters = useMemo(() => {
     const next = {
@@ -3050,40 +3144,10 @@ function App() {
     }
     return next;
   }, [filters, selectedSubscriptionIds]);
-  const familyCatalogQueryFilters = useMemo(() => {
-    const next = {
-      regionPreset: filters.regionPreset,
-      region: 'all',
-      familyBase: 'all',
-      family: 'all',
-      availability: filters.availability,
-      resourceType: filters.resourceType,
-      subscriptionIds: selectedSubscriptionIds.join(',')
-    };
-    if (filters.resourceType === 'AI' && filters.provider && filters.provider !== 'all') {
-      next.provider = filters.provider;
-    }
-    return next;
-  }, [filters.availability, filters.provider, filters.regionPreset, filters.resourceType, selectedSubscriptionIds]);
-  const computeFamilyCatalogQueryFilters = useMemo(() => ({
-    regionPreset: 'all',
-    region: 'all',
-    family: 'all',
-    familyBase: 'all',
-    availability: filters.availability,
-    subscriptionIds: selectedSubscriptionIds.join(',')
-  }), [filters.availability, selectedSubscriptionIds]);
   const fullFamilyOptions = useMemo(() => {
-    if (filters.resourceType === 'Compute') {
-      if (Array.isArray(computeFamilyCatalogOptions) && computeFamilyCatalogOptions.length > 0) {
-        return buildFamilyOptions(computeFamilyCatalogOptions).map((option) => option.value);
-      }
-    }
-    const source = Array.isArray(allFamilyFacetOptions) && allFamilyFacetOptions.length > 0
-      ? allFamilyFacetOptions
-      : capacityData.facets.families;
+    const source = capacityData.facets.families;
     return buildFamilyOptions(source).map((option) => option.value);
-  }, [allFamilyFacetOptions, capacityData.facets.families, computeFamilyCatalogOptions, filters.resourceType]);
+  }, [capacityData.facets.families]);
   const familyBaseOptions = useMemo(() => buildFamilyBaseOptions(fullFamilyOptions), [fullFamilyOptions]);
   const filteredFamilyOptions = useMemo(() => {
     if (!filters.familyBase || filters.familyBase === 'all') {
@@ -3131,12 +3195,13 @@ function App() {
       ? 'Select the target subscription for live placement refresh.'
       : 'Select the target family for live placement refresh.');
 
-  const canUseReportApis = Boolean(auth?.canAccessReports);
+  const canUseReportApis = Boolean(auth?.canAccessReports && reportScopeResolved);
   const visibleViews = useMemo(() => REPORT_VIEWS.filter((view) => !view.adminOnly || auth?.canAccessAdmin), [auth]);
   const reportingViews = useMemo(() => visibleViews.filter((view) => view.navGroup !== 'admin').sort((left, right) => left.label.localeCompare(right.label)), [visibleViews]);
   const adminViews = useMemo(() => visibleViews.filter((view) => view.navGroup === 'admin').sort((left, right) => left.label.localeCompare(right.label)), [visibleViews]);
 
   const recommenderFamilySkuOptions = useMemo(() => getRecommenderFamilySkuOptions(filters.family), [filters.family, skuCatalogVersion]);
+  const allRecommenderSkuOptions = useMemo(() => getAllRecommenderSkuOptions(), [skuCatalogVersion]);
   const recommendationTargetSkuOptions = useMemo(() => {
     const options = new Set();
     (Array.isArray(capacityData.rows) ? capacityData.rows : []).forEach((row) => {
@@ -3151,8 +3216,16 @@ function App() {
         options.add(normalized);
       }
     });
+    if (activeView === 'recommender') {
+      allRecommenderSkuOptions.forEach((sku) => {
+        const normalized = normalizeSkuName(sku);
+        if (normalized && !isAggregateSkuName(normalized)) {
+          options.add(normalized);
+        }
+      });
+    }
     return [...options].sort((left, right) => compareSkuValues(left, right));
-  }, [capacityData.rows, recommenderFamilySkuOptions]);
+  }, [activeView, allRecommenderSkuOptions, capacityData.rows, recommenderFamilySkuOptions]);
   const recommendationSkuPickerOptions = useMemo(() => {
     if (recommenderFamilySkuOptions.length > 0) {
       return recommenderFamilySkuOptions;
@@ -3168,16 +3241,27 @@ function App() {
     const normalized = normalizeSkuName(filters.sku);
     return recommendationTargetSkuOptions.includes(normalized) ? normalized : '';
   }, [filters.sku, recommendationTargetSkuOptions]);
-  const fastRecommendedTargetSku = useMemo(() => defaultRecommendTargetSkuFromRows(capacityData.rows, recommenderFamilySkuOptions), [capacityData.rows, recommenderFamilySkuOptions]);
+  const fastRecommendedTargetSku = useMemo(() => {
+    if (recommenderFamilySkuOptions.length > 0) {
+      return recommenderFamilySkuOptions[0];
+    }
+    if (activeView === 'recommender' && allRecommenderSkuOptions.length > 0) {
+      return allRecommenderSkuOptions[0];
+    }
+    return defaultRecommendTargetSkuFromRows(capacityData.rows, recommenderFamilySkuOptions);
+  }, [activeView, allRecommenderSkuOptions, capacityData.rows, recommenderFamilySkuOptions]);
   const recommendedTargetSku = useMemo(() => {
     if (selectedScopedSku) {
       return selectedScopedSku;
+    }
+    if (activeView === 'recommender') {
+      return String(fastRecommendedTargetSku || '').trim();
     }
     if (filters.family && filters.family !== 'all') {
       return String(fastRecommendedTargetSku || capacityAnalytics.recommendedTargetSku || '').trim();
     }
     return String(capacityAnalytics.recommendedTargetSku || fastRecommendedTargetSku || '').trim();
-  }, [capacityAnalytics.recommendedTargetSku, fastRecommendedTargetSku, filters.family, selectedScopedSku]);
+  }, [activeView, capacityAnalytics.recommendedTargetSku, fastRecommendedTargetSku, filters.family, selectedScopedSku]);
   const recommendedRegions = useMemo(() => defaultRecommendRegionsFromFilters(filters, capacityData.facets.regions, []), [filters, capacityData.facets.regions]);
   const scopedRegionOptions = useMemo(() => {
     const baseOptions = activeView === 'ai-model-availability' || activeView === 'ai-summary-report'
@@ -3404,13 +3488,15 @@ function App() {
           { label: 'Region', value: (row) => row.region },
           { label: 'SKU', value: (row) => normalizeSkuName(row.sku) || '' },
           { label: 'Family', value: (row) => formatFamilyLabel(row.family) || row.family || '' },
-          { label: 'Azure Live Score', value: (row) => row.livePlacementScore || '' },
+          { label: 'Azure Placement', value: (row) => row.livePlacementScore || '' },
+          { label: 'Regional Availability', value: (row) => getRegionalAvailabilityLabel(row) },
+          { label: 'Quota Health', value: (row) => getQuotaHealthLabel(row) },
           { label: 'Checked', value: (row) => formatTimestamp(row.liveCheckedAtUtc) },
           { label: 'Subscriptions', value: (row) => row.subscriptionCount },
-          { label: 'OK', value: (row) => row.okRows },
-          { label: 'Limited', value: (row) => row.limitedRows },
-          { label: 'Constrained', value: (row) => row.constrainedRows },
-          { label: 'Quota', value: (row) => row.totalQuotaAvailable },
+          { label: 'Quota OK', value: (row) => row.okRows },
+          { label: 'Quota Limited', value: (row) => row.limitedRows },
+          { label: 'Quota Blocked', value: (row) => row.constrainedRows },
+          { label: 'Quota vCPU', value: (row) => row.totalQuotaAvailable },
           { label: 'Reason', value: (row) => row.reason || '' }
         ] },
         { value: 'client:capacity-score-subscriptions', label: 'CSV Export: Subscription Summary', type: 'client', filenameBase: 'capacity-score-subscriptions', rows: capacityScores.subscriptionSummary, columns: [
@@ -3706,49 +3792,24 @@ function App() {
 
         if (!authContext?.isAuthenticated || !authContext.canAccessReports) {
           setAppStatus({ tone: 'info', message: '' });
+          setReportScopeResolved(true);
+          setAuthResolved(true);
           return;
         }
 
+        setAuthResolved(true);
+        setReportScopeResolved(false);
+        setAppStatus({ tone: 'info', message: 'Loading reporting scope...' });
+
         const subscriptionPayload = await fetchJson('/api/subscriptions?limit=500');
-        let managementGroupPayload = { groups: [], defaultManagementGroupId: '' };
-        let uiSettingsPayload = { settings: { showSqlPreview: false } };
-        let bootstrapWarning = '';
-
-        if (authContext && authContext.isAuthenticated) {
-          const managementGroupResponse = await Promise.allSettled([
-            fetchJson('/api/quota/management-groups'),
-          ]);
-
-          if (managementGroupResponse[0]?.status === 'fulfilled') {
-            managementGroupPayload = managementGroupResponse[0].value || managementGroupPayload;
-          } else {
-            bootstrapWarning = managementGroupResponse[0]?.reason?.message || 'Quota report management-group scope could not be loaded automatically.';
-          }
-        }
-
-        if (authContext && authContext.canAccessAdmin) {
-          const adminResponses = await Promise.allSettled([
-            fetchJson('/api/admin/ui-settings')
-          ]);
-
-          if (adminResponses[0]?.status === 'fulfilled') {
-            uiSettingsPayload = adminResponses[0].value || uiSettingsPayload;
-          }
-        }
 
         const subscriptions = Array.isArray(subscriptionPayload.rows) ? subscriptionPayload.rows : [];
         setSubscriptionOptions(subscriptions);
         setSelectedSubscriptionIds(subscriptions.map((row) => row.subscriptionId).filter(Boolean));
-        const managementGroups = Array.isArray(managementGroupPayload.groups) ? managementGroupPayload.groups : [];
-        const selectedManagementGroup = managementGroupPayload.defaultManagementGroupId && managementGroups.some((group) => group.id === managementGroupPayload.defaultManagementGroupId)
-          ? managementGroupPayload.defaultManagementGroupId
-          : (managementGroups[0] ? managementGroups[0].id : '');
-        setQuotaState((current) => ({ ...current, managementGroups, selectedManagementGroup }));
-        setShowSqlPreview(Boolean(uiSettingsPayload.settings && uiSettingsPayload.settings.showSqlPreview));
-        setAppStatus(bootstrapWarning
-          ? { tone: 'warning', message: bootstrapWarning }
-          : { tone: 'info', message: '' });
+        setReportScopeResolved(true);
+        setAppStatus({ tone: 'info', message: '' });
       } catch (error) {
+        setReportScopeResolved(false);
         setAppStatus({ tone: 'error', message: error.message || 'Failed to initialize React experience.' });
       } finally {
         setAuthResolved(true);
@@ -3758,7 +3819,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!authResolved || !canUseReportApis) {
+    if (!authResolved || !canUseReportApis || activeView !== 'paas-availability') {
       return;
     }
 
@@ -3806,7 +3867,7 @@ function App() {
     }
 
     loadPaaSSnapshot();
-  }, [authResolved, canUseReportApis, paasState.filters.service]);
+  }, [activeView, authResolved, canUseReportApis, paasState.filters.service]);
 
   useEffect(() => {
     if (filters.region === 'all') {
@@ -3859,7 +3920,7 @@ function App() {
   }
 
   useEffect(() => {
-    if (!authResolved || !canUseReportApis || (activeView !== 'capacity-grid' && activeView !== 'recommender')) {
+    if (!authResolved || !canUseReportApis || activeView !== 'capacity-grid') {
       return;
     }
 
@@ -3868,7 +3929,7 @@ function App() {
 
     async function loadCapacityGrid() {
       try {
-        const query = new URLSearchParams({ ...queryFilters, pageNumber: String(capacityData.pagination.pageNumber || 1), pageSize: String(capacityData.pagination.pageSize || 50) });
+        const query = new URLSearchParams({ ...queryFilters, pageNumber: String(capacityData.pagination.pageNumber || 1), pageSize: String(capacityData.pagination.pageSize || 50), _: String(Date.now()) });
         const payload = await fetchJson(`/api/capacity/paged?${query.toString()}`);
         if (capacityGridRequestRef.current !== requestId) {
           return;
@@ -3895,73 +3956,6 @@ function App() {
     }
     loadCapacityGrid();
   }, [activeView, authResolved, canUseReportApis, queryFilters, capacityData.pagination.pageNumber, capacityData.pagination.pageSize]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadFamilyCatalog() {
-      if (!authResolved || !canUseReportApis) {
-        return;
-      }
-
-      try {
-        const query = new URLSearchParams({ ...familyCatalogQueryFilters, pageNumber: '1', pageSize: '500' });
-        const payload = await fetchJson(`/api/capacity/paged?${query.toString()}`);
-        if (cancelled) {
-          return;
-        }
-        const sanitizedFamilies = (Array.isArray(payload.facets && payload.facets.families) ? payload.facets.families : []).filter(isDisplayableFamily);
-        const canonicalFamilies = buildFamilyOptions(sanitizedFamilies).map((option) => option.value);
-        setAllFamilyFacetOptions(canonicalFamilies);
-      } catch {
-        if (cancelled) {
-          return;
-        }
-        setAllFamilyFacetOptions([]);
-      }
-    }
-
-    loadFamilyCatalog();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [authResolved, canUseReportApis, familyCatalogQueryFilters]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadComputeFamilyCatalog() {
-      if (!authResolved || !canUseReportApis || filters.resourceType !== 'Compute') {
-        setComputeFamilyCatalogOptions([]);
-        return;
-      }
-
-      try {
-        const query = new URLSearchParams({ ...computeFamilyCatalogQueryFilters, resourceType: 'Compute', pageNumber: '1', pageSize: '500' });
-        const payload = await fetchJson(`/api/capacity/paged?${query.toString()}`);
-        if (cancelled) {
-          return;
-        }
-        const rawFamilies = (Array.isArray(payload.facets && payload.facets.families) ? payload.facets.families : [])
-          .map((family) => String(family || '').trim())
-          .filter(isDisplayableFamily);
-        const canonicalFamilies = buildFamilyOptions(rawFamilies).map((option) => option.value);
-        setComputeFamilyCatalogOptions(canonicalFamilies);
-      } catch {
-        if (cancelled) {
-          return;
-        }
-        setComputeFamilyCatalogOptions([]);
-      }
-    }
-
-    loadComputeFamilyCatalog();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [authResolved, canUseReportApis, computeFamilyCatalogQueryFilters, filters.resourceType]);
 
   useEffect(() => {
     // Server paging must restart at page 1 when the sidebar query scope changes,
@@ -4002,75 +3996,70 @@ function App() {
     analyticsRequestRef.current = requestId;
 
     async function loadAnalytics() {
-      if (!authResolved || !canUseReportApis) {
+      const needsCapacityAnalytics = activeView === 'region-health'
+        || activeView === 'region-matrix'
+        || activeView === 'sku-chart';
+      const needsFamilySummary = activeView === 'family-summary';
+      const needsTrendRows = activeView === 'trend';
+
+      if (!authResolved || !canUseReportApis || (!needsCapacityAnalytics && !needsFamilySummary && !needsTrendRows)) {
         return;
       }
 
       const query = new URLSearchParams(queryFilters);
-      const trendLookbackDays = trendGranularity === 'hourly' ? '2' : '7';
-      const trendQuery = new URLSearchParams({ ...queryFilters, days: trendLookbackDays, granularity: trendGranularity }).toString();
+      const requests = [];
 
-      fetchJsonWithRetry(`/api/capacity/trends?${trendQuery}`)
-        .then((payload) => {
-          if (analyticsRequestRef.current !== requestId) {
-            return;
-          }
-          setTrendRows(Array.isArray(payload.rows) ? payload.rows : []);
-        })
-        .catch(() => {
-          if (analyticsRequestRef.current !== requestId) {
-            return;
-          }
-          setTrendRows([]);
-        });
+      if (needsCapacityAnalytics) {
+        requests.push(fetchJson(`/api/capacity/analytics?${query.toString()}`).then((payload) => ({ type: 'capacity', payload })));
+      }
 
-      const results = await Promise.allSettled([
-        fetchJson(`/api/capacity/analytics?${query.toString()}`),
-        fetchJson(`/api/capacity/families?${new URLSearchParams({ ...queryFilters, family: 'all' }).toString()}`),
-        fetchJson(`/api/capacity/subscriptions?${query.toString()}`)
-      ]);
+      if (needsFamilySummary) {
+        requests.push(fetchJson(`/api/capacity/families?${new URLSearchParams({ ...queryFilters, family: 'all' }).toString()}`).then((payload) => ({ type: 'family', payload })));
+      }
+
+      if (needsTrendRows) {
+        const trendLookbackDays = trendGranularity === 'hourly' ? '2' : '7';
+        const trendQuery = new URLSearchParams({ ...queryFilters, days: trendLookbackDays, granularity: trendGranularity }).toString();
+        requests.push(fetchJsonWithRetry(`/api/capacity/trends?${trendQuery}`).then((payload) => ({ type: 'trend', payload })));
+      }
+
+      const results = await Promise.allSettled(requests);
 
       if (analyticsRequestRef.current !== requestId) {
         return;
       }
 
-      const [capacityResult, familyResult, subSummaryResult] = results;
       const failures = results.filter((result) => result.status === 'rejected');
 
-      if (capacityResult.status === 'fulfilled') {
-        setCapacityAnalytics({
-          regionHealth: Array.isArray(capacityResult.value.regionHealth) ? capacityResult.value.regionHealth : [],
-          topSkus: Array.isArray(capacityResult.value.topSkus) ? capacityResult.value.topSkus.map((row) => ({ ...row, sku: normalizeSkuName(row.sku) })) : [],
-          matrix: capacityResult.value.matrix || { regions: [], rows: [] },
-          recommendedTargetSku: normalizeSkuName(capacityResult.value.recommendedTargetSku),
-          aiQuotaProviderOptions: Array.isArray(capacityResult.value.aiQuotaProviderOptions) ? capacityResult.value.aiQuotaProviderOptions : []
+      results
+        .filter((result) => result.status === 'fulfilled')
+        .map((result) => result.value)
+        .forEach(({ type, payload }) => {
+          if (type === 'capacity') {
+            setCapacityAnalytics({
+              regionHealth: Array.isArray(payload.regionHealth) ? payload.regionHealth : [],
+              topSkus: Array.isArray(payload.topSkus) ? payload.topSkus.map((row) => ({ ...row, sku: normalizeSkuName(row.sku) })) : [],
+              matrix: payload.matrix || { regions: [], rows: [] },
+              recommendedTargetSku: normalizeSkuName(payload.recommendedTargetSku),
+              aiQuotaProviderOptions: Array.isArray(payload.aiQuotaProviderOptions) ? payload.aiQuotaProviderOptions : []
+            });
+          } else if (type === 'family') {
+            setFamilyRows(Array.isArray(payload.rows) ? payload.rows : []);
+          } else if (type === 'trend') {
+            setTrendRows(Array.isArray(payload.rows) ? payload.rows : []);
+          }
         });
-      } else {
+
+      if (needsCapacityAnalytics && !results.some((result) => result.status === 'fulfilled' && result.value.type === 'capacity')) {
         setCapacityAnalytics({ regionHealth: [], topSkus: [], matrix: { regions: [], rows: [] }, recommendedTargetSku: '', aiQuotaProviderOptions: [] });
       }
 
-      if (familyResult.status === 'fulfilled') {
-        setFamilyRows(Array.isArray(familyResult.value.rows) ? familyResult.value.rows : []);
-      } else {
+      if (needsFamilySummary && !results.some((result) => result.status === 'fulfilled' && result.value.type === 'family')) {
         setFamilyRows([]);
       }
 
-      if (subSummaryResult.status === 'fulfilled') {
-        setCapacityScores((current) => {
-          const desiredCount = String(normalizeDesiredPlacementCount(current.desiredCount));
-          return {
-            ...current,
-            subscriptionSummary: Array.isArray(subSummaryResult.value.rows)
-              ? subSummaryResult.value.rows
-              : current.subscriptionSummary,
-            desiredCount
-          };
-        });
-      } else {
-        setCapacityScores((current) => ({
-          ...current,
-          subscriptionSummary: []
-        }));
+      if (needsTrendRows && !results.some((result) => result.status === 'fulfilled' && result.value.type === 'trend')) {
+        setTrendRows([]);
       }
 
       if (failures.length > 0) {
@@ -4079,12 +4068,12 @@ function App() {
       }
     }
     loadAnalytics();
-  }, [authResolved, canUseReportApis, queryFilters, trendGranularity]);
+  }, [activeView, authResolved, canUseReportApis, queryFilters, trendGranularity]);
 
   useEffect(() => {
     const requestId = capacityScoreRequestRef.current + 1;
     capacityScoreRequestRef.current = requestId;
-    if (!authResolved || !canUseReportApis) {
+    if (!authResolved || !canUseReportApis || activeView !== 'capacity-score') {
       setCapacityScores((current) => ({ ...current, busy: false }));
       return;
     }
@@ -4139,11 +4128,41 @@ function App() {
     }
 
     loadCapacityScores();
-  }, [authResolved, canUseReportApis, queryFilters, capacityScores.desiredCount, capacityScores.pagination.pageNumber, capacityScores.pagination.pageSize]);
+  }, [activeView, authResolved, canUseReportApis, queryFilters, capacityScores.desiredCount, capacityScores.pagination.pageNumber, capacityScores.pagination.pageSize]);
+
+  useEffect(() => {
+    const needsQuotaScope = activeView === 'quota-workbench' || activeView === 'shareable-quota-report';
+    if (!auth?.isAuthenticated || !needsQuotaScope || quotaState.managementGroups.length > 0) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    fetchJson('/api/quota/management-groups')
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        const managementGroups = Array.isArray(payload.groups) ? payload.groups : [];
+        const selectedManagementGroup = payload.defaultManagementGroupId && managementGroups.some((group) => group.id === payload.defaultManagementGroupId)
+          ? payload.defaultManagementGroupId
+          : (managementGroups[0] ? managementGroups[0].id : '');
+        setQuotaState((current) => ({ ...current, managementGroups, selectedManagementGroup }));
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+        setQuotaState((current) => ({ ...current, managementGroups: [], selectedManagementGroup: '', status: { tone: 'error', message: error.message || 'Failed to load management groups.' } }));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeView, auth, quotaState.managementGroups.length]);
 
   useEffect(() => {
     async function loadQuotaGroups() {
-      if (!auth?.canAccessAdmin || !quotaState.selectedManagementGroup) return;
+      if (!auth?.canAccessAdmin || !quotaState.selectedManagementGroup || activeView !== 'quota-workbench') return;
       try {
         const payload = await fetchJson(`/api/quota/groups?managementGroupId=${encodeURIComponent(quotaState.selectedManagementGroup)}`);
         setQuotaState((current) => ({ ...current, quotaGroups: Array.isArray(payload.groups) ? payload.groups : [], selectedQuotaGroup: 'all', selectedAnalysisRunId: '', selectedDonorSubscriptionId: '', planRows: [], impactRows: [], applyResults: [], planSummary: {} }));
@@ -4152,7 +4171,7 @@ function App() {
       }
     }
     loadQuotaGroups();
-  }, [auth, quotaState.selectedManagementGroup]);
+  }, [activeView, auth, quotaState.selectedManagementGroup]);
 
   useEffect(() => {
     if (!auth?.canAccessAdmin || !showSqlPreview) {
@@ -4210,13 +4229,15 @@ function App() {
     async function loadAdminIngestion() {
       setAdminState((current) => ({ ...current, busy: { ...current.busy, refreshStatus: true, refreshSchedule: true } }));
       try {
-        const [statusPayload, schedulePayload] = await Promise.all([
+        const [statusPayload, schedulePayload, uiSettingsPayload] = await Promise.all([
           fetchJson('/api/admin/ingest/status'),
-          fetchJson('/api/admin/ingest/schedule')
+          fetchJson('/api/admin/ingest/schedule'),
+          fetchJson('/api/admin/ui-settings')
         ]);
         if (cancelled) {
           return;
         }
+        setShowSqlPreview(Boolean(uiSettingsPayload.settings && uiSettingsPayload.settings.showSqlPreview));
         setAdminState((current) => ({
           ...current,
           job: statusPayload.activeJob || null,
@@ -4508,6 +4529,10 @@ function App() {
       const requestedCount = payload.requestedDesiredCount ?? desiredCount;
       const effectiveCount = payload.effectiveDesiredCount ?? desiredCount;
       const collapsedWarning = collapseLivePlacementWarning(payload.warning);
+      const capacityRefresh = payload.liveCapacityRefresh || null;
+      const capacityRefreshDetail = capacityRefresh?.attempted && !capacityRefresh?.error
+        ? `Live capacity snapshot refreshed first: ${formatNumber(capacityRefresh.insertedRows || 0)} row(s), ${formatNumber(capacityRefresh.insertedScoreRows || 0)} score row(s).`
+        : (capacityRefresh?.error ? `Live capacity snapshot refresh failed; placement used latest saved capacity scope. ${capacityRefresh.error}` : null);
       const summary = `Live placement refreshed at ${formatTimestamp(payload.liveCheckedAtUtc)}. Requested ${requestedCount}; evaluated ${effectiveCount}.`;
 
       if (payload.warning) {
@@ -4543,7 +4568,7 @@ function App() {
         status: {
           tone: payload.warning ? 'warn' : 'success',
           message: summary,
-          detail: collapsedWarning || null
+          detail: [capacityRefreshDetail, collapsedWarning].filter(Boolean).join(' ') || null
         }
       }));
     } catch (error) {
@@ -4907,7 +4932,91 @@ function App() {
       return <AIModelAvailabilityView rows={aiModelRows} status={aiModelState.status} loading={aiModelState.loading} filters={aiModelFilters} />;
     }
     if (activeView === 'capacity-score') {
-      return <div className="rx-view-stack"><section className="rx-panel rx-panel--compact"><div className="rx-panel__header"><div><h2>Regional SKU Capacity Score</h2><p>Latest saved or refreshed Azure live placement details from SQL.</p></div></div><div className="rx-field-grid rx-field-grid--filters"><label className="rx-field"><span>Desired Placement Count</span><input className="rx-input" type="number" min="1" max="1000" value={capacityScores.desiredCount} onChange={(event) => setCapacityScores((current) => ({ ...current, desiredCount: String(normalizeDesiredPlacementCount(event.target.value)), pagination: { ...current.pagination, pageNumber: 1 } }))} /></label><label className="rx-field rx-field--wide"><span>Live Placement Subscription</span><select value={livePlacementSubscriptionId} onChange={(event) => setLivePlacementSubscriptionId(event.target.value)}><option value="">Select subscription</option>{subscriptionOptions.map((option) => <option key={option.subscriptionId} value={option.subscriptionId}>{option.subscriptionName || option.subscriptionId} ({option.subscriptionId})</option>)}</select></label><label className="rx-field"><span>Live Placement Family</span><select value={livePlacementFamily} onChange={(event) => setLivePlacementFamily(event.target.value)}><option value="">Select family</option>{livePlacementFamilyOptions.map((family) => <option key={family} value={family}>{formatFamilyLabel(family) || family}</option>)}</select></label></div><div className="rx-inline-actions"><span className="rx-selected-count">{livePlacementScopeMessage}</span><button className="rx-button" type="button" disabled={capacityScores.busy || !canRefreshLivePlacement} onClick={refreshLivePlacement}>{capacityScores.busy ? 'Refreshing...' : 'Refresh Live Placement'}</button></div><Banner tone={capacityScores.status.tone} message={capacityScores.status.message} detail={capacityScores.status.detail} /></section><section className="rx-panel rx-panel--compact rx-panel--muted"><div className="rx-panel__header"><div><h2>Capacity Score Key</h2><p>Use this legend to read the latest Azure live placement response.</p></div></div><div className="rx-matrix-key rx-matrix-key--compact"><div className="rx-matrix-key__group"><h3>Azure Live Score</h3>{livePlacementLegendItems().map((item) => <div key={item.value} className="rx-matrix-key__item"><StatusPill value={item.value} /><div><p>{item.description}</p></div></div>)}<div className="rx-matrix-key__item"><div><strong>Last Checked</strong><p>The timestamp shows when the latest live result or latest explicit unavailable result was saved.</p></div></div></div></div></section><DataTable title="Capacity Score" subtitle="Latest Azure live placement details from SQL." tableClassName="rx-table--dense rx-capacity-score-table" sectionClassName="rx-panel--compact" columns={[{ key: 'region', label: 'Region' }, { key: 'sku', label: 'SKU', render: (row) => normalizeSkuName(row.sku) || 'n/a' }, { key: 'family', label: 'Family', render: (row) => formatFamilyLabel(row.family) || 'n/a' }, { key: 'livePlacementScore', label: 'Azure Live Score', render: (row) => row.livePlacementScore || 'n/a' }, { key: 'liveCheckedAtUtc', label: 'Checked', render: (row) => formatTimestamp(row.liveCheckedAtUtc) }, { key: 'subscriptionCount', label: 'Subscriptions', render: (row) => formatNumber(row.subscriptionCount) }, { key: 'okRows', label: 'OK', render: (row) => formatNumber(row.okRows) }, { key: 'limitedRows', label: 'Limited', render: (row) => formatNumber(row.limitedRows) }, { key: 'constrainedRows', label: 'Constrained', render: (row) => formatNumber(row.constrainedRows) }, { key: 'totalQuotaAvailable', label: 'Quota', render: (row) => formatNumber(row.totalQuotaAvailable) }, { key: 'reason', label: 'Reason', headerClassName: 'rx-capacity-score-table__reason', cellClassName: 'rx-capacity-score-table__reason', render: (row) => <span title={row.reason || ''}>{row.reason || 'n/a'}</span> }]} rows={capacityScores.rows} emptyMessage="No capacity score entries available." /><ServerPagination pagination={capacityScores.pagination} onPageChange={(pageNumber) => setCapacityScores((current) => ({ ...current, pagination: { ...current.pagination, pageNumber: Math.max(1, pageNumber) } }))} onPageSizeChange={(pageSize) => setCapacityScores((current) => ({ ...current, pagination: { ...current.pagination, pageNumber: 1, pageSize: Math.max(1, pageSize) } }))} /><DataTable title="Subscription Summary" tableClassName="rx-table--dense" sectionClassName="rx-panel--compact" columns={[{ key: 'subscriptionKey', label: 'Subscription Key' }, { key: 'skuObservations', label: 'SKU Observations', render: (row) => formatNumber(row.skuObservations || row.totalRows) }, { key: 'constrainedObservations', label: 'Constrained', render: (row) => formatNumber(row.constrainedObservations || row.constrainedRows) }, { key: 'totalQuotaAvailable', label: 'Quota Available', render: (row) => formatNumber(row.totalQuotaAvailable) }]} rows={capacityScores.subscriptionSummary} emptyMessage="No subscription summary rows available." /></div>;
+      return (
+        <div className="rx-view-stack">
+          <section className="rx-panel rx-panel--compact">
+            <div className="rx-panel__header">
+              <div>
+                <h2>Regional SKU Capacity Score</h2>
+                <p>Refresh runs a targeted live Azure capacity check, then saves the latest placement result to SQL.</p>
+              </div>
+            </div>
+            <div className="rx-field-grid rx-field-grid--filters">
+              <label className="rx-field">
+                <span>Desired Placement Count</span>
+                <input className="rx-input" type="number" min="1" max="1000" value={capacityScores.desiredCount} onChange={(event) => setCapacityScores((current) => ({ ...current, desiredCount: String(normalizeDesiredPlacementCount(event.target.value)), pagination: { ...current.pagination, pageNumber: 1 } }))} />
+              </label>
+              <label className="rx-field rx-field--wide">
+                <span>Live Placement Subscription</span>
+                <select value={livePlacementSubscriptionId} onChange={(event) => setLivePlacementSubscriptionId(event.target.value)}>
+                  <option value="">Select subscription</option>
+                  {subscriptionOptions.map((option) => <option key={option.subscriptionId} value={option.subscriptionId}>{option.subscriptionName || option.subscriptionId} ({option.subscriptionId})</option>)}
+                </select>
+              </label>
+              <label className="rx-field">
+                <span>Live Placement Family</span>
+                <select value={livePlacementFamily} onChange={(event) => setLivePlacementFamily(event.target.value)}>
+                  <option value="">Select family</option>
+                  {livePlacementFamilyOptions.map((family) => <option key={family} value={family}>{formatFamilyLabel(family) || family}</option>)}
+                </select>
+              </label>
+            </div>
+            <div className="rx-inline-actions">
+              <span className="rx-selected-count">{livePlacementScopeMessage}</span>
+              <button className="rx-button" type="button" disabled={capacityScores.busy || !canRefreshLivePlacement} onClick={refreshLivePlacement}>{capacityScores.busy ? 'Refreshing...' : 'Refresh Live Placement'}</button>
+            </div>
+            <Banner tone={capacityScores.status.tone} message={capacityScores.status.message} detail={capacityScores.status.detail} />
+          </section>
+
+          <section className="rx-panel rx-panel--compact rx-panel--muted">
+            <div className="rx-panel__header"><div><h2>Capacity Score Key</h2><p>Regional Availability shows whether Azure lists the SKU in the region; quota and subscription access are separate blockers.</p></div></div>
+            <div className="rx-capacity-score-key">
+              <h3>Azure Placement</h3>
+              <table className="rx-capacity-score-key__table" aria-label="Azure placement score key">
+                <tbody>
+                  {livePlacementLegendItems().map((item) => (
+                    <tr key={item.value}>
+                      <th scope="row"><StatusPill value={item.value} /></th>
+                      <td>{item.description}</td>
+                    </tr>
+                  ))}
+                  <tr>
+                    <th scope="row">Last Checked</th>
+                    <td>The timestamp shows when the latest live result or latest explicit unavailable result was saved.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <DataTable
+            title="Capacity Score"
+            subtitle="Latest saved capacity snapshot plus refreshed Azure live placement details."
+            tableClassName="rx-table--dense rx-capacity-score-table"
+            sectionClassName="rx-panel--compact"
+            columns={[
+              { key: 'region', label: 'Region' },
+              { key: 'sku', label: 'SKU', render: (row) => normalizeSkuName(row.sku) || 'n/a' },
+              { key: 'family', label: 'Family', render: (row) => formatFamilyLabel(row.family) || 'n/a' },
+              { key: 'livePlacementScore', label: 'Azure Placement', render: (row) => <StatusPill value={normalizeLivePlacementStatus(row)} label={getLivePlacementLabel(row)} />, sortValue: (row) => getStatusSortValue(normalizeLivePlacementStatus(row)) },
+              { key: 'score', label: 'Regional Availability', render: (row) => <StatusPill value={normalizeCapacityScoreStatus(row)} label={getRegionalAvailabilityLabel(row)} />, sortValue: (row) => getStatusSortValue(normalizeCapacityScoreStatus(row)) },
+              { key: 'quotaHealth', label: 'Quota Health', render: (row) => <StatusPill value={normalizeQuotaHealthStatus(row)} label={getQuotaHealthLabel(row)} />, sortValue: (row) => getStatusSortValue(normalizeQuotaHealthStatus(row)) },
+              { key: 'liveCheckedAtUtc', label: 'Checked', render: (row) => formatTimestamp(row.liveCheckedAtUtc) },
+              { key: 'subscriptionCount', label: 'Subscriptions', render: (row) => formatNumber(row.subscriptionCount) },
+              { key: 'okRows', label: 'Quota OK', render: (row) => <CapacityScoreCount value={row.okRows} tone="ok" /> },
+              { key: 'limitedRows', label: 'Quota Limited', render: (row) => <CapacityScoreCount value={row.limitedRows} tone="limited" /> },
+              { key: 'constrainedRows', label: 'Quota Blocked', render: (row) => <CapacityScoreCount value={row.constrainedRows} tone="constrained" /> },
+              { key: 'totalQuotaAvailable', label: 'Quota vCPU', render: (row) => formatNumber(row.totalQuotaAvailable) },
+              { key: 'reason', label: 'Reason', headerClassName: 'rx-capacity-score-table__reason', cellClassName: 'rx-capacity-score-table__reason', render: (row) => <span title={row.reason || ''}>{row.reason || 'n/a'}</span> }
+            ]}
+            rows={capacityScores.rows}
+            emptyMessage="No capacity score entries available."
+            getRowClassName={getCapacityScoreRowClassName}
+          />
+          <ServerPagination pagination={capacityScores.pagination} onPageChange={(pageNumber) => setCapacityScores((current) => ({ ...current, pagination: { ...current.pagination, pageNumber: Math.max(1, pageNumber) } }))} onPageSizeChange={(pageSize) => setCapacityScores((current) => ({ ...current, pagination: { ...current.pagination, pageNumber: 1, pageSize: Math.max(1, pageSize) } }))} />
+          <DataTable title="Subscription Summary" tableClassName="rx-table--dense" sectionClassName="rx-panel--compact" columns={[{ key: 'subscriptionKey', label: 'Subscription Key' }, { key: 'skuObservations', label: 'SKU Observations', render: (row) => formatNumber(row.skuObservations || row.totalRows) }, { key: 'constrainedObservations', label: 'Constrained', render: (row) => formatNumber(row.constrainedObservations || row.constrainedRows) }, { key: 'totalQuotaAvailable', label: 'Quota Available', render: (row) => formatNumber(row.totalQuotaAvailable) }]} rows={capacityScores.subscriptionSummary} emptyMessage="No subscription summary rows available." />
+        </div>
+      );
     }
     if (activeView === 'family-summary') {
       return <DataTable key="family-summary" title="Family Summary" subtitle="Compute-family rollup optimized for quota planning conversations." columns={[{ key: 'family', label: 'Family' }, { key: 'skus', label: 'SKUs', render: (row) => formatNumber(row.skus) }, { key: 'ok', label: 'OK SKUs', render: (row) => formatNumber(row.ok) }, { key: 'largest', label: 'Largest' }, { key: 'zones', label: 'Zones' }, { key: 'status', label: 'Status', render: (row) => <StatusPill value={row.status} /> }, { key: 'quota', label: 'Quota', render: (row) => formatNumber(row.quota) }]} rows={familySummaryRows} emptyMessage="No family summary rows available." />;

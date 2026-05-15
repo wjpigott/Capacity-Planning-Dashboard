@@ -45,7 +45,11 @@ function Resolve-AzureEndpoints {
         }
     }
 
-    $armUrl = ($AzEnvironment.ResourceManagerUrl ?? 'https://management.azure.com').TrimEnd('/')
+    $armUrl = $AzEnvironment.ResourceManagerUrl
+    if (-not $armUrl) {
+        $armUrl = 'https://management.azure.com'
+    }
+    $armUrl = $armUrl.TrimEnd('/')
 
     $portalUrl = $AzEnvironment.ManagementPortalUrl
     if ($portalUrl) {

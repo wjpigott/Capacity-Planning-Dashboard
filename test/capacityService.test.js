@@ -134,15 +134,17 @@ test('deriveCapacityScoreRows aggregates subscription rows into a High score ent
     okRows: 2,
     limitedRows: 0,
     constrainedRows: 0,
+    regionalAvailableRows: 2,
+    regionalUnavailableRows: 0,
     totalQuotaAvailable: 15,
     utilizationPct: 17,
     score: 'High',
-    reason: 'All in-scope snapshot rows are OK with positive available quota.',
+    reason: 'SKU is listed in the regional Azure SKU catalog; subscription quota is tracked separately.',
     latestCapturedAtUtc: '2026-04-27T12:00:00Z'
   });
 });
 
-test('deriveCapacityScoreRows marks constrained zero-headroom entries as Low', () => {
+test('deriveCapacityScoreRows keeps regionally listed zero-headroom entries as High', () => {
   const rows = deriveCapacityScoreRows([
     {
       region: 'westus',
@@ -157,7 +159,30 @@ test('deriveCapacityScoreRows marks constrained zero-headroom entries as Low', (
   ]);
 
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].score, 'Low');
-  assert.equal(rows[0].reason, 'No positive quota headroom remains and constrained rows dominate the in-scope snapshot.');
+  assert.equal(rows[0].score, 'High');
+  assert.equal(rows[0].reason, 'SKU is listed in the regional Azure SKU catalog; subscription quota is tracked separately.');
   assert.equal(rows[0].totalQuotaAvailable, 0);
+  assert.equal(rows[0].regionalAvailableRows, 1);
+  assert.equal(rows[0].regionalUnavailableRows, 0);
+});
+
+test('deriveCapacityScoreRows marks aggregate family placeholders as not observed regionally', () => {
+  const rows = deriveCapacityScoreRows([
+    {
+      region: 'westus',
+      sku: 'StandardFSv2Family-aggregate',
+      family: 'StandardFSv2Family',
+      availability: 'CONSTRAINED',
+      quotaLimit: 0,
+      quotaCurrent: 0,
+      subscriptionId: 'sub-a',
+      capturedAtUtc: '2026-04-27T09:00:00Z'
+    }
+  ]);
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].score, 'Low');
+  assert.equal(rows[0].reason, 'SKU was not observed in the regional Azure SKU catalog for the selected scope.');
+  assert.equal(rows[0].regionalAvailableRows, 0);
+  assert.equal(rows[0].regionalUnavailableRows, 1);
 });

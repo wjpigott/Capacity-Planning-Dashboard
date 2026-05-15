@@ -26,7 +26,7 @@ function Get-SqlCapabilities {
     .PARAMETER MaxRetries
         Max retry attempts.
     .OUTPUTS
-        [PSCustomObject[]] — one object per SKU.
+        [PSCustomObject[]] - one object per SKU.
     #>
     param(
         [Parameter(Mandatory)][string]$Region,

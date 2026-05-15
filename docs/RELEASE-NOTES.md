@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+No unreleased changes.
+
+## v1.0.1 - 2026-05-15
+
+This patch release stabilizes the initial POC baseline with report correctness, PaaS availability, deployment, runtime, and licensing updates.
+
 Highlights:
 
 - Removed the legacy classic dashboard UI from the web deployment package so the React experience is the only supported dashboard UI.
@@ -16,6 +22,17 @@ Highlights:
 - Added an Admin `Validate Ingest Scope` smoke test that resolves saved SQL scheduler settings through the app identity without writing capacity snapshot rows.
 - Added optional Entra report viewer group gating so report access can be limited to configured reader groups while preserving the existing admin group for Admin features.
 - Kept the Node/Express backend in place for API, auth, session, ingestion, and worker-coordination routes.
+- Fixed PaaS Availability refresh through the Function worker and persisted refreshed PaaS rows to SQL.
+- Removed static-tier pricing-proxy services from the normal PaaS Availability report so services such as Redis, Front Door, Grafana, SignalR, Static Web Apps, and AI Search are not shown as authoritative `Blocked` results.
+- Corrected stale Retail Prices service names used by the optional static-tier PaaS helper.
+- Ensured the PaaS Function worker returns structured JSON for dashboard persistence.
+- Documented PowerShell runtime expectations for reports and added MIT license metadata and project license text.
+
+Operational notes:
+
+- Normal PaaS Availability refreshes now include the API-backed services only: SQL Database, Cosmos DB, PostgreSQL Flex, MySQL Flex, App Service, Container Apps, AKS, Functions, and Storage.
+- Static-tier pricing-proxy checks remain available only as explicit opt-in evidence and should not be treated as deployment capability blockers.
+- Use a Git tag named `v1.0.1` on this release commit.
 
 ## v1.0.0-poc - 2026-05-14
 

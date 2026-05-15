@@ -522,6 +522,8 @@ async function runCapacityIngestion(options = {}) {
     
     // AI-specific ingestion tracking
     const aiSettings = await getAISettings();
+    const includeAI = options.includeAI !== false;
+    const sourceType = String(options.sourceType || 'live-azure-ingest').trim() || 'live-azure-ingest';
     const aiRows = [];
     const aiModelRows = [];
 
@@ -589,7 +591,7 @@ async function runCapacityIngestion(options = {}) {
 
             localRows.push({
               capturedAtUtc,
-              sourceType: 'live-azure-ingest',
+              sourceType,
               subscriptionKey,
               subscriptionId,
               subscriptionName,
@@ -612,7 +614,7 @@ async function runCapacityIngestion(options = {}) {
         rows.push(...regionRows.flat());
         
         // Ingest verified AI quota rows only when both the App Service flag and DB safety gate resolve on.
-        if (aiSettings.aiEnabled) {
+        if (includeAI && aiSettings.aiEnabled) {
           const aiRegionRows = await mapWithConcurrency(regions, regionConcurrency, async (region) => {
             const aiUsages = await fetchAIUsages(armGetAll, token, subscriptionId, region, {
               includeAllProviders: aiSettings.providerQuotaEnabled
@@ -647,7 +649,7 @@ async function runCapacityIngestion(options = {}) {
     
     // Ingest AI model catalog if enabled and due for refresh
     let insertedAIModelRows = 0;
-    if (aiSettings.aiEnabled && aiSettings.modelCatalogEnabled) {
+    if (includeAI && aiSettings.aiEnabled && aiSettings.modelCatalogEnabled) {
       const shouldRefresh = await shouldRefreshModelCatalog(aiSettings.modelCatalogIntervalMinutes);
       if (shouldRefresh) {
         console.log(`Refreshing provider-discovered AI model catalog (interval: ${aiSettings.modelCatalogIntervalMinutes} minutes)`);

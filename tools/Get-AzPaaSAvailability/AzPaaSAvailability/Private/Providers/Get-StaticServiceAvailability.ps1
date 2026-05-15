@@ -17,7 +17,7 @@ function Get-StaticServiceAvailability {
     .PARAMETER MaxRetries
         Max retry attempts.
     .OUTPUTS
-        [PSCustomObject[]] — one object per tier found.
+        [PSCustomObject[]] - one object per tier found.
     #>
     param(
         [Parameter(Mandatory)][string]$ServiceName,

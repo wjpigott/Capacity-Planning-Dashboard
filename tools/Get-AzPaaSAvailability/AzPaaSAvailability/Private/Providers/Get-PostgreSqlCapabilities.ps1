@@ -7,7 +7,7 @@ function Get-PostgreSqlCapabilities {
         available editions (Burstable/GeneralPurpose/MemoryOptimized), SKUs,
         zone availability, HA mode, IOPS, and storage options.
     .OUTPUTS
-        [PSCustomObject[]] — one object per SKU.
+        [PSCustomObject[]] - one object per SKU.
     #>
     param(
         [Parameter(Mandatory)][string]$Region,

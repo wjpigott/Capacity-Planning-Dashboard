@@ -162,6 +162,60 @@ function resolveTargetRegions(filters, currentRows) {
   return [];
 }
 
+function resolveFilterRegions(filters = {}) {
+  if (filters.region && filters.region !== 'all') {
+    return [String(filters.region).trim().toLowerCase()].filter(Boolean);
+  }
+
+  const presetRegions = getRegionsForPreset(filters.regionPreset);
+  if (Array.isArray(presetRegions) && presetRegions.length > 0) {
+    return presetRegions.map((region) => String(region || '').trim().toLowerCase()).filter(Boolean);
+  }
+
+  return [];
+}
+
+function shouldRefreshLiveCapacitySnapshot() {
+  return String(process.env.CAPACITY_LIVE_REFRESH_INGEST || 'true').toLowerCase() !== 'false';
+}
+
+async function refreshLiveCapacitySnapshotForPlacement({ filters, selectedSubscriptionIds }) {
+  if (!shouldRefreshLiveCapacitySnapshot()) {
+    return { attempted: false, skipped: true, reason: 'disabled' };
+  }
+
+  const regions = resolveFilterRegions(filters);
+  if (regions.length === 0) {
+    return { attempted: false, skipped: true, reason: 'no-region-scope' };
+  }
+
+  const familyFilter = String(filters.family || '').trim();
+  if (!familyFilter || familyFilter.toLowerCase() === 'all') {
+    return { attempted: false, skipped: true, reason: 'no-family-scope' };
+  }
+
+  const { runCapacityIngestion } = require('./azureIngestionService');
+  const result = await runCapacityIngestion({
+    subscriptionIds: selectedSubscriptionIds,
+    regions,
+    familyFilters: [familyFilter],
+    sourceType: 'live-placement-refresh',
+    includeAI: false
+  });
+
+  return {
+    attempted: true,
+    skipped: false,
+    insertedRows: result?.insertedRows ?? 0,
+    insertedScoreRows: result?.insertedScoreRows ?? 0,
+    subscriptionCount: result?.subscriptionCount ?? selectedSubscriptionIds.length,
+    regionCount: regions.length,
+    familyFilters: [familyFilter],
+    capturedAtUtc: result?.capturedAtUtc || null,
+    durationMs: result?.durationMs || null
+  };
+}
+
 function resolvePlacementWrapperPath() {
   return process.env.CAPACITY_PLACEMENT_WRAPPER_PATH
     || path.resolve(__dirname, '..', '..', 'tools', 'Get-LivePlacementScores.ps1');
@@ -273,6 +327,23 @@ function extractPlacementRows(payload) {
   return [];
 }
 
+function normalizePlacementScoreValue(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) {
+    return 'N/A';
+  }
+
+  const normalized = raw.toUpperCase();
+  if (normalized === 'RESTRICTEDSKUNOTAVAILABLE' || normalized === 'NOTAVAILABLEFORSUBSCRIPTION') {
+    return 'Limited';
+  }
+  if (normalized === 'SKUNOTAVAILABLE') {
+    return 'Unavailable';
+  }
+
+  return raw;
+}
+
 function normalizePlacementScoreRows(payload) {
   return extractPlacementRows(payload)
     .map((row) => {
@@ -281,7 +352,7 @@ function normalizePlacementScoreRows(payload) {
         .trim()
         .toLowerCase();
       const scoreValue = row?.score ?? row?.Score ?? row?.placementScore ?? row?.PlacementScore ?? row?.availabilityScore ?? row?.AvailabilityScore ?? null;
-      const score = scoreValue == null || scoreValue === '' ? 'N/A' : String(scoreValue);
+      const score = normalizePlacementScoreValue(scoreValue);
       const isAvailable = row?.isQuotaAvailable ?? row?.IsQuotaAvailable ?? row?.isAvailable ?? row?.IsAvailable ?? null;
       const isRestricted = row?.isRestricted ?? row?.IsRestricted ?? null;
 
@@ -2313,15 +2384,28 @@ async function getLivePlacementScoreRows(filters = {}) {
     throw scopeError;
   }
 
-  const currentRows = await getCapacityScoreSummary(filters);
   const extraSkus = parseExtraSkus(filters.extraSkus);
-  const targetRegions = resolveTargetRegions(filters, currentRows);
   const requestedDesiredCount = Number(filters.desiredCount || 1);
   const effectiveDesiredCount = Math.max(1, Math.min(requestedDesiredCount, 1000));
   const warnings = [];
   if (requestedDesiredCount > 1000) {
     warnings.push('Desired Placement Count is capped at 1000 for the live placement API.');
   }
+
+  let liveCapacityRefresh = null;
+  try {
+    liveCapacityRefresh = await refreshLiveCapacitySnapshotForPlacement({ filters, selectedSubscriptionIds });
+  } catch (err) {
+    liveCapacityRefresh = {
+      attempted: true,
+      skipped: false,
+      error: err.message
+    };
+    warnings.push(`Live capacity snapshot refresh failed before placement scoring: ${err.message}. Placement scoring will continue using the latest saved capacity scope.`);
+  }
+
+  const currentRows = await getCapacityScoreSummary(filters);
+  const targetRegions = resolveTargetRegions(filters, currentRows);
 
   let workingRows = Array.isArray(currentRows) ? [...currentRows] : [];
 
@@ -2364,7 +2448,8 @@ async function getLivePlacementScoreRows(filters = {}) {
       source: 'Get-AzVMAvailability:Get-PlacementScores',
       requestedDesiredCount,
       effectiveDesiredCount,
-      warning: warnings.length > 0 ? warnings.join(' ') : null
+      warning: warnings.length > 0 ? warnings.join(' ') : null,
+      liveCapacityRefresh
     };
   }
 
@@ -2547,7 +2632,8 @@ async function getLivePlacementScoreRows(filters = {}) {
     effectiveDesiredCount,
     estimatedCallCount,
     warning: combinedWarning || null,
-    diagnostics: primaryDiagnostic
+    diagnostics: primaryDiagnostic,
+    liveCapacityRefresh
   };
 }
 
@@ -2597,9 +2683,12 @@ module.exports = {
   seedVmSkuCatalogIfEmpty,
   __testHooks: {
     normalizeSkuName,
+    normalizePlacementScoreValue,
     isAggregateSkuName,
     normalizeRecommendationContract,
     parseExtraSkus,
+    resolveFilterRegions,
+    refreshLiveCapacitySnapshotForPlacement,
     getRestrictionDetails,
     buildRecommendationSkuProfile,
     testSkuCompatibility,

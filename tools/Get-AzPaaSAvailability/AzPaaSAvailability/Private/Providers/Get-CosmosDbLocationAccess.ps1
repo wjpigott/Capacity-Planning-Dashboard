@@ -5,7 +5,7 @@ function Get-CosmosDbLocationAccess {
     .DESCRIPTION
         Calls Microsoft.DocumentDB/locations to discover per-region subscription access.
         Returns AZ support, subscription access (AZ and Regular), residency, backup options.
-        This is a single call that returns ALL regions — no per-region looping needed.
+        This is a single call that returns ALL regions - no per-region looping needed.
     .PARAMETER SubscriptionId
         Azure subscription ID.
     .PARAMETER AccessToken
@@ -19,7 +19,7 @@ function Get-CosmosDbLocationAccess {
     .PARAMETER MaxRetries
         Max retry attempts.
     .OUTPUTS
-        [PSCustomObject[]] — one object per region.
+        [PSCustomObject[]] - one object per region.
     #>
     param(
         [Parameter(Mandatory)][string]$SubscriptionId,
@@ -49,10 +49,10 @@ function Get-CosmosDbLocationAccess {
 
         $actionRequired = 'None'
         if (-not $accessAz -and -not $accessRegular) {
-            $actionRequired = 'Open SR — blocked for all account types'
+            $actionRequired = 'Open SR - blocked for all account types'
         }
         elseif ($props.supportsAvailabilityZone -and -not $accessAz) {
-            $actionRequired = 'Open SR — blocked for AZ accounts'
+            $actionRequired = 'Open SR - blocked for AZ accounts'
         }
 
         $results.Add([PSCustomObject]@{

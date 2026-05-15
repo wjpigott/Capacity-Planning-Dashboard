@@ -371,7 +371,7 @@ function Get-AzPaaSAvailability {
     }
 
     # Only emit to pipeline when output is being captured (piped, assigned, redirected).
-    # In interactive terminal mode, the Write-Host display is the output — suppress the
+    # In interactive terminal mode, the Write-Host display is the output - suppress the
     # raw object dump that produces 2000+ noisy @{...} lines.
     if ($Quiet -or [Console]::IsOutputRedirected) {
         return $result
@@ -381,7 +381,7 @@ function Get-AzPaaSAvailability {
         Set-Variable -Name 'AzPaaSLastResult' -Value $result -Scope Global -Force
         Write-Host "Tip: Results stored in " -ForegroundColor DarkGray -NoNewline
         Write-Host '$AzPaaSLastResult' -ForegroundColor Cyan -NoNewline
-        Write-Host " — or use -Quiet to capture: " -ForegroundColor DarkGray -NoNewline
+        Write-Host " - or use -Quiet to capture: " -ForegroundColor DarkGray -NoNewline
         Write-Host '$r = Get-AzPaaSAvailability ... -Quiet' -ForegroundColor Cyan
     }
 }

@@ -131,9 +131,7 @@ try {
         throw "Worker PaaS availability script returned invalid JSON. Output: $rawOutput"
     }
 
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
-        StatusCode = [HttpStatusCode]::OK
-        Body = @{
+    $responseBody = @{
             ok = $true
             result = $contract
             diagnostics = @{
@@ -148,16 +146,24 @@ try {
                 wrapperPath = $wrapperPath
                 repoRoot = $repoRoot
             }
-        }
+    } | ConvertTo-Json -Depth 32
+
+    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+        StatusCode = [HttpStatusCode]::OK
+        Headers = @{ 'Content-Type' = 'application/json' }
+        Body = $responseBody
     })
 }
 catch {
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
-        StatusCode = [HttpStatusCode]::InternalServerError
-        Body = @{
+    $errorBody = @{
             ok = $false
             error = 'Failed to retrieve worker PaaS availability.'
             detail = $_.Exception.Message
-        }
+    } | ConvertTo-Json -Depth 8
+
+    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+        StatusCode = [HttpStatusCode]::InternalServerError
+        Headers = @{ 'Content-Type' = 'application/json' }
+        Body = $errorBody
     })
 }

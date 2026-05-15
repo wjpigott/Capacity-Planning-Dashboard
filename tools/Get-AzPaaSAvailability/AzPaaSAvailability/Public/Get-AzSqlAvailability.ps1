@@ -127,7 +127,7 @@ function Get-AzSqlAvailability {
                     $disabledCount = @($allSkus | Where-Object { $_.Status -eq 'Disabled' }).Count
                     if ($allSkus.Count -gt 0) {
                         $bd = @(); if ($visibleCount) { $bd += "$visibleCount Visible" }; if ($disabledCount) { $bd += "$disabledCount Disabled" }
-                        Write-Host "  $($icons.Warning) $regionCode`: 0 available ($($bd -join ', ') — use -IncludeDisabled)" -ForegroundColor Yellow
+                        Write-Host "  $($icons.Warning) $regionCode`: 0 available ($($bd -join ', ') - use -IncludeDisabled)" -ForegroundColor Yellow
                     }
                     else {
                         Write-Host "  $($icons.Check) $regionCode`: 0 SKUs" -ForegroundColor DarkGray

@@ -5,11 +5,15 @@ This repository contains the initial platform scaffold for a native Azure capaci
 
 ## Current Release
 
-Current version: `v1.0.0-poc`
+Current version: `v1.0.1`
 
 This version marks the current deployed `main` branch as the initial proof-of-concept baseline. Future compatible feature updates should move to the next minor version, such as `v1.1.0`; patch-only fixes to this baseline should use `v1.0.1`, `v1.0.2`, and so on.
 
 Release history is tracked in `docs/RELEASE-NOTES.md`. Git tags should use the same version string as the release, for example `v1.0.0-poc`, so others can retrieve the exact code behind a deployed version.
+
+## License
+
+This project is licensed under the terms of the [MIT License](LICENSE).
 
 ## What is included now
 
@@ -196,6 +200,23 @@ Optional ingestion scope settings:
 - `INGEST_SUBSCRIPTION_IDS` - comma-separated fallback list for smaller estates without management groups
 
 When `CAPACITY_WORKER_BASE_URL` is set, live placement refresh calls the Azure Function worker first. This branch contains a managed-identity bearer-token worker path, but the currently verified working Azure dev baseline uses a shared secret between the web app and the function app. If the worker is unavailable and `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK` is not `true`, the dashboard falls back to the in-process App Service path to preserve rollback safety.
+
+Report runtime dependency reference:
+
+| Area | Uses PowerShell for normal report read? | Runtime/status notes |
+|---|---:|---|
+| Capacity Grid | No | SQL/Node read path |
+| Region Health / Top SKUs / Region Matrix | No | SQL/Node analytics read path |
+| Family Summary | No | SQL/Node read path |
+| Trend History | No | SQL/Node read path |
+| Capacity Score read | No | SQL/Node read path |
+| AI Model Availability | No | SQL-backed read path |
+| PaaS Availability read | No | Reads the latest persisted SQL snapshot |
+| PaaS refresh | Yes | Uses the Function worker or local PowerShell runtime; PowerShell 7 is the preferred Azure PowerShell path, with Windows PowerShell 5.1 compatibility kept as fallback insurance |
+| Live placement / live Capacity Score refresh | Sometimes | Worker/direct REST first when configured, with local PowerShell fallback when allowed |
+| Capacity Recommender | Sometimes | Direct Azure REST first when `CAPACITY_RECOMMEND_USE_DIRECT_API=true`; worker/local PowerShell fallback remains available |
+| Quota Workbench read/plan | Mostly no | Read/planning paths are Node/ARM/SQL oriented |
+| Quota apply | Yes | State-changing path that shells out to `tools/Get-AzVMAvailability/Apply-QuotaGroupMove.ps1`; do not run as a casual health check |
 
 Deployment incident note, 2026-04-24:
 

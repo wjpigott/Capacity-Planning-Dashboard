@@ -7,9 +7,9 @@
     Copyright         = '(c) 2026 Zachary Luz. All rights reserved. MIT License.'
     Description       = 'Scan Azure PaaS service availability, capacity, quota, and pricing across regions. Supports SQL Database, Cosmos DB, PostgreSQL, MySQL, App Service, Container Apps, and more.'
 
-    PowerShellVersion = '7.0'
+    PowerShellVersion = '5.1'
 
-    RequiredModules   = @('Az.Accounts')
+    RequiredModules   = @()
 
     FunctionsToExport = @(
         'Get-AzPaaSAvailability'

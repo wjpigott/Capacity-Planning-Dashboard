@@ -27,7 +27,7 @@ function Show-AzPaaSRegionMatrix {
 
     Write-Host ''
     Write-Host ('=' * $OutputWidth) -ForegroundColor Gray
-    Write-Host 'REGION HEALTH MATRIX — All Services' -ForegroundColor Green
+    Write-Host 'REGION HEALTH MATRIX - All Services' -ForegroundColor Green
     Write-Host ('=' * $OutputWidth) -ForegroundColor Gray
     Write-Host ''
 
@@ -102,6 +102,6 @@ function Show-AzPaaSRegionMatrix {
     Write-Host 'HOW TO READ:' -ForegroundColor DarkGray
     Write-Host "  $($Icons.Check) N  = N SKUs/versions available" -ForegroundColor Green
     Write-Host "  $($Icons.Error) BLOCK = Subscription blocked (open SR)" -ForegroundColor Red
-    Write-Host "  $($Icons.Warning) 0  = No available SKUs (may have Visible/Disabled — use -IncludeDisabled)" -ForegroundColor Yellow
+    Write-Host "  $($Icons.Warning) 0  = No available SKUs (may have Visible/Disabled - use -IncludeDisabled)" -ForegroundColor Yellow
     Write-Host '  -    = Not scanned or not applicable' -ForegroundColor DarkGray
 }

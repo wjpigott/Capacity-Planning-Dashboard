@@ -454,12 +454,67 @@ function buildCapacityLatestSelect(columns, tableAlias = '') {
   ].filter(Boolean).join(',\n      ');
 }
 
+function buildCapacitySnapshotRawSelect(columns, tableAlias = '') {
+  const hasColumn = (name) => columns.has(name);
+  const qualify = (name) => (tableAlias ? `${tableAlias}.${name}` : name);
+
+  return [
+    qualify('capturedAtUtc'),
+    hasColumn('sourceType') ? qualify('sourceType') : "CAST(NULL AS NVARCHAR(50)) AS sourceType",
+    hasColumn('subscriptionKey') ? qualify('subscriptionKey') : "CAST('legacy-data' AS NVARCHAR(128)) AS subscriptionKey",
+    hasColumn('subscriptionId') ? qualify('subscriptionId') : "CAST('legacy-data' AS NVARCHAR(64)) AS subscriptionId",
+    hasColumn('subscriptionName') ? qualify('subscriptionName') : "CAST('Legacy data' AS NVARCHAR(256)) AS subscriptionName",
+    qualify('region'),
+    qualify('skuName'),
+    qualify('skuFamily'),
+    qualify('availabilityState'),
+    qualify('quotaCurrent'),
+    qualify('quotaLimit'),
+    qualify('monthlyCostEstimate'),
+    hasColumn('vCpu') ? qualify('vCpu') : 'CAST(NULL AS INT) AS vCpu',
+    hasColumn('memoryGB') ? qualify('memoryGB') : 'CAST(NULL AS DECIMAL(10,2)) AS memoryGB',
+    hasColumn('zonesCsv') ? qualify('zonesCsv') : 'CAST(NULL AS NVARCHAR(256)) AS zonesCsv'
+  ].join(',\n        ');
+}
+
 function buildLatestSnapshotBatchCte() {
   return `
-    WITH LatestBatch AS (
-      SELECT MAX(capturedAtUtc) AS capturedAtUtc
+    WITH ReportingSnapshotBatches AS (
+      SELECT
+        capturedAtUtc,
+        COUNT(1) AS [rowCount]
       FROM dbo.CapacitySnapshot
+      WHERE ISNULL(sourceType, 'live-azure-ingest') <> 'live-placement-refresh'
+      GROUP BY capturedAtUtc
+    ),
+    LatestBatch AS (
+      SELECT TOP (1) capturedAtUtc
+      FROM ReportingSnapshotBatches
+      ORDER BY [rowCount] DESC, capturedAtUtc DESC
     )
+  `;
+}
+
+function buildFilteredCapacityLatestQuery(columns, filters, request) {
+  let where = appendCommonSqlFilters(filters, request);
+  const selectedColumns = buildCapacityLatestSelect(columns, 'snapshot');
+  const rankedColumns = buildCapacitySnapshotRawSelect(columns, 'snapshot');
+
+  return `
+    WITH RankedCapacity AS (
+      SELECT
+        ${rankedColumns},
+        ROW_NUMBER() OVER (
+          PARTITION BY ISNULL(snapshot.subscriptionKey, 'legacy-data'), ISNULL(snapshot.sourceType, 'live-azure-ingest'), snapshot.region, snapshot.skuName
+          ORDER BY snapshot.capturedAtUtc DESC
+        ) AS latestRank
+      FROM dbo.CapacitySnapshot snapshot
+      WHERE 1 = 1
+        ${where}
+    )
+    SELECT ${selectedColumns}
+    FROM RankedCapacity snapshot
+    WHERE snapshot.latestRank = 1
   `;
 }
 
@@ -618,7 +673,6 @@ async function getCapacityRowsPaginated(filters) {
 
   const capacitySnapshotColumns = await getCapacitySnapshotColumnSet(pool);
   const request = pool.request();
-
   let query = `${buildLatestSnapshotBatchCte()}
     SELECT
       ${buildCapacityLatestSelect(capacitySnapshotColumns, 'snapshot')}
@@ -626,7 +680,7 @@ async function getCapacityRowsPaginated(filters) {
     CROSS JOIN LatestBatch latestBatch
     WHERE snapshot.capturedAtUtc = latestBatch.capturedAtUtc
   `;
-  
+
   query += appendCommonSqlFilters(filters, request);
   query += `
     ORDER BY snapshot.region ASC, snapshot.skuFamily ASC, snapshot.skuName ASC
@@ -680,6 +734,11 @@ async function getCapacityRowsPaginated(filters) {
 }
 
 async function getSubscriptions({ search, limit } = {}) {
+  const subscriptionTableRows = await getSubscriptionsFromTable({ search, limit });
+  if (Array.isArray(subscriptionTableRows)) {
+    return subscriptionTableRows;
+  }
+
   const pool = await getSqlPool();
   if (!pool) {
     return [{ subscriptionId: 'legacy-data', subscriptionName: 'Legacy data' }];
@@ -698,13 +757,12 @@ async function getSubscriptions({ search, limit } = {}) {
   const request = pool.request();
   request.input('limitRows', maxLimit);
 
-  let query = `${buildLatestSnapshotBatchCte()}
+  let query = `
     SELECT TOP (@limitRows)
       ${subscriptionIdExpr} AS subscriptionId,
       ${subscriptionNameExpr} AS subscriptionName
-    FROM dbo.CapacitySnapshot snapshot
-    CROSS JOIN LatestBatch latestBatch
-    WHERE snapshot.capturedAtUtc = latestBatch.capturedAtUtc
+    FROM dbo.CapacityLatest snapshot
+    WHERE 1 = 1
   `;
 
   if (search && search.trim()) {
@@ -953,16 +1011,17 @@ function isVmComputeFamilyName(familyName) {
     || /^basic[a-z0-9]+family$/i.test(String(familyName || '').trim());
 }
 
-function getCapacityScoreLabel(summary) {
-  if (summary.constrainedRows > 0 && summary.okRows === 0 && summary.totalQuotaAvailable <= 0) {
-    return 'Low';
-  }
+function isRegionalSkuObserved(skuName) {
+  const sku = String(skuName || '').trim();
+  return Boolean(sku) && !/-aggregate$|family-aggregate/i.test(sku);
+}
 
-  if (summary.constrainedRows === 0 && summary.limitedRows === 0 && summary.totalQuotaAvailable > 0) {
+function getCapacityScoreLabel(summary) {
+  if (summary.regionalAvailableRows > 0 && summary.regionalUnavailableRows === 0) {
     return 'High';
   }
 
-  if (summary.okRows > 0 || summary.totalQuotaAvailable > 0 || summary.limitedRows > 0) {
+  if (summary.regionalAvailableRows > 0) {
     return 'Medium';
   }
 
@@ -971,18 +1030,14 @@ function getCapacityScoreLabel(summary) {
 
 function getCapacityScoreReason(summary) {
   if (summary.score === 'High') {
-    return 'All in-scope snapshot rows are OK with positive available quota.';
+    return 'SKU is listed in the regional Azure SKU catalog; subscription quota is tracked separately.';
   }
 
   if (summary.score === 'Medium') {
-    if (summary.constrainedRows > 0) {
-      return 'Mixed signal: at least one constrained row exists, but some capacity or quota remains.';
-    }
-
-    return 'Usable capacity remains, but at least one row is limited or quota headroom is narrow.';
+    return 'SKU is listed for part of the selected scope; subscription quota and access restrictions are tracked separately.';
   }
 
-  return 'No positive quota headroom remains and constrained rows dominate the in-scope snapshot.';
+  return 'SKU was not observed in the regional Azure SKU catalog for the selected scope.';
 }
 
 function deriveCapacityScoreRows(rows) {
@@ -1007,6 +1062,8 @@ function deriveCapacityScoreRows(rows) {
         okRows: 0,
         limitedRows: 0,
         constrainedRows: 0,
+        regionalAvailableRows: 0,
+        regionalUnavailableRows: 0,
         totalQuotaAvailable: 0,
         quotaLimitTotal: 0,
         quotaCurrentTotal: 0,
@@ -1019,6 +1076,12 @@ function deriveCapacityScoreRows(rows) {
     entry.totalQuotaAvailable += Math.max(0, Number(row.quotaLimit || 0) - Number(row.quotaCurrent || 0));
     entry.quotaLimitTotal += Number(row.quotaLimit || 0);
     entry.quotaCurrentTotal += Number(row.quotaCurrent || 0);
+
+    if (isRegionalSkuObserved(sku)) {
+      entry.regionalAvailableRows += 1;
+    } else {
+      entry.regionalUnavailableRows += 1;
+    }
 
     if (availability === 'OK') {
       entry.okRows += 1;
@@ -1045,6 +1108,8 @@ function deriveCapacityScoreRows(rows) {
         okRows: entry.okRows,
         limitedRows: entry.limitedRows,
         constrainedRows: entry.constrainedRows,
+        regionalAvailableRows: entry.regionalAvailableRows,
+        regionalUnavailableRows: entry.regionalUnavailableRows,
         totalQuotaAvailable: entry.totalQuotaAvailable,
         utilizationPct: entry.quotaLimitTotal > 0 ? Math.round((entry.quotaCurrentTotal / entry.quotaLimitTotal) * 100) : 0,
         score,
@@ -1058,8 +1123,8 @@ function deriveCapacityScoreRows(rows) {
         return rank[left.score] - rank[right.score];
       }
 
-      if (right.totalQuotaAvailable !== left.totalQuotaAvailable) {
-        return right.totalQuotaAvailable - left.totalQuotaAvailable;
+      if (right.regionalAvailableRows !== left.regionalAvailableRows) {
+        return right.regionalAvailableRows - left.regionalAvailableRows;
       }
 
       if (left.region !== right.region) {

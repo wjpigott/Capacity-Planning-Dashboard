@@ -225,7 +225,7 @@ async function getSqlObjectRowCount(pool, objectName, objectTypes = ['U']) {
     return null;
   }
 
-  const result = await pool.request().query(`SELECT COUNT(1) AS rowCount FROM ${objectName}`);
+  const result = await pool.request().query(`SELECT COUNT(1) AS [rowCount] FROM ${objectName}`);
   return Number(result.recordset?.[0]?.rowCount || 0);
 }
 
@@ -234,7 +234,7 @@ async function getSqlObjectLatestCapture(pool, objectName, objectTypes = ['U'], 
     return null;
   }
 
-  const result = await pool.request().query(`SELECT MAX(${columnName}) AS latestCapture FROM ${objectName}`);
+  const result = await pool.request().query(`SELECT MAX(${columnName}) AS [latestCapture] FROM ${objectName}`);
   return result.recordset?.[0]?.latestCapture || null;
 }
 
@@ -1244,6 +1244,11 @@ function normalizeSettingText(value, fallback = '') {
   return String(value).trim();
 }
 
+function normalizeSettingTextWithBlankFallback(value, fallback = '') {
+  const normalized = normalizeSettingText(value, fallback);
+  return normalized || normalizeSettingText(fallback, '');
+}
+
 function resolvePresetRegions(regionPreset) {
   const preset = regionPreset || 'USMajor';
   return getRegionsForPreset(preset) || ['eastus', 'eastus2', 'centralus', 'westus', 'westus2'];
@@ -1281,7 +1286,7 @@ function parseSchedulerSettingsFromDb(dbMap = {}) {
       runOnStartup: normalizeBoolean(readValue(DASHBOARD_SETTING_KEYS.ingestRunOnStartup), defaults.ingest.runOnStartup),
       regionPreset: normalizeSettingText(readValue(DASHBOARD_SETTING_KEYS.ingestRegionPreset), defaults.ingest.regionPreset),
       subscriptionIds: normalizeSettingText(readValue(DASHBOARD_SETTING_KEYS.ingestSubscriptionIds), defaults.ingest.subscriptionIds),
-      managementGroupNames: normalizeSettingText(readValue(DASHBOARD_SETTING_KEYS.ingestManagementGroupNames), defaults.ingest.managementGroupNames),
+      managementGroupNames: normalizeSettingTextWithBlankFallback(readValue(DASHBOARD_SETTING_KEYS.ingestManagementGroupNames), defaults.ingest.managementGroupNames),
       familyFilters: normalizeSettingText(readValue(DASHBOARD_SETTING_KEYS.ingestFamilyFilters), defaults.ingest.familyFilters)
     },
     aiModelCatalog: {
@@ -1322,13 +1327,14 @@ function applyRuntimeSchedulerSettings(settings = {}) {
 }
 
 async function saveSchedulerSettings(settings = {}) {
+  const defaults = getDefaultSchedulerSettings();
   const normalized = {
     ingest: {
       intervalMinutes: normalizeIntervalMinutes(settings?.ingest?.intervalMinutes, 0),
       runOnStartup: normalizeBoolean(settings?.ingest?.runOnStartup, false),
       regionPreset: normalizeSettingText(settings?.ingest?.regionPreset, 'USMajor') || 'USMajor',
       subscriptionIds: normalizeSettingText(settings?.ingest?.subscriptionIds, ''),
-      managementGroupNames: normalizeSettingText(settings?.ingest?.managementGroupNames, ''),
+      managementGroupNames: normalizeSettingTextWithBlankFallback(settings?.ingest?.managementGroupNames, defaults.ingest.managementGroupNames),
       familyFilters: normalizeSettingText(settings?.ingest?.familyFilters, '')
     },
     aiModelCatalog: {
@@ -2008,6 +2014,7 @@ app.get('/api/auth/me', (req, res) => {
 
 app.get('/api/capacity', async (req, res) => {
   try {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     const rows = await getCapacityRows(getCapacityFiltersFromQuery(req.query));
     res.json({ rows });
   } catch (err) {
@@ -2051,6 +2058,7 @@ app.get('/api/capacity/export', async (req, res) => {
  */
 app.get('/api/capacity/paged', async (req, res) => {
   try {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     const result = await getCapacityRowsPaginated(getCapacityFiltersFromQuery(req.query));
     res.json(result);
   } catch (err) {
@@ -3142,11 +3150,53 @@ app.get('/internal/diagnostics/capacity-read', requireIngestKey, async (req, res
   try {
     const filters = getCapacityFiltersFromQuery(req.query);
     const target = String(req.query.target || 'all').trim().toLowerCase();
+    const getAIModelAvailabilityDiagnostics = async () => {
+      const pool = await getSqlPool();
+      if (!pool) {
+        return { rows: 0, providers: 0, regions: 0, source: '' };
+      }
+      const availabilitySource = await getAIModelAvailabilitySource(pool);
+      if (!availabilitySource) {
+        return { rows: 0, providers: 0, regions: 0, source: '' };
+      }
+      const result = await pool.request().query(`
+        SELECT
+          COUNT(1) AS rows,
+          COUNT(DISTINCT region) AS regions,
+          COUNT(DISTINCT provider) AS providers
+        FROM ${availabilitySource.objectName}
+      `);
+      const row = result.recordset[0] || {};
+      return {
+        rows: Number(row.rows || 0),
+        regions: Number(row.regions || 0),
+        providers: Number(row.providers || 0),
+        source: availabilitySource.objectName
+      };
+    };
+    const getQuotaScopeDiagnostics = async () => {
+      const managementGroups = await listManagementGroups();
+      const selectedManagementGroup = String(req.query.managementGroupId || process.env.QUOTA_MANAGEMENT_GROUP_ID || managementGroups[0]?.id || '').trim();
+      let quotaGroups = [];
+      if (selectedManagementGroup) {
+        quotaGroups = await listQuotaGroups(selectedManagementGroup);
+      }
+      return {
+        managementGroups: managementGroups.length,
+        selectedManagementGroup,
+        quotaGroups: quotaGroups.length
+      };
+    };
     const targetChecks = {
       capacityrows: { name: 'capacityRows', run: () => getCapacityRows(filters) },
       capacitypaged: { name: 'capacityPaged', run: () => getCapacityRowsPaginated({ ...filters, pageNumber: 1, pageSize: 10 }) },
+      capacityanalytics: { name: 'capacityAnalytics', run: () => getCapacityAnalyticsSummary(filters) },
+      capacityscores: { name: 'capacityScores', run: () => getCapacityScoreSummaryPaginated({ ...filters, desiredCount: req.query.desiredCount || '1' }, 1, 10) },
       trendrows: { name: 'trendRows', run: () => getCapacityTrends({ ...filters, days: 7 }) },
       familyrows: { name: 'familyRows', run: () => getFamilySummary(filters) },
+      paasavailability: { name: 'paasAvailability', run: () => getPaaSAvailabilitySnapshot({ service: req.query.service || 'All' }) },
+      aimodels: { name: 'aiModels', run: getAIModelAvailabilityDiagnostics },
+      quotascope: { name: 'quotaScope', run: getQuotaScopeDiagnostics },
       subscriptions: { name: 'subscriptions', run: () => getSubscriptions({ limit: 20 }) }
     };
 
@@ -3155,7 +3205,7 @@ app.get('/internal/diagnostics/capacity-read', requireIngestKey, async (req, res
       : (targetChecks[target] ? [targetChecks[target]] : null);
 
     if (!requestedChecks) {
-      return res.status(400).json({ ok: false, error: 'Unsupported target. Use all, capacityRows, capacityPaged, trendRows, familyRows, or subscriptions.' });
+      return res.status(400).json({ ok: false, error: 'Unsupported target. Use all, capacityRows, capacityPaged, capacityAnalytics, capacityScores, trendRows, familyRows, paasAvailability, aiModels, quotaScope, or subscriptions.' });
     }
 
     const checks = await Promise.all(requestedChecks.map((check) => runDiagnosticCheck(check.name, check.run, { timeoutMs: 8000 })));
@@ -3169,8 +3219,23 @@ app.get('/internal/diagnostics/capacity-read', requireIngestKey, async (req, res
       capacityRows: Array.isArray(byName.capacityRows?.value) ? byName.capacityRows.value.length : 0,
       pagedRows: Array.isArray(byName.capacityPaged?.value?.data) ? byName.capacityPaged.value.data.length : 0,
       pagedTotal: Number(byName.capacityPaged?.value?.pagination?.total || 0),
+      analyticsRegionHealthRows: Array.isArray(byName.capacityAnalytics?.value?.regionHealth) ? byName.capacityAnalytics.value.regionHealth.length : 0,
+      analyticsTopSkuRows: Array.isArray(byName.capacityAnalytics?.value?.topSkus) ? byName.capacityAnalytics.value.topSkus.length : 0,
+      analyticsMatrixRows: Array.isArray(byName.capacityAnalytics?.value?.matrix?.rows) ? byName.capacityAnalytics.value.matrix.rows.length : 0,
+      analyticsMatrixRegions: Array.isArray(byName.capacityAnalytics?.value?.matrix?.regions) ? byName.capacityAnalytics.value.matrix.regions.length : 0,
+      scoreRows: Array.isArray(byName.capacityScores?.value?.rows) ? byName.capacityScores.value.rows.length : 0,
+      scoreTotal: Number(byName.capacityScores?.value?.pagination?.total || 0),
+      scoreSubscriptionSummaryRows: Array.isArray(byName.capacityScores?.value?.subscriptionSummary) ? byName.capacityScores.value.subscriptionSummary.length : 0,
       trendRows: Array.isArray(byName.trendRows?.value) ? byName.trendRows.value.length : 0,
       familyRows: Array.isArray(byName.familyRows?.value) ? byName.familyRows.value.length : 0,
+      paasRows: Array.isArray(byName.paasAvailability?.value?.rows) ? byName.paasAvailability.value.rows.length : 0,
+      paasServiceSummaryRows: Array.isArray(byName.paasAvailability?.value?.summary?.serviceSummary) ? byName.paasAvailability.value.summary.serviceSummary.length : 0,
+      aiModelRows: Number(byName.aiModels?.value?.rows || 0),
+      aiModelRegions: Number(byName.aiModels?.value?.regions || 0),
+      aiModelProviders: Number(byName.aiModels?.value?.providers || 0),
+      quotaManagementGroups: Number(byName.quotaScope?.value?.managementGroups || 0),
+      quotaGroups: Number(byName.quotaScope?.value?.quotaGroups || 0),
+      quotaSelectedManagementGroup: byName.quotaScope?.value?.selectedManagementGroup || '',
       subscriptions: Array.isArray(byName.subscriptions?.value) ? byName.subscriptions.value.length : 0,
       sampleCapacityRows: Array.isArray(byName.capacityRows?.value) ? byName.capacityRows.value.slice(0, 3) : [],
       sampleSubscriptions: Array.isArray(byName.subscriptions?.value) ? byName.subscriptions.value.slice(0, 5) : [],
@@ -3178,6 +3243,48 @@ app.get('/internal/diagnostics/capacity-read', requireIngestKey, async (req, res
     });
   } catch (err) {
     sendErrorResponse(res, { clientMessage: 'Failed to retrieve capacity read diagnostics.', err, scope: 'internal/diagnostics/capacity-read' });
+  }
+});
+
+app.get('/internal/diagnostics/paas-probe', requireIngestKey, async (_, res) => {
+  try {
+    const result = await getPaaSPowerShellProbe();
+    res.json(result);
+  } catch (err) {
+    sendErrorResponse(res, {
+      clientMessage: 'Failed to probe PaaS PowerShell runtime.',
+      err,
+      scope: 'internal/diagnostics/paas-probe',
+      extra: { runtimes: [] }
+    });
+  }
+});
+
+app.post('/internal/diagnostics/paas-refresh', requireIngestKey, async (req, res) => {
+  try {
+    const result = await runPaaSAvailabilityScan({
+      service: req.body?.service,
+      regions: req.body?.regions,
+      regionPreset: req.body?.regionPreset,
+      edition: req.body?.edition,
+      computeModel: req.body?.computeModel,
+      sqlResourceType: req.body?.sqlResourceType,
+      includeDisabled: req.body?.includeDisabled,
+      fetchPricing: req.body?.fetchPricing
+    });
+    res.json(result);
+  } catch (err) {
+    const status = err.message.includes('not found') || err.message.includes('not configured') ? 503 : 500;
+    sendErrorResponse(res, {
+      status,
+      clientMessage: 'Failed to refresh PaaS availability.',
+      err,
+      scope: 'internal/diagnostics/paas-refresh',
+      extra: {
+        rows: [],
+        detail: err && err.message ? String(err.message).slice(0, 4000) : null
+      }
+    });
   }
 });
 

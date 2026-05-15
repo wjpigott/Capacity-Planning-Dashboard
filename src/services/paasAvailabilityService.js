@@ -123,6 +123,14 @@ function normalizeRequestedService(value) {
   return supported.has(raw) ? raw : 'All';
 }
 
+function shouldIncludePaaSRow(row, options = {}) {
+  if (options.includeStaticTierServices === true) {
+    return true;
+  }
+  return String(row?.category || '').trim().toLowerCase() !== 'static-tier'
+    && String(row?.resourceType || '').trim().toLowerCase() !== 'statictier';
+}
+
 function resolvePaaSWrapperPath() {
   return process.env.CAPACITY_PAAS_WRAPPER_PATH
     || path.resolve(__dirname, '..', '..', 'tools', 'Get-PaaSAvailabilityReport.ps1');
@@ -415,13 +423,7 @@ async function getPaaSPowerShellProbe() {
     const majorVersion = await getPowerShellMajorVersion(command);
     const env = await ensureAzPlacementModules(command).catch(() => ({ ...process.env }));
     const shellProbe = await probePowerShellRuntime(command, env);
-    const moduleProbe = majorVersion != null && majorVersion < 7
-      ? {
-          ok: false,
-          skipped: true,
-          error: `requires-powershell-7 | detectedVersion=${majorVersion}`
-        }
-      : await probePaaSModuleImport(command, env, repoRoot);
+    const moduleProbe = await probePaaSModuleImport(command, env, repoRoot);
 
     results.push({
       runtime: command,
@@ -485,11 +487,6 @@ async function runPaaSAvailabilityScan(options = {}) {
 
   for (const command of powerShellRuntime.commands) {
     const majorVersion = await getPowerShellMajorVersion(command);
-    if (majorVersion != null && majorVersion < 7) {
-      runtimeFailures.push(`runtime=${command} | error=requires-powershell-7 | detectedVersion=${majorVersion}`);
-      continue;
-    }
-
     try {
       const env = await ensureAzPlacementModules(command).catch(() => ({ ...process.env }));
       const args = buildLocalPaaSArgs({
@@ -568,7 +565,7 @@ async function getPaaSAvailabilitySnapshot(options = {}) {
     maxAgeHours: options.maxAgeHours
   });
 
-  const rows = Array.isArray(snapshot.rows) ? snapshot.rows : [];
+  const rows = (Array.isArray(snapshot.rows) ? snapshot.rows : []).filter((row) => shouldIncludePaaSRow(row, options));
   return {
     ok: true,
     source: 'sql-snapshot',

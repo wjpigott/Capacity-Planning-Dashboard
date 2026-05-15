@@ -32,6 +32,9 @@ param(
     [switch]$FetchPricing,
 
     [Parameter(Mandatory = $false)]
+    [switch]$IncludeStaticTierServices,
+
+    [Parameter(Mandatory = $false)]
     [ValidateSet('AzureCloud', 'AzureUSGovernment', 'AzureChinaCloud', 'AzureGermanCloud')]
     [string]$Environment,
 
@@ -513,7 +516,7 @@ $capturedAtUtc = [datetime]::UtcNow
 $scanResult = Get-AzPaaSAvailability @params
 
 $staticTierRows = @()
-if ($Service -eq 'All' -or -not $Service) {
+if ($IncludeStaticTierServices.IsPresent -and ($Service -eq 'All' -or -not $Service)) {
     $staticTierParams = @{
         Region = $(if ($regions.Count -gt 0) { $regions } else { $scanResult.ScanMetadata.Regions })
         MaxRetries = $MaxRetries

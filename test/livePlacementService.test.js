@@ -36,6 +36,28 @@ test('parseExtraSkus normalizes and deduplicates requested SKUs', () => {
   assert.deepEqual(parsed, ['Standard_D2sv5', 'Basic_A1']);
 });
 
+test('normalizePlacementScoreValue maps subscription restrictions to Limited', () => {
+  assert.equal(__testHooks.normalizePlacementScoreValue('RestrictedSkuNotAvailable'), 'Limited');
+  assert.equal(__testHooks.normalizePlacementScoreValue('NotAvailableForSubscription'), 'Limited');
+  assert.equal(__testHooks.normalizePlacementScoreValue('SkuNotAvailable'), 'Unavailable');
+  assert.equal(__testHooks.normalizePlacementScoreValue('High'), 'High');
+});
+
+test('resolveFilterRegions prefers explicit region over preset', () => {
+  const regions = __testHooks.resolveFilterRegions({
+    region: 'SouthCentralUS',
+    regionPreset: 'USCentral'
+  });
+
+  assert.deepEqual(regions, ['southcentralus']);
+});
+
+test('resolveFilterRegions expands configured preset for live capacity refresh', () => {
+  const regions = __testHooks.resolveFilterRegions({ regionPreset: 'USCentral' });
+
+  assert.deepEqual(regions, ['centralus', 'northcentralus', 'southcentralus', 'westcentralus']);
+});
+
 test('getRestrictionDetails classifies zonal availability states', () => {
   const details = __testHooks.getRestrictionDetails({
     locationInfo: [{ location: 'eastus', zones: ['1', '2', '3'] }],

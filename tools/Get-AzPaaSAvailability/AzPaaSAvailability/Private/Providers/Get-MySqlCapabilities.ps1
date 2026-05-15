@@ -7,7 +7,7 @@ function Get-MySqlCapabilities {
         available editions (Burstable/GeneralPurpose/MemoryOptimized), SKUs per
         server version, HA mode, IOPS, and storage options.
     .OUTPUTS
-        [PSCustomObject[]] — one object per SKU/version combination.
+        [PSCustomObject[]] - one object per SKU/version combination.
     #>
     param(
         [Parameter(Mandatory)][string]$Region,

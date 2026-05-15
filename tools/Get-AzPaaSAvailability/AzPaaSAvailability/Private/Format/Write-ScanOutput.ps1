@@ -26,7 +26,7 @@ function Write-ScanBanner {
         Write-Host ($Filters -join ' | ') -ForegroundColor Yellow
     }
 
-    $iconType = if ($Icons.Check -eq [string][char]0x2713 -or $Icons.Check -eq '✓') { 'Unicode' } else { 'ASCII' }
+    $iconType = if ($Icons.Check -eq [string][char]0x2713) { 'Unicode' } else { 'ASCII' }
     Write-Host "Icons: $iconType | Cloud: $EnvironmentName" -ForegroundColor DarkGray
     Write-Host ("=" * $OutputWidth) -ForegroundColor Gray
 }

@@ -98,12 +98,13 @@ Recommended app registration setup:
 
 - Redirect URI: `https://<web-app-name>.azurewebsites.net/auth/callback`
 - Add the admin security group up front if you plan to gate Admin routes with `admin_group_id`
+- When Terraform is run through `../../scripts/deploy-infra.ps1 -Provider Terraform`, the wrapper creates or reuses `CapacityAdmin` and `CapacityReportViewers` if `-AdminGroupId` and `-ReportViewerGroupIds` are omitted. Raw `terraform apply` does not create Entra groups; pass `admin_group_id` and `report_viewer_group_ids` explicitly in that path.
 
 ## Region and naming guidance
 
 - Default deployment region is `centralus`.
 - If you are deploying into an existing resource group in a different region, keep the resource group's actual region in `resource_group_location` and use `location` for the new resources.
-- Do not assume globally unique names such as the Function App host name or Key Vault name are available. If Azure reports that a name already exists, change `workload_suffix` and re-run the plan.
+- Do not assume globally unique names such as the Web App host name, Function App host name, or Key Vault name are available. The `deploy-infra.ps1 -Provider Terraform` wrapper checks App Service host-name availability and randomizes the effective workload suffix on conflict; raw Terraform users should change `workload_suffix` and re-run the plan if Azure reports that a name already exists.
 - If only the Key Vault name is blocked by soft-delete retention, set `key_vault_name_override` to a different globally unique vault name instead of renaming the entire environment.
 - Azure SQL region availability is subscription-dependent. If Azure rejects SQL provisioning in one region, change `location` to a supported region and re-run `terraform plan` before `apply`.
 

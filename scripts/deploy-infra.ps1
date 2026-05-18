@@ -38,8 +38,12 @@ param(
     [Parameter(Mandatory = $false)][switch]$ManageEntraWebRedirectUri,
     [Parameter(Mandatory = $false)][string]$AdminGroupId,
     [Parameter(Mandatory = $false)][string]$ReportViewerGroupIds,
+    [Parameter(Mandatory = $false)][bool]$CreateMissingEntraAccessGroups = $true,
+    [Parameter(Mandatory = $false)][string]$AdminGroupDisplayName = 'CapacityAdmin',
+    [Parameter(Mandatory = $false)][string]$ReportViewerGroupDisplayName = 'CapacityReportViewers',
     [Parameter(Mandatory = $false)][string]$SubscriptionId,
     [Parameter(Mandatory = $false)][switch]$UseAllAccessibleManagementGroups,
+    [Parameter(Mandatory = $false)][bool]$RandomizeWorkloadSuffixOnNameConflict = $true,
     [Parameter(Mandatory = $false)][bool]$DeployWebApp = $true,
     [Parameter(Mandatory = $false)][bool]$DeployWorkerApp = $true,
     [Parameter(Mandatory = $false)][bool]$ApplyDatabaseBootstrap = $true,
@@ -54,6 +58,11 @@ $deployWorkerScript = Join-Path $repoRoot 'scripts' 'deploy-worker.ps1'
 $webAppName = "app-capdash-$Environment-$WorkloadSuffix"
 $functionAppName = "func-capdash-$Environment-$WorkloadSuffix-appsvc"
 
+function Set-DeploymentResourceNames([string]$Suffix) {
+    $script:webAppName = "app-capdash-$Environment-$Suffix"
+    $script:functionAppName = "func-capdash-$Environment-$Suffix-appsvc"
+}
+
 function Resolve-SqlServerHostName([string]$ServerName) {
     if ([string]::IsNullOrWhiteSpace($ServerName)) {
         return ''
@@ -64,6 +73,113 @@ function Resolve-SqlServerHostName([string]$ServerName) {
     }
 
     return "$($ServerName.Trim()).database.windows.net"
+}
+
+function New-WorkloadSuffixWithToken([string]$BaseSuffix) {
+    $sanitizedBase = ($BaseSuffix.ToLowerInvariant() -replace '[^a-z0-9-]', '')
+    if ([string]::IsNullOrWhiteSpace($sanitizedBase)) {
+        $sanitizedBase = 'cap'
+    }
+
+    $tokenBytes = New-Object byte[] 3
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($tokenBytes)
+    $token = (($tokenBytes | ForEach-Object { $_.ToString('x2') }) -join '')
+    $prefixMaxLength = 12 - $token.Length - 1
+    $prefix = if ($sanitizedBase.Length -gt $prefixMaxLength) { $sanitizedBase.Substring(0, $prefixMaxLength) } else { $sanitizedBase }
+    $prefix = $prefix.Trim('-')
+    if ($prefix.Length -lt 3) {
+        $prefix = 'cap'
+    }
+
+    return "$prefix-$token"
+}
+
+function Test-WebSiteNameUsable([string]$Name, [string]$ResourceGroupName) {
+    az resource show --resource-group $ResourceGroupName --resource-type 'Microsoft.Web/sites' --name $Name --query id --output tsv 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        return $true
+    }
+
+    $subscriptionIdForNameCheck = az account show --query id --output tsv 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($subscriptionIdForNameCheck)) {
+        Write-Warning "Could not check App Service name availability for $Name because the current Azure subscription could not be resolved. Continuing with the requested name."
+        return $true
+    }
+
+    $availabilityRequest = @{
+        name = $Name
+        type = 'Microsoft.Web/sites'
+    } | ConvertTo-Json -Compress
+    $availabilityJson = az rest `
+        --method post `
+        --url "https://management.azure.com/subscriptions/$($subscriptionIdForNameCheck.Trim())/providers/Microsoft.Web/checknameavailability?api-version=2023-12-01" `
+        --headers 'Content-Type=application/json' `
+        --body $availabilityRequest `
+        --output json 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($availabilityJson)) {
+        Write-Warning "Could not check App Service name availability for $Name. Continuing with the requested name."
+        return $true
+    }
+
+    $availability = $availabilityJson | ConvertFrom-Json
+    return [bool]$availability.nameAvailable
+}
+
+function Resolve-AvailableWorkloadSuffix([string]$RequestedSuffix) {
+    Set-DeploymentResourceNames -Suffix $RequestedSuffix
+    if ((Test-WebSiteNameUsable -Name $webAppName -ResourceGroupName $ResourceGroupName) -and
+        (Test-WebSiteNameUsable -Name $functionAppName -ResourceGroupName $ResourceGroupName)) {
+        return $RequestedSuffix
+    }
+
+    if (-not $RandomizeWorkloadSuffixOnNameConflict) {
+        throw "The requested App Service names $webAppName or $functionAppName are already in use. Choose a different -WorkloadSuffix or enable -RandomizeWorkloadSuffixOnNameConflict."
+    }
+
+    Write-Warning "The requested App Service host names are not available. Generating a randomized workload suffix from '$RequestedSuffix'."
+    for ($attempt = 1; $attempt -le 10; $attempt++) {
+        $candidateSuffix = New-WorkloadSuffixWithToken -BaseSuffix $RequestedSuffix
+        Set-DeploymentResourceNames -Suffix $candidateSuffix
+        if ((Test-WebSiteNameUsable -Name $webAppName -ResourceGroupName $ResourceGroupName) -and
+            (Test-WebSiteNameUsable -Name $functionAppName -ResourceGroupName $ResourceGroupName)) {
+            Write-Host "Using randomized workload suffix '$candidateSuffix' for globally unique App Service names."
+            return $candidateSuffix
+        }
+    }
+
+    throw 'Could not find an available App Service name after 10 randomized suffix attempts.'
+}
+
+function Get-EntraGroupByDisplayName([string]$DisplayName) {
+    $groupsJson = az ad group list --display-name $DisplayName --output json 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not query Microsoft Entra groups. Verify the current Azure CLI login can read groups or pass explicit -AdminGroupId and -ReportViewerGroupIds values."
+    }
+
+    $groups = @($groupsJson | ConvertFrom-Json)
+    return $groups | Where-Object { $_.displayName -eq $DisplayName } | Select-Object -First 1
+}
+
+function Ensure-EntraAccessGroup([string]$DisplayName, [string]$MailNickname) {
+    $existingGroup = Get-EntraGroupByDisplayName -DisplayName $DisplayName
+    if ($existingGroup -and -not [string]::IsNullOrWhiteSpace($existingGroup.id)) {
+        Write-Host "Using existing Entra group '$DisplayName' ($($existingGroup.id))."
+        return $existingGroup.id
+    }
+
+    Write-Host "Creating Entra group '$DisplayName'..."
+    $groupJson = az ad group create --display-name $DisplayName --mail-nickname $MailNickname --output json 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($groupJson)) {
+        throw "Could not create Entra group '$DisplayName'. Create it manually or rerun with -CreateMissingEntraAccessGroups `$false and pass explicit group IDs."
+    }
+
+    $createdGroup = $groupJson | ConvertFrom-Json
+    if (-not $createdGroup -or [string]::IsNullOrWhiteSpace($createdGroup.id)) {
+        throw "Entra group '$DisplayName' was created but its object ID could not be read."
+    }
+
+    Write-Host "Created Entra group '$DisplayName' ($($createdGroup.id))."
+    return $createdGroup.id
 }
 
 $useExistingSqlServer = -not [string]::IsNullOrWhiteSpace($ExistingSqlServerName)
@@ -96,6 +212,23 @@ if ([string]::IsNullOrWhiteSpace($ExistingWorkerStorageResourceGroupName)) {
 
 if ([string]::IsNullOrWhiteSpace($ExistingVirtualNetworkResourceGroupName)) {
     $ExistingVirtualNetworkResourceGroupName = $ResourceGroupName
+}
+
+if ($SubscriptionId) {
+    az account set --subscription $SubscriptionId | Out-Null
+}
+
+$WorkloadSuffix = Resolve-AvailableWorkloadSuffix -RequestedSuffix $WorkloadSuffix
+Set-DeploymentResourceNames -Suffix $WorkloadSuffix
+
+if ($AuthEnabled -and $CreateMissingEntraAccessGroups) {
+    if ([string]::IsNullOrWhiteSpace($AdminGroupId)) {
+        $AdminGroupId = Ensure-EntraAccessGroup -DisplayName $AdminGroupDisplayName -MailNickname ($AdminGroupDisplayName.ToLowerInvariant() -replace '[^a-z0-9]', '')
+    }
+
+    if ([string]::IsNullOrWhiteSpace($ReportViewerGroupIds)) {
+        $ReportViewerGroupIds = Ensure-EntraAccessGroup -DisplayName $ReportViewerGroupDisplayName -MailNickname ($ReportViewerGroupDisplayName.ToLowerInvariant() -replace '[^a-z0-9]', '')
+    }
 }
 
 $effectiveSqlServerHostName = if ($useExistingSqlServer) {
@@ -233,10 +366,6 @@ function Get-AccessibleManagementGroupNames() {
     )
 }
 
-if ($SubscriptionId) {
-    az account set --subscription $SubscriptionId | Out-Null
-}
-
 if ($UseAllAccessibleManagementGroups) {
     $accessibleManagementGroupNames = @(Get-AccessibleManagementGroupNames)
     if ($accessibleManagementGroupNames.Count -eq 0) {
@@ -358,6 +487,11 @@ function Deploy-Terraform {
             $tfVars += "-var-file=$((Resolve-Path $ParameterFile).Path)"
         }
 
+        $tfVars += "-var=workload_suffix=$WorkloadSuffix"
+        $tfVars += "-var=auth_enabled=$($AuthEnabled.ToString().ToLowerInvariant())"
+        if (-not [string]::IsNullOrWhiteSpace($AdminGroupId))          { $tfVars += "-var=admin_group_id=$AdminGroupId" }
+        if (-not [string]::IsNullOrWhiteSpace($ReportViewerGroupIds))  { $tfVars += "-var=report_viewer_group_ids=$ReportViewerGroupIds" }
+
         Write-Host "Running Terraform apply..."
     & $terraform apply -auto-approve -input=false @tfVars
         if ($LASTEXITCODE -ne 0) { throw 'terraform apply failed' }
@@ -369,6 +503,16 @@ function Deploy-Terraform {
             }
 
             $script:IngestApiKey = $generatedIngestApiKey.Trim()
+        }
+
+        $terraformWebAppName = & $terraform output -raw web_app_name 2>$null
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($terraformWebAppName)) {
+            $script:webAppName = $terraformWebAppName.Trim()
+        }
+
+        $terraformFunctionAppName = & $terraform output -raw function_app_name 2>$null
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($terraformFunctionAppName)) {
+            $script:functionAppName = $terraformFunctionAppName.Trim()
         }
 
         Write-Host "Terraform deployment succeeded." -ForegroundColor Green
@@ -539,16 +683,38 @@ if (($WorkerRbacSubscriptionIds.Count -gt 0 -or $WorkerRbacManagementGroupNames.
     $deploymentArgs += @('--parameters', ('@' + $temporaryParameterFile))
 }
 
+$deploymentArgs += @('--parameters', "workloadSuffix=$WorkloadSuffix")
+$deploymentArgs += @('--parameters', "authEnabled=$($AuthEnabled.ToString().ToLowerInvariant())")
+if (-not [string]::IsNullOrWhiteSpace($AdminGroupId)) {
+    $deploymentArgs += @('--parameters', "adminGroupId=$AdminGroupId")
+}
+if (-not [string]::IsNullOrWhiteSpace($ReportViewerGroupIds)) {
+    $deploymentArgs += @('--parameters', "reportViewerGroupIds=$ReportViewerGroupIds")
+}
+
 try {
     if ($Provider -eq 'Terraform') {
         Deploy-Terraform
     }
     else {
-        az @deploymentArgs
+        $deploymentResultJson = az @deploymentArgs --output json
         if ($LASTEXITCODE -ne 0) {
             throw 'az deployment group create failed'
         }
+
+        if (-not [string]::IsNullOrWhiteSpace($deploymentResultJson)) {
+            $deploymentResult = $deploymentResultJson | ConvertFrom-Json -Depth 100
+            if ($deploymentResult.properties.outputs.webAppName.value) {
+                $webAppName = $deploymentResult.properties.outputs.webAppName.value
+            }
+
+            if ($deploymentResult.properties.outputs.functionAppName.value) {
+                $functionAppName = $deploymentResult.properties.outputs.functionAppName.value
+            }
+        }
     }
+
+    $manualDatabaseInitializeCommand = ".\scripts\initialize-database.ps1 -SqlServer `"$effectiveSqlServerHostName`" -SqlDatabase `"$effectiveSqlDatabaseName`" -AppIdentityName `"$webAppName`""
 
     if ($DeployWebApp) {
         if (-not (Test-Path $deployWebAppScript)) {

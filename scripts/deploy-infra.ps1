@@ -116,9 +116,24 @@ function New-WorkloadSuffixWithToken([string]$BaseSuffix) {
 }
 
 function Test-WebSiteNameUsable([string]$Name, [string]$ResourceGroupName) {
-    az resource show --resource-group $ResourceGroupName --resource-type 'Microsoft.Web/sites' --name $Name --query id --output tsv 2>$null | Out-Null
-    if ($LASTEXITCODE -eq 0) {
+    $resourceShowOutput = ''
+    $resourceShowExitCode = 0
+    try {
+        $resourceShowOutput = az resource show --resource-group $ResourceGroupName --resource-type 'Microsoft.Web/sites' --name $Name --query id --output tsv 2>&1
+        $resourceShowExitCode = $LASTEXITCODE
+    }
+    catch {
+        $resourceShowOutput = $_.Exception.Message
+        $resourceShowExitCode = 1
+    }
+
+    if ($resourceShowExitCode -eq 0) {
         return $true
+    }
+
+    $resourceShowError = ($resourceShowOutput | Out-String).Trim()
+    if (-not [string]::IsNullOrWhiteSpace($resourceShowError) -and $resourceShowError -notmatch 'ResourceNotFound|was not found') {
+        Write-Warning "Could not check whether App Service '$Name' already exists in resource group '$ResourceGroupName'. Continuing with global name availability check. Azure CLI error: $resourceShowError"
     }
 
     $subscriptionIdForNameCheck = az account show --query id --output tsv 2>$null

@@ -186,7 +186,6 @@ Optional worker-first settings:
 
 - `CAPACITY_WORKER_BASE_URL`
 - `CAPACITY_WORKER_SHARED_SECRET`
-- `CAPACITY_WORKER_TOKEN_AUDIENCE`
 - `CAPACITY_WORKER_TIMEOUT_MS`
 - `CAPACITY_RECOMMEND_USE_DIRECT_API` - defaults to `true` in the Bicep/Terraform web app deployments so Capacity Recommender uses the faster in-process Azure REST path first
 - `CAPACITY_RECOMMEND_SUBSCRIPTION_ID` - defaults to the deployment subscription in Bicep/Terraform
@@ -199,7 +198,7 @@ Optional ingestion scope settings:
 - `INGEST_MANAGEMENT_GROUP_NAMES` - comma-separated management group names; when set, capacity ingestion targets descendant subscriptions from those groups instead of relying only on `INGEST_SUBSCRIPTION_IDS`
 - `INGEST_SUBSCRIPTION_IDS` - comma-separated fallback list for smaller estates without management groups
 
-When `CAPACITY_WORKER_BASE_URL` is set, live placement refresh calls the Azure Function worker first. This branch contains a managed-identity bearer-token worker path, but the currently verified working Azure dev baseline uses a shared secret between the web app and the function app. If the worker is unavailable and `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK` is not `true`, the dashboard falls back to the in-process App Service path to preserve rollback safety.
+When `CAPACITY_WORKER_BASE_URL` is set, live placement refresh calls the Azure Function worker first. The currently verified working Azure dev baseline uses `CAPACITY_WORKER_SHARED_SECRET` on the web app and `WORKER_SHARED_SECRET` on the function app. If the worker is unavailable and `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK` is not `true`, the dashboard falls back to the in-process App Service path to preserve rollback safety.
 
 Report runtime dependency reference:
 
@@ -600,7 +599,7 @@ Package and deploy the worker host separately from the dashboard web app:
 After the worker is deployed, point the dashboard at it by setting:
 
 - `CAPACITY_WORKER_BASE_URL=https://<function-app-name>.azurewebsites.net`
-- `CAPACITY_WORKER_TOKEN_AUDIENCE=https://management.azure.com/`
+- `CAPACITY_WORKER_SHARED_SECRET=<same-value-as-WORKER_SHARED_SECRET>`
 
 Hosted worker guidance:
 
@@ -690,33 +689,54 @@ Defaults:
 - Family filters: all families (no restriction by default; set `INGEST_QUOTA_FAMILY_FILTERS` to limit scope)
 - Source type written to SQL: `live-azure-ingest`
 
-Required app settings:
+App settings reference:
 
-- `INGEST_API_KEY` (required to call internal ingestion routes)
-- `INGEST_REGION_PRESET` (default `USMajor`)
-- `INGEST_QUOTA_FAMILY_FILTERS` (optional; comma-separated VM family names to restrict ingestion, e.g. `standard_BS,standard_DS`; omit or leave empty to ingest all families)
-- `INGEST_SUBSCRIPTION_HASH_SALT` (optional salt for masked subscription key hashing)
-- `INGEST_SUBSCRIPTION_IDS` (optional comma-separated list; if omitted, enabled subscriptions are auto-discovered)
-- `INGEST_ON_STARTUP` (`true`/`false`, fallback default when SQL schedule settings are not present)
-- `INGEST_INTERVAL_MINUTES` (`0` disables scheduling, fallback default when SQL schedule settings are not present)
-- `INGEST_AI_ENABLED` (`true`/`false`, default `false`; primary App Service rollout flag for AI catalog + quota ingestion; `INGEST_OPENAI_ENABLED` remains a backward-compatible alias)
-- `INGEST_AI_PROVIDER_QUOTA_ENABLED` (`true`/`false`, default `false`; only widens quota ingestion beyond OpenAI after `INGEST_AI_ENABLED=true` and the matching DB gate is also on)
-- `INGEST_AI_MODEL_CATALOG` (`true`/`false`, default `true`; only evaluated when `INGEST_AI_ENABLED=true`; `INGEST_OPENAI_MODEL_CATALOG` remains a backward-compatible alias)
-- `INGEST_AI_MODEL_CATALOG_INTERVAL_MINUTES` (`1440` by default; primary fallback cadence for model catalog refresh when SQL schedule settings are not present; `INGEST_OPENAI_MODEL_CATALOG_INTERVAL_MINUTES` remains a backward-compatible alias)
-- `AUTH_ENABLED` (`true` enables the dashboard Entra sign-in flow)
-- `ENTRA_TENANT_ID` (tenant ID used for Microsoft Entra sign-in)
-- `ENTRA_CLIENT_ID` (app registration/client ID for the dashboard)
-- `ENTRA_CLIENT_SECRET` (app registration client secret for the dashboard)
-- `AUTH_REDIRECT_URI` (OAuth callback URI, for example `https://<web-app-host>/auth/callback`)
-- `ADMIN_GROUP_ID` (Object ID of the Entra security group whose members can access Admin sections; admins can also view reports)
+Required for deployed dashboard operation:
+
+- `SESSION_SECRET` (required to protect signed session cookie state; keep stable across redeploys unless intentionally rotating sessions)
+- `AUTH_ENABLED` (`true` enables the dashboard Entra sign-in flow; local dev can leave this `false`)
+- `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET` (required when `AUTH_ENABLED=true`)
+- `AUTH_REDIRECT_URI` (OAuth callback URI; defaults to local dev when omitted)
+- `INGEST_API_KEY` (required only for internal ingestion/bootstrap routes)
+
+Recommended access and quota settings:
+
+- `ADMIN_GROUP_ID` (recommended Object ID for Admin sections; if omitted while auth is enabled, admin gating is disabled)
 - `REPORT_VIEWER_GROUP_IDS` (optional comma-separated Entra security group Object IDs whose members can view reports; leave empty to preserve authenticated-user report access)
-- `QUOTA_MANAGEMENT_GROUP_ID` (required for live quota discovery)
+- `QUOTA_MANAGEMENT_GROUP_ID` (recommended fallback/default management group for live quota discovery and quota admin views)
+
+DB-backed scheduler settings with environment fallback defaults:
+
+- `INGEST_REGION_PRESET` (fallback default `USMajor`; saved value lives in `schedule.ingest.regionPreset`)
+- `INGEST_SUBSCRIPTION_IDS` (fallback explicit subscription list; saved value lives in `schedule.ingest.subscriptionIds`; omit to auto-discover enabled subscriptions visible to the app identity)
+- `INGEST_MANAGEMENT_GROUP_NAMES` (fallback management group list; saved value lives in `schedule.ingest.managementGroupNames`)
+- `INGEST_QUOTA_FAMILY_FILTERS` (fallback family filter; saved value lives in `schedule.ingest.familyFilters`; omit or leave empty to ingest all families)
+- `INGEST_ON_STARTUP` (fallback for `schedule.ingest.runOnStartup`)
+- `INGEST_INTERVAL_MINUTES` (fallback for `schedule.ingest.intervalMinutes`; `0` disables scheduling)
+- `INGEST_AI_MODEL_CATALOG_INTERVAL_MINUTES` (fallback for `schedule.aiModelCatalog.intervalMinutes`; default `1440`; `INGEST_OPENAI_MODEL_CATALOG_INTERVAL_MINUTES` remains a backward-compatible alias)
+
+Other optional ingestion runtime settings:
+
+- `INGEST_SUBSCRIPTION_HASH_SALT` (optional salt for masked subscription key hashing; not stored in SQL)
+
+AI rollout gates:
+
+- `INGEST_AI_ENABLED` (outer App Service rollout flag; runtime AI ingestion also requires `ingest.ai.enabled=true` in SQL; `INGEST_OPENAI_ENABLED` remains a backward-compatible alias)
+- `INGEST_AI_PROVIDER_QUOTA_ENABLED` (outer App Service sub-gate for non-OpenAI AI quota rows; also requires `ingest.ai.providerQuota.enabled=true` in SQL)
+- `INGEST_AI_MODEL_CATALOG` (outer App Service sub-gate for model catalog refresh; also requires `ingest.ai.modelCatalog.enabled=true` in SQL; `INGEST_OPENAI_MODEL_CATALOG` remains a backward-compatible alias)
+
+Optional worker/recommender settings:
+
 - `CAPACITY_WORKER_BASE_URL` (optional Function App base URL for worker-first live placement execution)
-- `CAPACITY_WORKER_TOKEN_AUDIENCE` (optional bearer-token audience for worker calls; defaults to `https://management.azure.com/`)
+- `CAPACITY_WORKER_SHARED_SECRET` (required when the worker enforces `WORKER_SHARED_SECRET`)
 - `CAPACITY_WORKER_TIMEOUT_MS` (optional timeout for worker calls, default `60000`)
 - `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK` (`true` disables App Service fallback when the worker is configured but unavailable)
-- `GET_AZ_VM_AVAILABILITY_ROOT` (optional path to Get-AzVMAvailability repository; required in production if Capacity Recommender feature is used; default is relative path `../../Get-AzVMAvailability` from `tools/` folder)
-- Capacity Score live placement is on-demand only. The app does not start a scheduled live placement refresh from App Service settings.
+- `GET_AZ_VM_AVAILABILITY_ROOT` (optional path to Get-AzVMAvailability repository; required in production if Capacity Recommender uses the external repository and it is not bundled at the default path)
+
+No longer active app settings:
+
+- `CAPACITY_WORKER_TOKEN_AUDIENCE` is not read by the current runtime worker call path.
+- `LIVE_PLACEMENT_REFRESH_ON_STARTUP`, `LIVE_PLACEMENT_REFRESH_INTERVAL_MINUTES`, and `LIVE_PLACEMENT_REFRESH_REGION_PRESET` are obsolete; Capacity Score live placement is on-demand only and the app does not start a scheduled live placement refresh from App Service settings.
 
 Key Vault secrets used by deployed environments:
 

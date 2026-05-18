@@ -38,7 +38,7 @@ param(
     [Parameter(Mandatory = $false)][switch]$ManageEntraWebRedirectUri,
     [Parameter(Mandatory = $false)][string]$AdminGroupId,
     [Parameter(Mandatory = $false)][string]$ReportViewerGroupIds,
-    [Parameter(Mandatory = $false)][bool]$CreateMissingEntraAccessGroups = $true,
+    [Parameter(Mandatory = $false)][bool]$CreateMissingEntraAccessGroups = $false,
     [Parameter(Mandatory = $false)][string]$AdminGroupDisplayName = 'CapacityAdmin',
     [Parameter(Mandatory = $false)][string]$ReportViewerGroupDisplayName = 'CapacityReportViewers',
     [Parameter(Mandatory = $false)][string]$SubscriptionId,
@@ -160,17 +160,21 @@ function Get-EntraGroupByDisplayName([string]$DisplayName) {
     return $groups | Where-Object { $_.displayName -eq $DisplayName } | Select-Object -First 1
 }
 
-function Ensure-EntraAccessGroup([string]$DisplayName, [string]$MailNickname) {
+function Resolve-EntraAccessGroupId([string]$DisplayName, [string]$MailNickname, [string]$Purpose) {
     $existingGroup = Get-EntraGroupByDisplayName -DisplayName $DisplayName
     if ($existingGroup -and -not [string]::IsNullOrWhiteSpace($existingGroup.id)) {
-        Write-Host "Using existing Entra group '$DisplayName' ($($existingGroup.id))."
+        Write-Host "Using existing Entra group '$DisplayName' for $Purpose ($($existingGroup.id))."
         return $existingGroup.id
+    }
+
+    if (-not $CreateMissingEntraAccessGroups) {
+        throw "Entra group '$DisplayName' was not found and automatic group creation is disabled by default. Ask an Entra administrator to create the group, pass the existing object ID with -AdminGroupId or -ReportViewerGroupIds, or rerun with -CreateMissingEntraAccessGroups `$true if this operator is allowed to create security groups."
     }
 
     Write-Host "Creating Entra group '$DisplayName'..."
     $groupJson = az ad group create --display-name $DisplayName --mail-nickname $MailNickname --output json 2>$null
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($groupJson)) {
-        throw "Could not create Entra group '$DisplayName'. Create it manually or rerun with -CreateMissingEntraAccessGroups `$false and pass explicit group IDs."
+        throw "Could not create Entra group '$DisplayName'. The current Azure CLI identity may not have permission to create Entra security groups. Ask an Entra administrator to create the group and pass its object ID with -AdminGroupId or -ReportViewerGroupIds, or rerun from an identity with group creation rights."
     }
 
     $createdGroup = $groupJson | ConvertFrom-Json
@@ -221,13 +225,13 @@ if ($SubscriptionId) {
 $WorkloadSuffix = Resolve-AvailableWorkloadSuffix -RequestedSuffix $WorkloadSuffix
 Set-DeploymentResourceNames -Suffix $WorkloadSuffix
 
-if ($AuthEnabled -and $CreateMissingEntraAccessGroups) {
+if ($AuthEnabled) {
     if ([string]::IsNullOrWhiteSpace($AdminGroupId)) {
-        $AdminGroupId = Ensure-EntraAccessGroup -DisplayName $AdminGroupDisplayName -MailNickname ($AdminGroupDisplayName.ToLowerInvariant() -replace '[^a-z0-9]', '')
+        $AdminGroupId = Resolve-EntraAccessGroupId -DisplayName $AdminGroupDisplayName -MailNickname ($AdminGroupDisplayName.ToLowerInvariant() -replace '[^a-z0-9]', '') -Purpose 'dashboard admin access'
     }
 
     if ([string]::IsNullOrWhiteSpace($ReportViewerGroupIds)) {
-        $ReportViewerGroupIds = Ensure-EntraAccessGroup -DisplayName $ReportViewerGroupDisplayName -MailNickname ($ReportViewerGroupDisplayName.ToLowerInvariant() -replace '[^a-z0-9]', '')
+        $ReportViewerGroupIds = Resolve-EntraAccessGroupId -DisplayName $ReportViewerGroupDisplayName -MailNickname ($ReportViewerGroupDisplayName.ToLowerInvariant() -replace '[^a-z0-9]', '') -Purpose 'dashboard report viewer access'
     }
 }
 

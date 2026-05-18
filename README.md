@@ -483,12 +483,12 @@ By default, `./scripts/deploy-infra.ps1` now does both steps:
 
 The script checks whether the requested App Service host names are available before deploying. If `app-capdash-<environment>-<workloadSuffix>` or `func-capdash-<environment>-<workloadSuffix>-appsvc` is already used outside the target resource group, the script generates a randomized workload suffix and uses that effective suffix for both infrastructure deployment and the follow-on web/worker package publish. After the infrastructure step, the script reads the actual web app and function app names from Bicep or Terraform outputs so content is deployed to the created resources instead of a guessed name.
 
-When `-AuthEnabled $true` is used, `./scripts/deploy-infra.ps1` also creates or reuses the default dashboard access groups when explicit IDs are not supplied:
+When `-AuthEnabled $true` is used, `./scripts/deploy-infra.ps1` also resolves the default dashboard access groups when explicit IDs are not supplied:
 
 - `CapacityAdmin` feeds `ADMIN_GROUP_ID`
 - `CapacityReportViewers` feeds `REPORT_VIEWER_GROUP_IDS`
 
-This group creation is handled by the wrapper script with `az ad group`, not by raw Bicep or Terraform. The Azure CLI identity running the script must be allowed to read and create Entra security groups. If group creation is centrally managed, pre-create the groups and pass `-AdminGroupId` and `-ReportViewerGroupIds`, or run with `-CreateMissingEntraAccessGroups $false`.
+By default the wrapper only reuses existing groups by display name and fails closed if they are missing. It will not create Entra groups unless you explicitly pass `-CreateMissingEntraAccessGroups $true`. Raw Bicep and Terraform accept group object IDs but do not create groups. If group creation is centrally managed, pre-create the groups and pass `-AdminGroupId` and `-ReportViewerGroupIds`.
 
 Existing shared-service reuse:
 
@@ -542,7 +542,7 @@ Notes:
 - `-WebQuotaWriterManagementGroupNames` grants `GroupQuota Request Operator` at the named management groups for quota-apply workflows. Keep `-WebQuotaWriterSubscriptionIds` as the fallback for customers without management groups.
 - `-WorkerRbacManagementGroupNames` triggers management-group-scoped RBAC assignment for the worker identity (`Compute Recommendations Role`, `Cost Management Reader`, `Billing Reader`) and is the preferred path for larger estates.
 - `-WorkerRbacSubscriptionIds` remains available as a fallback for small customers without management groups.
-- `-AuthEnabled` plus `-EntraTenantId`, `-EntraClientId`, and `-EntraClientSecret` configure the built-in Entra sign-in flow used by the dashboard API. If `-AdminGroupId` or `-ReportViewerGroupIds` are omitted, the wrapper creates or reuses `CapacityAdmin` and `CapacityReportViewers` by default.
+- `-AuthEnabled` plus `-EntraTenantId`, `-EntraClientId`, and `-EntraClientSecret` configure the built-in Entra sign-in flow used by the dashboard API. If `-AdminGroupId` or `-ReportViewerGroupIds` are omitted, the wrapper reuses existing `CapacityAdmin` and `CapacityReportViewers` groups by display name. Missing groups stop the deployment unless you explicitly pass `-CreateMissingEntraAccessGroups $true`.
 
 Example RBAC baseline:
 
@@ -570,7 +570,7 @@ Example with Entra sign-in enabled:
 	-SubscriptionId "<subscription-id>"
 ```
 
-The example above lets the wrapper create or reuse `CapacityAdmin` and `CapacityReportViewers`. Pass `-AdminGroupId` and `-ReportViewerGroupIds` when the customer already has approved Entra groups.
+The example above lets the wrapper reuse existing `CapacityAdmin` and `CapacityReportViewers` groups. Pass `-AdminGroupId` and `-ReportViewerGroupIds` when the customer already has approved Entra groups with different names, or pass `-CreateMissingEntraAccessGroups $true` only when the deployment identity is allowed to create Entra security groups.
 
 Full example with the most commonly needed inputs:
 

@@ -58,7 +58,7 @@ You will need these items before either deployment method:\par
 - Session secret. Terraform can generate one when omitted; Bicep deployments should supply it through the wrapper or parameter file. Keep the same value on redeploy unless intentionally rotating sessions.\par
 - Optional worker shared secret\par
 - Optional Entra app registration values if sign-in should be enabled\par
-- Optional Entra access group IDs. If you use the wrapper script and do not pass group IDs, it creates or reuses \f1 CapacityAdmin\f0 and \f1 CapacityReportViewers\f0 when auth is enabled. The Azure CLI identity must be allowed to read and create Entra security groups.\par
+- Optional Entra access group IDs. If you use the wrapper script and do not pass group IDs, it reuses existing \f1 CapacityAdmin\f0 and \f1 CapacityReportViewers\f0 groups by display name when auth is enabled. Missing groups stop the deployment unless the operator explicitly passes \f1 -CreateMissingEntraAccessGroups $true\f0.\par
 - Preferred management group names if the tenant uses management groups\par
 - Optional explicit subscription lists for fallback RBAC when management groups are not used\par
 \par
@@ -177,8 +177,9 @@ This is the most important section for non-standard customer environments.\par
 \par
 \b Entra access group behavior:\b0\par
 - Raw Bicep and raw Terraform accept group object IDs but do not create Entra groups.\par
-- The wrapper script creates or reuses \f1 CapacityAdmin\f0 and \f1 CapacityReportViewers\f0 when \f1 -AuthEnabled $true\f0 is used and explicit group IDs are omitted.\par
-- If the customer requires centrally managed groups, pre-create the groups and pass \f1 -AdminGroupId\f0 and \f1 -ReportViewerGroupIds\f0, or run with \f1 -CreateMissingEntraAccessGroups $false\f0.\par
+- The wrapper script reuses existing \f1 CapacityAdmin\f0 and \f1 CapacityReportViewers\f0 groups when \f1 -AuthEnabled $true\f0 is used and explicit group IDs are omitted.\par
+- Missing groups stop the deployment by default so the dashboard does not accidentally deploy with broad authenticated-user access.\par
+- If the customer requires centrally managed groups, pre-create the groups and pass \f1 -AdminGroupId\f0 and \f1 -ReportViewerGroupIds\f0. Use \f1 -CreateMissingEntraAccessGroups $true\f0 only when the deployment identity is allowed to create Entra security groups.\par
 \par
 \b Important behavior when reusing shared services:\b0\par
 - Existing resource names are the switch. If you provide the existing resource name, deployment moves that dependency into reuse mode. Use names, not full Azure resource IDs.\par
@@ -226,9 +227,9 @@ The safest current approach is:\par
 - \f1 -WebQuotaWriterManagementGroupNames @("<management-group-name>")\f0\par
 - \f1 -WorkerRbacManagementGroupNames @("<management-group-name>")\f0\par
 - \f1 -UseAllAccessibleManagementGroups\f0 if the operator should use every non-root management group they can see\par
-- \f1 -AuthEnabled $true\f0 plus tenant, client, and secret values if sign-in should be enabled. This is already the deployment default now. If group IDs are omitted, the wrapper creates or reuses \f1 CapacityAdmin\f0 and \f1 CapacityReportViewers\f0.\par
+- \f1 -AuthEnabled $true\f0 plus tenant, client, and secret values if sign-in should be enabled. This is already the deployment default now. If group IDs are omitted, the wrapper reuses existing \f1 CapacityAdmin\f0 and \f1 CapacityReportViewers\f0 groups by display name.\par
 - \f1 -AdminGroupId "<admin-group-object-id>"\f0 and \f1 -ReportViewerGroupIds "<report-viewer-group-object-id>"\f0 when the customer already has approved groups\par
-- \f1 -CreateMissingEntraAccessGroups $false\f0 when Entra group creation is centrally managed and the wrapper should not create groups\par
+- \f1 -CreateMissingEntraAccessGroups $true\f0 only when the deployment identity is allowed to create missing Entra security groups\par
 - \f1 -RandomizeWorkloadSuffixOnNameConflict $false\f0 when the deployment should fail fast instead of generating a randomized suffix for App Service host-name conflicts\par
 - \f1 -ExistingSqlServerName "<sql-server-name>"\f0 to reuse an existing SQL server\par
 - \f1 -ExistingSqlServerResourceGroupName "<sql-rg-name>"\f0 when the existing SQL server is in a different resource group\par
@@ -359,7 +360,7 @@ terraform apply -var-file="terraform.tfvars"\f0\par
 - \f1 web_reader_management_group_names\f0, \f1 web_quota_writer_management_group_names\f0, and \f1 worker_rbac_management_group_names\f0 for management-group-first RBAC\par
 \par
 When using \f1 scripts/deploy-infra.ps1 -Provider Terraform\f0, prefer putting optional customer-owned resource values in \f1 terraform.tfvars\f0. The wrapper now avoids sending empty optional values so it does not wipe tfvars entries such as \f1 web_reader_management_group_names\f0.\par
-The Terraform wrapper also checks App Service host-name availability, randomizes the effective workload suffix on conflict, creates or reuses \f1 CapacityAdmin\f0 and \f1 CapacityReportViewers\f0 when group IDs are omitted, and publishes the web and worker packages after apply. Raw \f1 terraform apply\f0 does not create Entra groups and does not publish application packages; run the wrapper or deploy the packages separately afterward.\par
+The Terraform wrapper also checks App Service host-name availability, randomizes the effective workload suffix on conflict, reuses existing \f1 CapacityAdmin\f0 and \f1 CapacityReportViewers\f0 groups when group IDs are omitted, and publishes the web and worker packages after apply. Raw \f1 terraform apply\f0 does not create Entra groups and does not publish application packages; run the wrapper or deploy the packages separately afterward. Missing groups stop the wrapper unless \f1 -CreateMissingEntraAccessGroups $true\f0 is explicitly supplied.\par
 \par
 \b 10. Database Step Second\b0\par
 \par
@@ -475,5 +476,5 @@ If the person following this guide wants the least surprising path, tell them to
 \par
 If you need to hand this to a customer or internal operator, use this short message:\par
 \par
-"First deploy the application and Azure resources with scripts/deploy-infra.ps1 so the web and worker packages are published after infrastructure succeeds. Second, complete the database initialization. Prefer management-group-based RBAC for larger estates. The wrapper can randomize the workload suffix if an App Service host name is already taken, and it can create or reuse CapacityAdmin and CapacityReportViewers when auth is enabled. If the customer wants to reuse an existing SQL server, Key Vault, worker storage account, or Virtual Network, pass the existing-resource inputs up front and confirm private connectivity, subnet delegation, DNS, and RBAC assumptions before deployment."\par
+"First deploy the application and Azure resources with scripts/deploy-infra.ps1 so the web and worker packages are published after infrastructure succeeds. Second, complete the database initialization. Prefer management-group-based RBAC for larger estates. The wrapper can randomize the workload suffix if an App Service host name is already taken, and it reuses CapacityAdmin and CapacityReportViewers when auth is enabled. If those groups do not exist, have an Entra administrator create them or pass approved group IDs; use automatic group creation only when the deployment identity is allowed to create security groups. If the customer wants to reuse an existing SQL server, Key Vault, worker storage account, or Virtual Network, pass the existing-resource inputs up front and confirm private connectivity, subnet delegation, DNS, and RBAC assumptions before deployment."\par
 }

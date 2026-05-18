@@ -320,7 +320,7 @@ function Get-SignedInUserSummary() {
     return $userJson | ConvertFrom-Json
 }
 
-function Test-EntraGroupReadAccess([string]$DisplayName) {
+function Get-EntraGroupIdByDisplayName([string]$DisplayName) {
     try {
         $groupOutput = az ad group list --display-name $DisplayName --output json 2>&1
     }
@@ -348,7 +348,16 @@ function Test-EntraGroupReadAccess([string]$DisplayName) {
 
     $groupsJson = ($groupOutput | Out-String)
     $groups = @($groupsJson | ConvertFrom-Json)
-    return [bool]($groups | Where-Object { $_.displayName -eq $DisplayName } | Select-Object -First 1)
+    $group = $groups | Where-Object { $_.displayName -eq $DisplayName } | Select-Object -First 1
+    if (-not $group -or [string]::IsNullOrWhiteSpace($group.id)) {
+        return ''
+    }
+
+    return $group.id
+}
+
+function Test-EntraGroupReadAccess([string]$DisplayName) {
+    return -not [string]::IsNullOrWhiteSpace((Get-EntraGroupIdByDisplayName -DisplayName $DisplayName))
 }
 
 function Test-AzureDeploymentPreflight([string]$SubscriptionId, [bool]$AuthEnabled, [string]$AccessGroupMode, [string]$AdminGroupId, [string]$ReportViewerGroupIds, [string]$AdminGroupDisplayName, [string]$ReportViewerGroupDisplayName, [string]$ExpectedWebAppName, [string]$ExpectedFunctionAppName) {
@@ -685,8 +694,16 @@ if ($authEnabled) {
 
         if ($groupMode -eq 'Reuse CapacityAdmin/CapacityReportViewers') {
             try {
-                [void](Test-EntraGroupReadAccess -DisplayName 'CapacityAdmin')
-                [void](Test-EntraGroupReadAccess -DisplayName 'CapacityReportViewers')
+                $resolvedAdminGroupId = Get-EntraGroupIdByDisplayName -DisplayName 'CapacityAdmin'
+                $resolvedReportViewerGroupId = Get-EntraGroupIdByDisplayName -DisplayName 'CapacityReportViewers'
+
+                if ([string]::IsNullOrWhiteSpace($resolvedAdminGroupId) -or [string]::IsNullOrWhiteSpace($resolvedReportViewerGroupId)) {
+                    throw 'CapacityAdmin or CapacityReportViewers was not found by display name.'
+                }
+
+                $adminGroupId = Set-Answer -Name 'AdminGroupId' -Value $resolvedAdminGroupId
+                $reportViewerGroupIds = Set-Answer -Name 'ReportViewerGroupIds' -Value $resolvedReportViewerGroupId
+                Write-Host 'Resolved CapacityAdmin and CapacityReportViewers group object IDs.' -ForegroundColor Green
             }
             catch {
                 if ($NonInteractive) {

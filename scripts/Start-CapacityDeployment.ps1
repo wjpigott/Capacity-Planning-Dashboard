@@ -321,9 +321,24 @@ function Get-SignedInUserSummary() {
 }
 
 function Test-EntraGroupReadAccess([string]$DisplayName) {
-    $groupOutput = az ad group list --display-name $DisplayName --output json 2>&1
+    try {
+        $groupOutput = az ad group list --display-name $DisplayName --output json 2>&1
+    }
+    catch {
+        $errorText = $_.Exception.Message
+        if ($errorText -match 'InteractionRequired|TokenIssuedBeforeRevocationTimestamp|Continuous access evaluation') {
+            throw "Azure CLI needs an interactive Microsoft Graph token refresh before it can read Microsoft Entra groups. Run 'az login --tenant <tenant-id>' and rerun the wizard, or rerun the wizard and choose explicit group object IDs. Original Azure CLI error: $errorText"
+        }
+
+        throw "The current Azure CLI login cannot read Microsoft Entra groups. Run 'az login --tenant <tenant-id>' with an identity that can read groups, or rerun the wizard and choose explicit group object IDs. Original Azure CLI error: $errorText"
+    }
+
     if ($LASTEXITCODE -ne 0) {
         $errorText = ($groupOutput | Out-String).Trim()
+        if ($errorText -match 'InteractionRequired|TokenIssuedBeforeRevocationTimestamp|Continuous access evaluation') {
+            throw "Azure CLI needs an interactive Microsoft Graph token refresh before it can read Microsoft Entra groups. Run 'az login --tenant <tenant-id>' and rerun the wizard, or rerun the wizard and choose explicit group object IDs. Original Azure CLI error: $errorText"
+        }
+
         if ($errorText -match 'NormalizedResponse|msal\.throttled_http_client|msal_http_cache|binary_cache') {
             throw "Azure CLI is logged in, but its local MSAL HTTP cache failed while requesting Microsoft Graph. Run 'az upgrade' if available, delete '%USERPROFILE%\.azure\msal_http_cache.bin', then run 'az login --tenant <tenant-id>' again. Original Azure CLI error: $errorText"
         }

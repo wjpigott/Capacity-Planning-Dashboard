@@ -38,7 +38,35 @@ function parseGroupIdList(value) {
   return String(value || '')
     .split(/[;,\s]+/)
     .map((groupId) => groupId.trim())
+    .map((groupId) => groupId.toLowerCase())
     .filter(Boolean);
+}
+
+function normalizeGroupId(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function getAccountGroups(account) {
+  return Array.isArray(account?.groups)
+    ? account.groups.map(normalizeGroupId).filter(Boolean)
+    : [];
+}
+
+function hasGroupOverageClaim(claims) {
+  return Boolean(
+    claims?.hasgroups ||
+    claims?._claim_names?.groups ||
+    claims?._claim_sources?.src1
+  );
+}
+
+function buildAuthDiagnostics(account) {
+  const groups = getAccountGroups(account);
+  return {
+    groupCount: groups.length,
+    groupClaimPresent: Boolean(account?.groupClaimPresent),
+    groupOverageClaimPresent: Boolean(account?.groupOverageClaimPresent)
+  };
 }
 
 function getMsalClient() {
@@ -184,7 +212,7 @@ function getAccountFromSession(req) {
 function isAdmin(account) {
   if (!account) return false;
   if (!ADMIN_GROUP_ID) return false;
-  return (Array.isArray(account.groups) ? account.groups : []).includes(ADMIN_GROUP_ID);
+  return getAccountGroups(account).includes(normalizeGroupId(ADMIN_GROUP_ID));
 }
 
 function canAccessAdmin(account) {
@@ -195,8 +223,8 @@ function canAccessAdmin(account) {
 
 function hasAnyGroup(account, groupIds) {
   if (!account || !Array.isArray(groupIds) || groupIds.length === 0) return false;
-  const accountGroups = new Set(Array.isArray(account.groups) ? account.groups : []);
-  return groupIds.some((groupId) => accountGroups.has(groupId));
+  const accountGroups = new Set(getAccountGroups(account));
+  return groupIds.some((groupId) => accountGroups.has(normalizeGroupId(groupId)));
 }
 
 function isReportViewer(account) {
@@ -313,13 +341,16 @@ function buildAuthRouter() {
       });
 
       const claims = result.idTokenClaims || {};
+      const groups = Array.isArray(claims.groups) ? claims.groups.map(normalizeGroupId).filter(Boolean) : [];
       req.session.account = {
         name: claims.name || result.account?.name || claims.preferred_username || 'User',
         username: claims.preferred_username || claims.upn || '',
         userId: claims.oid || claims.sub || '',
         tenantId: claims.tid || '',
         // groups claim: array of security group Object IDs from the user's home tenant
-        groups: Array.isArray(claims.groups) ? claims.groups : []
+        groups,
+        groupClaimPresent: Array.isArray(claims.groups),
+        groupOverageClaimPresent: hasGroupOverageClaim(claims)
       };
 
       let returnTo = req.session.returnTo || '/';
@@ -423,5 +454,6 @@ module.exports = {
   isAdmin,
   isReportViewer,
   canAccessAdmin,
-  canAccessReports
+  canAccessReports,
+  buildAuthDiagnostics
 };

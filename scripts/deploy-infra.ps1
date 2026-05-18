@@ -45,6 +45,7 @@ param(
     [Parameter(Mandatory = $false)][switch]$UseAllAccessibleManagementGroups,
     [Parameter(Mandatory = $false)][bool]$RandomizeWorkloadSuffixOnNameConflict = $true,
     [Parameter(Mandatory = $false)][bool]$DeployWebApp = $true,
+    [Parameter(Mandatory = $false)][bool]$SkipWebAppTests = $false,
     [Parameter(Mandatory = $false)][bool]$DeployWorkerApp = $true,
     [Parameter(Mandatory = $false)][bool]$ApplyDatabaseBootstrap = $true,
     [Parameter(Mandatory = $false)][string]$IngestApiKey,
@@ -55,8 +56,24 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $deployWebAppScript = Join-Path $repoRoot 'deploy-web-app.ps1'
 $deployWorkerScript = Join-Path $repoRoot 'scripts' 'deploy-worker.ps1'
+$bicepTemplateFile = Join-Path $repoRoot 'infra' 'bicep' 'main.bicep'
+$script:ManagementGroupRbacFollowUps = @()
+$script:ManagementGroupRbacFollowUpsShown = $false
 $webAppName = "app-capdash-$Environment-$WorkloadSuffix"
 $functionAppName = "func-capdash-$Environment-$WorkloadSuffix-appsvc"
+
+function Resolve-DeploymentPath([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $null
+    }
+
+    $candidatePath = $Path
+    if (-not [System.IO.Path]::IsPathRooted($candidatePath)) {
+        $candidatePath = Join-Path $repoRoot $candidatePath
+    }
+
+    return (Resolve-Path $candidatePath).Path
+}
 
 function Set-DeploymentResourceNames([string]$Suffix) {
     $script:webAppName = "app-capdash-$Environment-$Suffix"
@@ -151,11 +168,17 @@ function Resolve-AvailableWorkloadSuffix([string]$RequestedSuffix) {
 }
 
 function Get-EntraGroupByDisplayName([string]$DisplayName) {
-    $groupsJson = az ad group list --display-name $DisplayName --output json 2>$null
+    $groupOutput = az ad group list --display-name $DisplayName --output json 2>&1
     if ($LASTEXITCODE -ne 0) {
-        throw "Could not query Microsoft Entra groups. Verify the current Azure CLI login can read groups or pass explicit -AdminGroupId and -ReportViewerGroupIds values."
+        $errorText = ($groupOutput | Out-String).Trim()
+        if ($errorText -match 'NormalizedResponse|msal\.throttled_http_client|msal_http_cache|binary_cache') {
+            throw "Could not query Microsoft Entra groups because the local Azure CLI MSAL HTTP cache failed while requesting Microsoft Graph. Run 'az upgrade' if available, delete '%USERPROFILE%\.azure\msal_http_cache.bin', then run 'az login --tenant <tenant-id>' again. Original Azure CLI error: $errorText"
+        }
+
+        throw "Could not query Microsoft Entra groups. Verify the current Azure CLI login can read groups or pass explicit -AdminGroupId and -ReportViewerGroupIds values. Original Azure CLI error: $errorText"
     }
 
+    $groupsJson = ($groupOutput | Out-String)
     $groups = @($groupsJson | ConvertFrom-Json)
     return $groups | Where-Object { $_.displayName -eq $DisplayName } | Select-Object -First 1
 }
@@ -184,6 +207,168 @@ function Resolve-EntraAccessGroupId([string]$DisplayName, [string]$MailNickname,
 
     Write-Host "Created Entra group '$DisplayName' ($($createdGroup.id))."
     return $createdGroup.id
+}
+
+function Test-BicepParameterSupported([string]$ParameterName) {
+    $templatePath = Join-Path $repoRoot 'infra\bicep\main.bicep'
+    if (-not (Test-Path $templatePath)) {
+        return $false
+    }
+
+    return [bool](Select-String -Path $templatePath -Pattern ("^\s*param\s+{0}\b" -f [regex]::Escape($ParameterName)) -Quiet)
+}
+
+function Test-TerraformVariableSupported([string]$VariableName) {
+    $variablesPath = Join-Path $repoRoot 'infra\terraform\variables.tf'
+    if (-not (Test-Path $variablesPath)) {
+        return $false
+    }
+
+    $pattern = '^\s*variable\s+"' + [regex]::Escape($VariableName) + '"'
+    return [bool](Select-String -Path $variablesPath -Pattern $pattern -Quiet)
+}
+
+function Add-BicepDeploymentParameter([string]$Name, [object]$Value, [switch]$RequiredWhenSet) {
+    if (Test-BicepParameterSupported -ParameterName $Name) {
+        return @('--parameters', "$Name=$Value")
+    }
+
+    $hasMeaningfulValue = $null -ne $Value -and -not [string]::IsNullOrWhiteSpace([string]$Value)
+    if ($RequiredWhenSet -and $hasMeaningfulValue) {
+        throw "The Bicep template does not support parameter '$Name'. Update infra/bicep/main.bicep before using this deployment option."
+    }
+
+    if ($hasMeaningfulValue) {
+        Write-Warning "The Bicep template does not support parameter '$Name'. This value will be omitted."
+    }
+
+    return @()
+}
+
+function Add-TerraformVariable([string]$Name, [object]$Value, [switch]$RequiredWhenSet) {
+    if (Test-TerraformVariableSupported -VariableName $Name) {
+        return "-var=$Name=$Value"
+    }
+
+    $hasMeaningfulValue = $null -ne $Value -and -not [string]::IsNullOrWhiteSpace([string]$Value)
+    if ($RequiredWhenSet -and $hasMeaningfulValue) {
+        throw "The Terraform module does not support variable '$Name'. Update infra/terraform before using this deployment option."
+    }
+
+    if ($hasMeaningfulValue) {
+        Write-Warning "The Terraform module does not support variable '$Name'. This value will be omitted."
+    }
+
+    return @()
+}
+
+function Add-ManagementGroupRoleAssignment([string]$ManagementGroupName, [string]$PrincipalId, [string]$RoleDefinitionId, [string]$RoleName) {
+    if ([string]::IsNullOrWhiteSpace($ManagementGroupName) -or [string]::IsNullOrWhiteSpace($PrincipalId)) {
+        return
+    }
+
+    $scope = "/providers/Microsoft.Management/managementGroups/$ManagementGroupName"
+    $existingAssignment = az role assignment list --assignee $PrincipalId --role $RoleDefinitionId --scope $scope --query '[0].id' --output tsv 2>$null
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($existingAssignment)) {
+        Write-Host "RBAC already present: $RoleName for principal $PrincipalId at management group $ManagementGroupName."
+        return
+    }
+
+    Write-Host "Assigning $RoleName to principal $PrincipalId at management group $ManagementGroupName..."
+    $assignmentOutput = az role assignment create --assignee-object-id $PrincipalId --assignee-principal-type ServicePrincipal --role $RoleDefinitionId --scope $scope --output json 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $errorText = ($assignmentOutput | Out-String).Trim()
+        if ($errorText -match 'RoleAssignmentExists|role assignment already exists') {
+            Write-Host "RBAC already present: $RoleName for principal $PrincipalId at management group $ManagementGroupName."
+            return
+        }
+
+        $script:ManagementGroupRbacFollowUps += [pscustomobject]@{
+            ManagementGroupName = $ManagementGroupName
+            PrincipalId = $PrincipalId
+            RoleDefinitionId = $RoleDefinitionId
+            RoleName = $RoleName
+            Error = $errorText
+        }
+        Write-Warning "Could not assign $RoleName at management group '$ManagementGroupName'. Deployment will continue and print follow-up instructions at the end."
+    }
+}
+
+function Invoke-ManagementGroupRbacAssignments([string]$WebPrincipalId, [string]$WorkerPrincipalId) {
+    $hasWebManagementGroupRbac = $WebReaderManagementGroupNames.Count -gt 0 -or $WebQuotaWriterManagementGroupNames.Count -gt 0
+    $hasWorkerManagementGroupRbac = $WorkerRbacManagementGroupNames.Count -gt 0
+
+    if ($hasWebManagementGroupRbac -and [string]::IsNullOrWhiteSpace($WebPrincipalId)) {
+        $script:ManagementGroupRbacFollowUps += [pscustomobject]@{
+            ManagementGroupName = '<selected management groups>'
+            PrincipalId = '<web app managed identity principal id was not returned>'
+            RoleDefinitionId = '<varies>'
+            RoleName = 'Web app management group RBAC'
+            Error = 'Infrastructure deployment completed, but the web app managed identity principal ID was not returned.'
+        }
+        Write-Warning 'Infrastructure deployment completed, but the web app managed identity principal ID was not returned. Deployment will continue; management group RBAC must be applied manually.'
+        $hasWebManagementGroupRbac = $false
+    }
+
+    if ($hasWorkerManagementGroupRbac -and [string]::IsNullOrWhiteSpace($WorkerPrincipalId)) {
+        $script:ManagementGroupRbacFollowUps += [pscustomobject]@{
+            ManagementGroupName = '<selected management groups>'
+            PrincipalId = '<worker managed identity principal id was not returned>'
+            RoleDefinitionId = '<varies>'
+            RoleName = 'Worker management group RBAC'
+            Error = 'Infrastructure deployment completed, but the worker managed identity principal ID was not returned.'
+        }
+        Write-Warning 'Infrastructure deployment completed, but the worker managed identity principal ID was not returned. Deployment will continue; management group RBAC must be applied manually.'
+        $hasWorkerManagementGroupRbac = $false
+    }
+
+    foreach ($managementGroupName in @($WebReaderManagementGroupNames | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)) {
+        Add-ManagementGroupRoleAssignment -ManagementGroupName $managementGroupName -PrincipalId $WebPrincipalId -RoleDefinitionId 'acdd72a7-3385-48ef-bd42-f606fba81ae7' -RoleName 'Reader'
+    }
+
+    foreach ($managementGroupName in @($WebQuotaWriterManagementGroupNames | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)) {
+        Add-ManagementGroupRoleAssignment -ManagementGroupName $managementGroupName -PrincipalId $WebPrincipalId -RoleDefinitionId 'e2217c0e-04bb-4724-9580-91cf9871bc01' -RoleName 'GroupQuota Request Operator'
+    }
+
+    foreach ($managementGroupName in @($WorkerRbacManagementGroupNames | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)) {
+        if ($AssignWorkerComputeRecommendationsRole) {
+            Add-ManagementGroupRoleAssignment -ManagementGroupName $managementGroupName -PrincipalId $WorkerPrincipalId -RoleDefinitionId 'e82342c9-ac7f-422b-af64-e426d2e12b2d' -RoleName 'Compute Recommendations Role'
+        }
+        if ($AssignWorkerCostManagementReaderRole) {
+            Add-ManagementGroupRoleAssignment -ManagementGroupName $managementGroupName -PrincipalId $WorkerPrincipalId -RoleDefinitionId '72fafb9e-0641-4937-9268-a91bfd8191a3' -RoleName 'Cost Management Reader'
+        }
+        if ($AssignWorkerBillingReaderRole) {
+            Add-ManagementGroupRoleAssignment -ManagementGroupName $managementGroupName -PrincipalId $WorkerPrincipalId -RoleDefinitionId 'fa23ad8b-c56e-40d8-ac0c-ce449e1d2c64' -RoleName 'Billing Reader'
+        }
+    }
+}
+
+function Show-ManagementGroupRbacFollowUps() {
+    if ($script:ManagementGroupRbacFollowUpsShown -or $script:ManagementGroupRbacFollowUps.Count -eq 0) {
+        return
+    }
+
+    $script:ManagementGroupRbacFollowUpsShown = $true
+
+    Write-Host ''
+    Write-Warning 'Deployment completed, but one or more management group RBAC assignments could not be applied by this identity.'
+    Write-Host 'Ask a team with Owner or User Access Administrator on the listed management group scopes to run the matching role assignments.' -ForegroundColor Yellow
+    Write-Host 'They can either run the suggested commands below or use scripts/grant-management-group-rbac.ps1 with the listed principal IDs.' -ForegroundColor Yellow
+
+    foreach ($followUp in $script:ManagementGroupRbacFollowUps) {
+        Write-Host ''
+        Write-Host "Management group: $($followUp.ManagementGroupName)" -ForegroundColor Yellow
+        Write-Host "Principal ID: $($followUp.PrincipalId)" -ForegroundColor Yellow
+        Write-Host "Role: $($followUp.RoleName) ($($followUp.RoleDefinitionId))" -ForegroundColor Yellow
+        if (-not [string]::IsNullOrWhiteSpace($followUp.Error)) {
+            Write-Host "Original error: $($followUp.Error)" -ForegroundColor DarkYellow
+        }
+
+        if ($followUp.ManagementGroupName -notlike '<*' -and $followUp.PrincipalId -notlike '<*' -and $followUp.RoleDefinitionId -notlike '<*') {
+            Write-Host 'Suggested command:' -ForegroundColor Yellow
+            Write-Host "az role assignment create --assignee-object-id $($followUp.PrincipalId) --assignee-principal-type ServicePrincipal --role $($followUp.RoleDefinitionId) --scope /providers/Microsoft.Management/managementGroups/$($followUp.ManagementGroupName)" -ForegroundColor Yellow
+        }
+    }
 }
 
 $useExistingSqlServer = -not [string]::IsNullOrWhiteSpace($ExistingSqlServerName)
@@ -225,13 +410,23 @@ if ($SubscriptionId) {
 $WorkloadSuffix = Resolve-AvailableWorkloadSuffix -RequestedSuffix $WorkloadSuffix
 Set-DeploymentResourceNames -Suffix $WorkloadSuffix
 
+$supportsReportViewerGroupIds = if ($Provider -eq 'Terraform') {
+    Test-TerraformVariableSupported -VariableName 'report_viewer_group_ids'
+}
+else {
+    Test-BicepParameterSupported -ParameterName 'reportViewerGroupIds'
+}
+
 if ($AuthEnabled) {
     if ([string]::IsNullOrWhiteSpace($AdminGroupId)) {
         $AdminGroupId = Resolve-EntraAccessGroupId -DisplayName $AdminGroupDisplayName -MailNickname ($AdminGroupDisplayName.ToLowerInvariant() -replace '[^a-z0-9]', '') -Purpose 'dashboard admin access'
     }
 
-    if ([string]::IsNullOrWhiteSpace($ReportViewerGroupIds)) {
+    if ([string]::IsNullOrWhiteSpace($ReportViewerGroupIds) -and $supportsReportViewerGroupIds) {
         $ReportViewerGroupIds = Resolve-EntraAccessGroupId -DisplayName $ReportViewerGroupDisplayName -MailNickname ($ReportViewerGroupDisplayName.ToLowerInvariant() -replace '[^a-z0-9]', '') -Purpose 'dashboard report viewer access'
+    }
+    elseif ([string]::IsNullOrWhiteSpace($ReportViewerGroupIds)) {
+        Write-Warning 'The current infrastructure template does not support report viewer group IDs. CapacityReportViewers will not be configured by this deployment.'
     }
 }
 
@@ -469,17 +664,17 @@ function Deploy-Terraform {
         if (-not [string]::IsNullOrWhiteSpace($ExistingKeyVaultResourceGroupName))    { $tfVars += "-var=existing_key_vault_resource_group_name=$ExistingKeyVaultResourceGroupName" }
         if (-not [string]::IsNullOrWhiteSpace($ExistingWorkerStorageAccountName))     { $tfVars += "-var=existing_worker_storage_account_name=$ExistingWorkerStorageAccountName" }
         if (-not [string]::IsNullOrWhiteSpace($ExistingWorkerStorageResourceGroupName)){ $tfVars += "-var=existing_worker_storage_account_resource_group_name=$ExistingWorkerStorageResourceGroupName" }
-        if (-not [string]::IsNullOrWhiteSpace($ExistingVirtualNetworkName))           { $tfVars += "-var=existing_virtual_network_name=$ExistingVirtualNetworkName" }
-        if (-not [string]::IsNullOrWhiteSpace($ExistingVirtualNetworkResourceGroupName)){ $tfVars += "-var=existing_virtual_network_resource_group_name=$ExistingVirtualNetworkResourceGroupName" }
-        if (-not [string]::IsNullOrWhiteSpace($ExistingAppServiceIntegrationSubnetName)){ $tfVars += "-var=existing_app_service_integration_subnet_name=$ExistingAppServiceIntegrationSubnetName" }
-        if (-not [string]::IsNullOrWhiteSpace($ExistingPrivateEndpointSubnetName))    { $tfVars += "-var=existing_private_endpoint_subnet_name=$ExistingPrivateEndpointSubnetName" }
+        if (-not [string]::IsNullOrWhiteSpace($ExistingVirtualNetworkName))           { $tfVars += Add-TerraformVariable -Name 'existing_virtual_network_name' -Value $ExistingVirtualNetworkName -RequiredWhenSet }
+        if (-not [string]::IsNullOrWhiteSpace($ExistingVirtualNetworkResourceGroupName)){ $tfVars += Add-TerraformVariable -Name 'existing_virtual_network_resource_group_name' -Value $ExistingVirtualNetworkResourceGroupName }
+        if (-not [string]::IsNullOrWhiteSpace($ExistingAppServiceIntegrationSubnetName)){ $tfVars += Add-TerraformVariable -Name 'existing_app_service_integration_subnet_name' -Value $ExistingAppServiceIntegrationSubnetName -RequiredWhenSet }
+        if (-not [string]::IsNullOrWhiteSpace($ExistingPrivateEndpointSubnetName))    { $tfVars += Add-TerraformVariable -Name 'existing_private_endpoint_subnet_name' -Value $ExistingPrivateEndpointSubnetName -RequiredWhenSet }
         if (-not [string]::IsNullOrWhiteSpace($EntraTenantId))         { $tfVars += "-var=entra_tenant_id=$EntraTenantId" }
         if (-not [string]::IsNullOrWhiteSpace($EntraClientId))         { $tfVars += "-var=entra_client_id=$EntraClientId" }
         if (-not [string]::IsNullOrWhiteSpace($EntraClientSecret))     { $tfVars += "-var=entra_client_secret=$EntraClientSecret" }
         if (-not [string]::IsNullOrWhiteSpace($AuthRedirectUri))       { $tfVars += "-var=auth_redirect_uri=$AuthRedirectUri" }
         if ($ManageEntraWebRedirectUri.IsPresent)                      { $tfVars += "-var=manage_entra_web_redirect_uri=true" }
         if (-not [string]::IsNullOrWhiteSpace($AdminGroupId))          { $tfVars += "-var=admin_group_id=$AdminGroupId" }
-        if (-not [string]::IsNullOrWhiteSpace($ReportViewerGroupIds))  { $tfVars += "-var=report_viewer_group_ids=$ReportViewerGroupIds" }
+        if (-not [string]::IsNullOrWhiteSpace($ReportViewerGroupIds))  { $tfVars += Add-TerraformVariable -Name 'report_viewer_group_ids' -Value $ReportViewerGroupIds }
         if ($PSBoundParameters.ContainsKey('WebReaderSubscriptionIds') -or $WebReaderSubscriptionIds.Count -gt 0)                   { $tfVars += "-var=web_reader_subscription_ids=$(ConvertTo-TerraformLiteral $WebReaderSubscriptionIds)" }
         if ($PSBoundParameters.ContainsKey('WebReaderManagementGroupNames') -or $WebReaderManagementGroupNames.Count -gt 0)         { $tfVars += "-var=web_reader_management_group_names=$(ConvertTo-TerraformLiteral $WebReaderManagementGroupNames)" }
         if ($PSBoundParameters.ContainsKey('WebQuotaWriterSubscriptionIds') -or $WebQuotaWriterSubscriptionIds.Count -gt 0)         { $tfVars += "-var=web_quota_writer_subscription_ids=$(ConvertTo-TerraformLiteral $WebQuotaWriterSubscriptionIds)" }
@@ -487,14 +682,15 @@ function Deploy-Terraform {
         if ($PSBoundParameters.ContainsKey('WorkerRbacSubscriptionIds') -or $WorkerRbacSubscriptionIds.Count -gt 0)                 { $tfVars += "-var=worker_subscription_rbac_subscription_ids=$(ConvertTo-TerraformLiteral $WorkerRbacSubscriptionIds)" }
         if ($PSBoundParameters.ContainsKey('WorkerRbacManagementGroupNames') -or $WorkerRbacManagementGroupNames.Count -gt 0)       { $tfVars += "-var=worker_rbac_management_group_names=$(ConvertTo-TerraformLiteral $WorkerRbacManagementGroupNames)" }
 
-        if ($ParameterFile -and (Test-Path $ParameterFile)) {
-            $tfVars += "-var-file=$((Resolve-Path $ParameterFile).Path)"
+        $resolvedTerraformParameterFile = Resolve-DeploymentPath -Path $ParameterFile
+        if ($resolvedTerraformParameterFile) {
+            $tfVars += "-var-file=$resolvedTerraformParameterFile"
         }
 
         $tfVars += "-var=workload_suffix=$WorkloadSuffix"
         $tfVars += "-var=auth_enabled=$($AuthEnabled.ToString().ToLowerInvariant())"
         if (-not [string]::IsNullOrWhiteSpace($AdminGroupId))          { $tfVars += "-var=admin_group_id=$AdminGroupId" }
-        if (-not [string]::IsNullOrWhiteSpace($ReportViewerGroupIds))  { $tfVars += "-var=report_viewer_group_ids=$ReportViewerGroupIds" }
+        if (-not [string]::IsNullOrWhiteSpace($ReportViewerGroupIds))  { $tfVars += Add-TerraformVariable -Name 'report_viewer_group_ids' -Value $ReportViewerGroupIds }
 
         Write-Host "Running Terraform apply..."
     & $terraform apply -auto-approve -input=false @tfVars
@@ -530,14 +726,14 @@ function Deploy-Terraform {
 $deploymentArgs = @(
     'deployment', 'group', 'create',
     '--resource-group', $ResourceGroupName,
-    '--template-file', './infra/bicep/main.bicep'
+    '--template-file', $bicepTemplateFile
 )
 
 $temporaryParameterFile = $null
 $resolvedParameterFile = $null
 
 if ($ParameterFile) {
-    $resolvedParameterFile = (Resolve-Path $ParameterFile).Path
+    $resolvedParameterFile = Resolve-DeploymentPath -Path $ParameterFile
 }
 
 $deploymentArgs += @(
@@ -565,10 +761,12 @@ $deploymentArgs += @('--parameters', "existingKeyVaultName=$ExistingKeyVaultName
 $deploymentArgs += @('--parameters', "existingKeyVaultResourceGroupName=$ExistingKeyVaultResourceGroupName")
 $deploymentArgs += @('--parameters', "existingWorkerStorageAccountName=$ExistingWorkerStorageAccountName")
 $deploymentArgs += @('--parameters', "existingWorkerStorageAccountResourceGroupName=$ExistingWorkerStorageResourceGroupName")
-$deploymentArgs += @('--parameters', "existingVirtualNetworkName=$ExistingVirtualNetworkName")
-$deploymentArgs += @('--parameters', "existingVirtualNetworkResourceGroupName=$ExistingVirtualNetworkResourceGroupName")
-$deploymentArgs += @('--parameters', "existingAppServiceIntegrationSubnetName=$ExistingAppServiceIntegrationSubnetName")
-$deploymentArgs += @('--parameters', "existingPrivateEndpointSubnetName=$ExistingPrivateEndpointSubnetName")
+if ($useExistingVirtualNetwork) {
+    $deploymentArgs += Add-BicepDeploymentParameter -Name 'existingVirtualNetworkName' -Value $ExistingVirtualNetworkName -RequiredWhenSet
+    $deploymentArgs += Add-BicepDeploymentParameter -Name 'existingVirtualNetworkResourceGroupName' -Value $ExistingVirtualNetworkResourceGroupName
+    $deploymentArgs += Add-BicepDeploymentParameter -Name 'existingAppServiceIntegrationSubnetName' -Value $ExistingAppServiceIntegrationSubnetName -RequiredWhenSet
+    $deploymentArgs += Add-BicepDeploymentParameter -Name 'existingPrivateEndpointSubnetName' -Value $ExistingPrivateEndpointSubnetName -RequiredWhenSet
+}
 
 $deploymentArgs += @('--parameters', "authEnabled=$($AuthEnabled.ToString().ToLowerInvariant())")
 
@@ -592,8 +790,11 @@ if (-not [string]::IsNullOrWhiteSpace($AdminGroupId)) {
     $deploymentArgs += @('--parameters', "adminGroupId=$AdminGroupId")
 }
 
-if (-not [string]::IsNullOrWhiteSpace($ReportViewerGroupIds)) {
-    $deploymentArgs += @('--parameters', "reportViewerGroupIds=$ReportViewerGroupIds")
+$deploymentArgs += Add-BicepDeploymentParameter -Name 'reportViewerGroupIds' -Value $ReportViewerGroupIds
+
+$hasManagementGroupRbac = $WorkerRbacManagementGroupNames.Count -gt 0 -or $WebReaderManagementGroupNames.Count -gt 0 -or $WebQuotaWriterManagementGroupNames.Count -gt 0
+if ($hasManagementGroupRbac) {
+    $deploymentArgs += Add-BicepDeploymentParameter -Name 'deployManagementGroupRbacAssignments' -Value 'false'
 }
 
 if ($resolvedParameterFile -and [System.IO.Path]::GetExtension($resolvedParameterFile).Equals('.bicepparam', [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -630,7 +831,8 @@ if ($resolvedParameterFile -and [System.IO.Path]::GetExtension($resolvedParamete
             "param workerRbacManagementGroupNames = $workerManagementGroupParamBlock",
             "param assignWorkerComputeRecommendationsRole = $assignWorkerComputeRecommendationsRoleBicep",
             "param assignWorkerCostManagementReaderRole = $assignWorkerCostManagementReaderRoleBicep",
-            "param assignWorkerBillingReaderRole = $assignWorkerBillingReaderRoleBicep"
+            "param assignWorkerBillingReaderRole = $assignWorkerBillingReaderRoleBicep",
+            "param deployManagementGroupRbacAssignments = false"
         )
     }
 
@@ -671,6 +873,9 @@ elseif ($WorkerRbacSubscriptionIds.Count -gt 0 -or $WorkerRbacManagementGroupNam
                 assignWorkerBillingReaderRole = @{
                     value = $AssignWorkerBillingReaderRole
                 }
+                deployManagementGroupRbacAssignments = @{
+                    value = $false
+                }
             }
         } | ConvertTo-Json -Depth 10 | Set-Content -Path $temporaryParameterFile -Encoding utf8
 }
@@ -692,11 +897,14 @@ $deploymentArgs += @('--parameters', "authEnabled=$($AuthEnabled.ToString().ToLo
 if (-not [string]::IsNullOrWhiteSpace($AdminGroupId)) {
     $deploymentArgs += @('--parameters', "adminGroupId=$AdminGroupId")
 }
-if (-not [string]::IsNullOrWhiteSpace($ReportViewerGroupIds)) {
-    $deploymentArgs += @('--parameters', "reportViewerGroupIds=$ReportViewerGroupIds")
+$deploymentArgs += Add-BicepDeploymentParameter -Name 'reportViewerGroupIds' -Value $ReportViewerGroupIds
+if ($hasManagementGroupRbac) {
+    $deploymentArgs += Add-BicepDeploymentParameter -Name 'deployManagementGroupRbacAssignments' -Value 'false'
 }
 
 try {
+    $webPrincipalId = $null
+    $workerPrincipalId = $null
     if ($Provider -eq 'Terraform') {
         Deploy-Terraform
     }
@@ -715,7 +923,15 @@ try {
             if ($deploymentResult.properties.outputs.functionAppName.value) {
                 $functionAppName = $deploymentResult.properties.outputs.functionAppName.value
             }
+            if ($deploymentResult.properties.outputs.managedIdentityPrincipalId.value) {
+                $webPrincipalId = $deploymentResult.properties.outputs.managedIdentityPrincipalId.value
+            }
+            if ($deploymentResult.properties.outputs.functionManagedIdentityPrincipalId.value) {
+                $workerPrincipalId = $deploymentResult.properties.outputs.functionManagedIdentityPrincipalId.value
+            }
         }
+
+        Invoke-ManagementGroupRbacAssignments -WebPrincipalId $webPrincipalId -WorkerPrincipalId $workerPrincipalId
     }
 
     $manualDatabaseInitializeCommand = ".\scripts\initialize-database.ps1 -SqlServer `"$effectiveSqlServerHostName`" -SqlDatabase `"$effectiveSqlDatabaseName`" -AppIdentityName `"$webAppName`""
@@ -725,8 +941,18 @@ try {
             throw "Web deployment script not found: $deployWebAppScript"
         }
 
+        if (-not $SkipWebAppTests -and -not (Get-Command npm -ErrorAction SilentlyContinue)) {
+            Write-Warning 'npm was not found on PATH. Continuing web deployment with the npm test gate skipped.'
+            $SkipWebAppTests = $true
+        }
+
         Write-Host "Infrastructure deployment succeeded. Deploying dashboard web package to $webAppName..."
-        & $deployWebAppScript -ResourceGroup $ResourceGroupName -AppName $webAppName -SourcePath $repoRoot
+        if ($SkipWebAppTests) {
+            & $deployWebAppScript -ResourceGroup $ResourceGroupName -AppName $webAppName -SourcePath $repoRoot -SkipTests
+        }
+        else {
+            & $deployWebAppScript -ResourceGroup $ResourceGroupName -AppName $webAppName -SourcePath $repoRoot
+        }
     }
 
     if ($DeployWorkerApp) {
@@ -800,8 +1026,12 @@ try {
         Write-Host 'Database bootstrap was skipped. Run this command from an Azure-connected host when you are ready to initialize the database:' -ForegroundColor Yellow
         Write-Host $manualDatabaseInitializeCommand -ForegroundColor Yellow
     }
+
+    Show-ManagementGroupRbacFollowUps
 }
 finally {
+    Show-ManagementGroupRbacFollowUps
+
     if ($temporaryParameterFile -and (Test-Path $temporaryParameterFile)) {
         Remove-Item $temporaryParameterFile -Force
     }

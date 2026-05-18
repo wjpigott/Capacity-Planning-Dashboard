@@ -41,3 +41,34 @@ test('report viewer group restricts reports while admin group still implies repo
   assert.equal(auth.canAccessReports({ groups: ['unrelated-group'] }), false);
   assert.equal(auth.isReportViewer({ groups: ['other-report-group'] }), true);
 });
+
+test('group matching is case-insensitive for Entra object IDs', () => {
+  const auth = loadAuthWithEnv({ AUTH_ENABLED: 'true', ADMIN_GROUP_ID: 'ABCDEF12-3456-7890-ABCD-EF1234567890', REPORT_VIEWER_GROUP_IDS: '01234567-89AB-CDEF-0123-456789ABCDEF' });
+
+  assert.equal(auth.canAccessAdmin({ groups: ['abcdef12-3456-7890-abcd-ef1234567890'] }), true);
+  assert.equal(auth.canAccessReports({ groups: ['01234567-89ab-cdef-0123-456789abcdef'] }), true);
+});
+
+test('auth diagnostics report safe group claim status without exposing group ids', () => {
+  const auth = loadAuthWithEnv({ AUTH_ENABLED: 'true', ADMIN_GROUP_ID: 'admin-group' });
+
+  assert.deepEqual(auth.buildAuthDiagnostics({
+    groups: ['admin-group', 'other-group'],
+    groupClaimPresent: true,
+    groupOverageClaimPresent: false
+  }), {
+    groupCount: 2,
+    groupClaimPresent: true,
+    groupOverageClaimPresent: false
+  });
+
+  assert.deepEqual(auth.buildAuthDiagnostics({
+    groups: [],
+    groupClaimPresent: false,
+    groupOverageClaimPresent: true
+  }), {
+    groupCount: 0,
+    groupClaimPresent: false,
+    groupOverageClaimPresent: true
+  });
+});

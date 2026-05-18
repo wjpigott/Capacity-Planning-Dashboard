@@ -79,6 +79,8 @@ Status legend:
 
 Dashboard report access is controlled separately from administrator access. Users must either be in the admin group configured by `ADMIN_GROUP_ID` or in one of the report viewer groups configured by `REPORT_VIEWER_GROUP_IDS`. The current viewer group is named `CapacityReportViewers`; add users to that Entra group before asking them to sign in to the dashboard.
 
+The Entra app registration used by `ENTRA_CLIENT_ID` must emit group Object IDs in the ID token. In Microsoft Entra admin center, open the app registration, go to **Token configuration**, add a **Groups** claim, select **Security groups**, expand **ID**, and keep **Group ID** selected. Without that token claim, users can sign in but the dashboard cannot see `CapacityAdmin` or `CapacityReportViewers` membership, so `/api/auth/me` returns `canAccessAdmin: false` and `isReportViewer: false` even when the Entra group membership is correct.
+
 If a user is not signed in, or signs in without membership in `CapacityReportViewers` or another configured viewer group, the React app shows the Access Restricted screen with the message `You do not have access` or `Report access is not enabled for your account`. That screen is expected behavior when the viewer group claim is missing from the user's token.
 
 ![Access Restricted dashboard sign-in screen](image.png)
@@ -456,12 +458,26 @@ Quota apply uses the vendored `tools/Get-AzVMAvailability` copy that ships with 
 
 Terraform deployment note:
 
-- The script examples in this section use the Bicep path. If you are deploying with Terraform instead, use [infra/terraform/README.md](c:/repos/Capacity/dashboard/infra/terraform/README.md) for the Terraform-specific workflow and prerequisites.
+- The script examples in this section use the Bicep path. If you are deploying with Terraform instead, use [infra/terraform/README.md](infra/terraform/README.md) for the Terraform-specific workflow and prerequisites.
 - Terraform now supports the same management-group-first RBAC model as Bicep: use management-group name arrays as the preferred path for larger estates, and keep subscription arrays only as the fallback for smaller customers.
 - `./scripts/deploy-infra.ps1 -Provider Terraform` now passes the same management-group and subscription RBAC inputs through to Terraform and still publishes the dashboard web app and worker packages after a successful apply.
 - Terraform may still target an existing resource group that needs to be imported into state before the first apply.
 
-Use script-based deployment with Central US default:
+For a guided install, start with the deployment wizard:
+
+```powershell
+./scripts/Start-CapacityDeployment.ps1
+```
+
+Use plan-only mode when you want to walk the prompts, review the deployment plan, and copy the generated `deploy-infra.ps1` command without starting an Azure deployment:
+
+```powershell
+./scripts/Start-CapacityDeployment.ps1 -PlanOnly
+```
+
+The wizard prompts for provider, subscription, naming, authentication, Entra group strategy, existing shared services, RBAC scope, package publishing, and database bootstrap. It uses secure prompts for secrets, does not write secrets to saved answer files, and only enables Entra group creation after explicit confirmation.
+
+Use script-based deployment directly with Central US default:
 
 ```powershell
 ./scripts/deploy-infra.ps1 \
@@ -602,6 +618,57 @@ Full example with the most commonly needed inputs:
 
 Current Bicep deployment gaps for a fuller blue-green model are tracked in `infra/README.md`.
 
+Management-group RBAC handoff:
+
+- The deployment wrapper attempts management-group role assignments after infrastructure creates the web app and worker managed identities.
+- If the deployment identity cannot assign roles at the management group, deployment continues and prints follow-up `az role assignment create` commands.
+- A team with `Owner` or `User Access Administrator` at the management group can run the helper below. Use the principal IDs printed by the deployment output for the dashboard web app and function worker identities.
+
+```powershell
+./scripts/grant-management-group-rbac.ps1 `
+	-ManagementGroupNames @("<management-group-name>") `
+	-WebPrincipalId "<dashboard-web-managed-identity-principal-id>" `
+	-WorkerPrincipalId "<function-worker-managed-identity-principal-id>"
+```
+
+The helper assigns web app `Reader`, web app `GroupQuota Request Operator`, worker `Compute Recommendations Role`, worker `Cost Management Reader`, and worker `Billing Reader` at each named management group. Add `-WhatIf` first to preview the work.
+
+What the RBAC team is assigning:
+
+- These management-group role assignments are **not** assigned to the Entra app registration used for sign-in.
+- Assign these roles to the Azure managed identities created by the deployment.
+- The dashboard web app managed identity is the identity for the App Service named like `app-capdash-<environment>-<suffix>`.
+- The worker managed identity is the identity for the Function App named like `func-capdash-<environment>-<suffix>-appsvc`.
+
+| Role at management group | Assign this principal | Why |
+| --- | --- | --- |
+| `Reader` | Dashboard web app system-assigned managed identity | Lets the dashboard read management-group/subscription metadata for discovery and reporting. |
+| `GroupQuota Request Operator` | Dashboard web app system-assigned managed identity | Lets the dashboard submit group quota requests for quota apply workflows. |
+| `Compute Recommendations Role` | Function App worker system-assigned managed identity | Lets the worker call Compute placement/recommendation APIs. |
+| `Cost Management Reader` | Function App worker system-assigned managed identity | Lets the worker read cost-management data used by recommendation/reporting workflows. |
+| `Billing Reader` | Function App worker system-assigned managed identity | Lets the worker read billing-related data used by recommendation/reporting workflows. |
+
+Manual role assignment shape if another team does not run the helper script:
+
+```powershell
+$managementGroupScope = "/providers/Microsoft.Management/managementGroups/<management-group-name>"
+$webPrincipalId = "<dashboard-web-managed-identity-principal-id>"
+$workerPrincipalId = "<function-worker-managed-identity-principal-id>"
+
+# Find these principal IDs in Azure Portal under each resource's Identity page:
+# - Web principal ID: App Service -> app-capdash-<environment>-<suffix> -> Identity -> System assigned -> Object (principal) ID
+# - Worker principal ID: Function App -> func-capdash-<environment>-<suffix>-appsvc -> Identity -> System assigned -> Object (principal) ID
+# Or use Azure CLI:
+# az webapp identity show --resource-group <resource-group-name> --name app-capdash-<environment>-<suffix> --query principalId --output tsv
+# az functionapp identity show --resource-group <resource-group-name> --name func-capdash-<environment>-<suffix>-appsvc --query principalId --output tsv
+
+az role assignment create --assignee-object-id $webPrincipalId --assignee-principal-type ServicePrincipal --role "Reader" --scope $managementGroupScope
+az role assignment create --assignee-object-id $webPrincipalId --assignee-principal-type ServicePrincipal --role "GroupQuota Request Operator" --scope $managementGroupScope
+az role assignment create --assignee-object-id $workerPrincipalId --assignee-principal-type ServicePrincipal --role "Compute Recommendations Role" --scope $managementGroupScope
+az role assignment create --assignee-object-id $workerPrincipalId --assignee-principal-type ServicePrincipal --role "Cost Management Reader" --scope $managementGroupScope
+az role assignment create --assignee-object-id $workerPrincipalId --assignee-principal-type ServicePrincipal --role "Billing Reader" --scope $managementGroupScope
+```
+
 ## Worker deployment
 
 Package and deploy the worker host separately from the dashboard web app:
@@ -714,6 +781,12 @@ Required for deployed dashboard operation:
 - `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET` (required when `AUTH_ENABLED=true`)
 - `AUTH_REDIRECT_URI` (OAuth callback URI; defaults to local dev when omitted)
 - `INGEST_API_KEY` (required only for internal ingestion/bootstrap routes)
+
+Entra app registration token configuration:
+
+- The app registration referenced by `ENTRA_CLIENT_ID` must include group Object IDs in the ID token: **Token configuration** -> **Add groups claim** -> **Security groups** -> **ID** -> **Group ID**.
+- After changing group claim configuration or group membership, restart the App Service and have affected users sign out at `/auth/logout` and sign in again so the session captures a fresh token.
+- If `/api/auth/me` shows `adminGroupConfigured: true` and `reportViewerGroupConfigured: true` but still returns `canAccessAdmin: false` or `isReportViewer: false`, verify the token groups claim before changing the group Object IDs.
 
 Recommended access and quota settings:
 

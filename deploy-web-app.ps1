@@ -14,6 +14,10 @@ Write-Host "Starting clean web app deployment..."
 Write-Host "Source: $SourcePath"
 
 if (-not $SkipTests) {
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        throw "npm was not found on PATH. Install Node.js LTS so npm is available, or rerun deploy-web-app.ps1 with -SkipTests if tests were already run elsewhere."
+    }
+
     $packageJsonPath = Join-Path $SourcePath 'package.json'
     if (-not (Test-Path $packageJsonPath)) {
         Write-Host "✗ ERROR: package.json not found at $packageJsonPath"

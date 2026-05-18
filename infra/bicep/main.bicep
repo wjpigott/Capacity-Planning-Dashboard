@@ -69,6 +69,9 @@ param webQuotaWriterSubscriptionIds array = []
 @description('Optional management group names where the dashboard web app managed identity should receive GroupQuota Request Operator for quota apply writes. Preferred for larger estates; keep subscription IDs for customers without management groups.')
 param webQuotaWriterManagementGroupNames array = []
 
+@description('Whether this template should create management-group-scope RBAC assignments. Set false when the deployment wrapper applies those assignments after infrastructure deployment.')
+param deployManagementGroupRbacAssignments bool = true
+
 @description('Optional management group ID used by the dashboard quota discovery UI when tenant-wide management group enumeration is not permitted.')
 param quotaManagementGroupId string = ''
 
@@ -799,7 +802,7 @@ module workerSubscriptionRbacAssignments './modules/worker-subscription-rbac.bic
   }
 }]
 
-module workerManagementGroupRbacAssignments './modules/worker-management-group-rbac.bicep' = [for targetManagementGroupName in workerRbacManagementGroupNames: {
+module workerManagementGroupRbacAssignments './modules/worker-management-group-rbac.bicep' = [for targetManagementGroupName in workerRbacManagementGroupNames: if (deployManagementGroupRbacAssignments) {
   name: 'worker-mg-rbac-${uniqueString(targetManagementGroupName, functionApp.id)}'
   scope: tenant()
   params: {
@@ -819,7 +822,7 @@ module webSubscriptionReaderAssignments './modules/webSubscriptionReader.bicep' 
   }
 }]
 
-module webManagementGroupReaderAssignments './modules/web-management-group-reader.bicep' = [for targetManagementGroupName in webReaderManagementGroupNames: {
+module webManagementGroupReaderAssignments './modules/web-management-group-reader.bicep' = [for targetManagementGroupName in webReaderManagementGroupNames: if (deployManagementGroupRbacAssignments) {
   name: 'web-mg-reader-${uniqueString(targetManagementGroupName, webApp.id)}'
   scope: tenant()
   params: {
@@ -836,7 +839,7 @@ module webSubscriptionQuotaWriterAssignments './modules/webSubscriptionQuotaWrit
   }
 }]
 
-module webManagementGroupQuotaWriterAssignments './modules/web-management-group-quota-writer.bicep' = [for targetManagementGroupName in webQuotaWriterManagementGroupNames: {
+module webManagementGroupQuotaWriterAssignments './modules/web-management-group-quota-writer.bicep' = [for targetManagementGroupName in webQuotaWriterManagementGroupNames: if (deployManagementGroupRbacAssignments) {
   name: 'web-mg-quota-writer-${uniqueString(targetManagementGroupName, webApp.id)}'
   scope: tenant()
   params: {

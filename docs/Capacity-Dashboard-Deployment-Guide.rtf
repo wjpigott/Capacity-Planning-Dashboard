@@ -36,10 +36,11 @@ Both paths can also attach to existing customer-managed shared services instead 
 \par
 Use this order unless your customer has a very specific runbook:\par
 \par
-1. Prepare access and collect values.\par
-2. Deploy infrastructure and application.\par
-3. Run the database initialization step.\par
-4. Test sign-in and the main dashboard pages.\par
+1. Start with \f1 scripts/Start-CapacityDeployment.ps1\f0 for a guided install, or run \f1 scripts/Start-CapacityDeployment.ps1 -PlanOnly\f0 to preview the generated \f1 deploy-infra.ps1\f0 command without starting deployment.\par
+2. Prepare access and collect values.\par
+3. Deploy infrastructure and application.\par
+4. Run the database initialization step.\par
+5. Test sign-in and the main dashboard pages.\par
 \par
 Do not try to start with the database scripts unless the web app and identities already exist. The current deployment flow expects the application and identities to be created first.\par
 \par
@@ -465,6 +466,7 @@ If the person following this guide wants the least surprising path, tell them to
 \par
 \b 17. File References In This Repo\b0\par
 \par
+- Guided deployment wizard: \f1 scripts/Start-CapacityDeployment.ps1\f0\par
 - Main deployment wrapper: \f1 scripts/deploy-infra.ps1\f0\par
 - Manual database initialization: \f1 scripts/initialize-database.ps1\f0\par
 - Web publish script: \f1 deploy-web-app.ps1\f0\par
@@ -476,5 +478,5 @@ If the person following this guide wants the least surprising path, tell them to
 \par
 If you need to hand this to a customer or internal operator, use this short message:\par
 \par
-"First deploy the application and Azure resources with scripts/deploy-infra.ps1 so the web and worker packages are published after infrastructure succeeds. Second, complete the database initialization. Prefer management-group-based RBAC for larger estates. The wrapper can randomize the workload suffix if an App Service host name is already taken, and it reuses CapacityAdmin and CapacityReportViewers when auth is enabled. If those groups do not exist, have an Entra administrator create them or pass approved group IDs; use automatic group creation only when the deployment identity is allowed to create security groups. If the customer wants to reuse an existing SQL server, Key Vault, worker storage account, or Virtual Network, pass the existing-resource inputs up front and confirm private connectivity, subnet delegation, DNS, and RBAC assumptions before deployment."\par
+"Start with scripts/Start-CapacityDeployment.ps1 for a guided install, or scripts/Start-CapacityDeployment.ps1 -PlanOnly to preview the generated deploy-infra.ps1 command before deploying. First deploy the application and Azure resources so the web and worker packages are published after infrastructure succeeds. Second, complete the database initialization. Prefer management-group-based RBAC for larger estates. The wrapper can randomize the workload suffix if an App Service host name is already taken, and it reuses CapacityAdmin and CapacityReportViewers when auth is enabled. If those groups do not exist, have an Entra administrator create them or pass approved group IDs; use automatic group creation only when the deployment identity is allowed to create security groups. If the customer wants to reuse an existing SQL server, Key Vault, worker storage account, or Virtual Network, pass the existing-resource inputs up front and confirm private connectivity, subnet delegation, DNS, and RBAC assumptions before deployment."\par
 }

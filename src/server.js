@@ -24,7 +24,7 @@ if (fs.existsSync(localEnvPath)) {
 
 const session = require('express-session');
 const MSSQLStore = require('connect-mssql-v2');
-const { AUTH_ENABLED, REPORT_VIEWER_GROUP_IDS, buildAuthRouter, requireAuth, requireAdmin, requireReportAccess, getAccountFromSession, isAdmin, canAccessAdmin, canAccessReports, isReportViewer } = require('./middleware/auth');
+const { AUTH_ENABLED, REPORT_VIEWER_GROUP_IDS, buildAuthRouter, requireAuth, requireAdmin, requireReportAccess, getAccountFromSession, isAdmin, canAccessAdmin, canAccessReports, isReportViewer, buildAuthDiagnostics } = require('./middleware/auth');
 
 const {
   getCapacityRows,
@@ -2007,7 +2007,8 @@ app.get('/api/auth/me', (req, res) => {
       canAccessReports: reportAccess,
       isReportViewer: isReportViewer(account),
       adminGroupConfigured: adminEnabled,
-      reportViewerGroupConfigured: reportAccessEnabled
+      reportViewerGroupConfigured: reportAccessEnabled,
+      diagnostics: buildAuthDiagnostics(account)
     }
   });
 });

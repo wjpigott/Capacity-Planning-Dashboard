@@ -55,8 +55,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $deployWebAppScript = Join-Path $repoRoot 'deploy-web-app.ps1'
-$deployWorkerScript = Join-Path $repoRoot 'scripts' 'deploy-worker.ps1'
-$bicepTemplateFile = Join-Path $repoRoot 'infra' 'bicep' 'main.bicep'
+$deployWorkerScript = Join-Path (Join-Path $repoRoot 'scripts') 'deploy-worker.ps1'
+$bicepTemplateFile = Join-Path (Join-Path (Join-Path $repoRoot 'infra') 'bicep') 'main.bicep'
 $script:ManagementGroupRbacFollowUps = @()
 $script:ManagementGroupRbacFollowUpsShown = $false
 $webAppName = "app-capdash-$Environment-$WorkloadSuffix"
@@ -626,7 +626,7 @@ if ($Provider -ne 'Terraform') {
 
 # ── Terraform deployment path ────────────────────────────────────────────────
 function Deploy-Terraform {
-    $tfDir = Join-Path $repoRoot 'infra' 'terraform'
+    $tfDir = Join-Path (Join-Path $repoRoot 'infra') 'terraform'
     if (-not (Test-Path (Join-Path $tfDir 'main.tf'))) {
         throw "Terraform files not found at $tfDir"
     }

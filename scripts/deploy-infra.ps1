@@ -92,6 +92,10 @@ function Resolve-SqlServerHostName([string]$ServerName) {
     return "$($ServerName.Trim()).database.windows.net"
 }
 
+function Get-DatabaseBootstrapFailureGuidance([string]$ManualDatabaseInitializeCommand) {
+    return "Database bootstrap failed after infrastructure deployment. If Azure SQL blocks the bootstrap connection, change the SQL server networking setting to Selected networks and add your current client IP, then rerun the database bootstrap. You can also skip database bootstrap during deployment and run the scripts later from an Azure-connected host. Manual command: $ManualDatabaseInitializeCommand"
+}
+
 function New-WorkloadSuffixWithToken([string]$BaseSuffix) {
     $sanitizedBase = ($BaseSuffix.ToLowerInvariant() -replace '[^a-z0-9-]', '')
     if ([string]::IsNullOrWhiteSpace($sanitizedBase)) {
@@ -935,6 +939,7 @@ try {
     }
 
     $manualDatabaseInitializeCommand = ".\scripts\initialize-database.ps1 -SqlServer `"$effectiveSqlServerHostName`" -SqlDatabase `"$effectiveSqlDatabaseName`" -AppIdentityName `"$webAppName`""
+    $databaseBootstrapFailureGuidance = Get-DatabaseBootstrapFailureGuidance -ManualDatabaseInitializeCommand $manualDatabaseInitializeCommand
 
     if ($DeployWebApp) {
         if (-not (Test-Path $deployWebAppScript)) {
@@ -988,6 +993,7 @@ try {
                     $bootstrapError = $_.Exception.Message
                     if ($attempt -eq 12) {
                         Write-Warning "Managed-identity bootstrap failed after 12 attempts: $bootstrapError"
+                        Write-Warning $databaseBootstrapFailureGuidance
                         break
                     }
 
@@ -1013,7 +1019,7 @@ try {
                     $bootstrapResult = Invoke-RestMethod -Method Post -Uri $adminBootstrapUri -Headers $adminHeaders -Body $adminBootstrapBody -TimeoutSec 300
                 }
                 catch {
-                    throw "Database bootstrap failed. Managed-identity bootstrap error: $bootstrapError Admin-assisted bootstrap error: $($_.Exception.Message) If the SQL server is private or DBA-managed, run $manualDatabaseInitializeCommand from an Azure-connected host using an Entra SQL admin login. If the customer pre-created SQL, substitute the actual server and database names."
+                    throw "$databaseBootstrapFailureGuidance Managed-identity bootstrap error: $bootstrapError Admin-assisted bootstrap error: $($_.Exception.Message) If the customer pre-created SQL, substitute the actual server and database names."
                 }
             }
 

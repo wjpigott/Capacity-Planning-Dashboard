@@ -51,7 +51,7 @@ Status legend:
 | --- | --- | --- |
 | Platform and infrastructure | `[x]` | App Service, SQL, Key Vault, App Insights, Log Analytics deployed via Bicep |
 | Worker execution host | `[~]` | Azure Functions PowerShell 7 worker runs on a dedicated App Service plan with managed-identity host storage; live placement worker still needs module restore validation |
-| Security and identity | `[x]` | Entra admin + AAD-only SQL auth, managed identity runtime access, no raw subscription IDs stored in snapshots; Entra sign-in and admin group gating are enabled via `ADMIN_GROUP_ID` |
+| Security and identity | `[x]` | Entra admin + AAD-only SQL auth, managed identity runtime access, no raw subscription IDs stored in snapshots; Entra sign-in, admin group gating via `ADMIN_GROUP_ID`, and report viewer gating via `REPORT_VIEWER_GROUP_IDS` are enabled |
 | Live ingestion pipeline | `[x]` | Internal ingestion endpoint + scheduler; family filtering is optional (omit `INGEST_QUOTA_FAMILY_FILTERS` to ingest all families) + SQL snapshot writes |
 | API and analytics | `[~]` | Capacity API, subscription catalog, family summary, masked subscription summary, and trend APIs complete; quota discovery, plan, simulation, and apply APIs are live |
 | UX and dashboard | `[~]` | Capacity grid, filters (region, resource type, SKU family search, availability, subscription), sidebar report navigation, analytics tables, and chart views complete; export/workflow pages still pending |
@@ -75,7 +75,12 @@ Status legend:
 - [~] App identity database roles are granted post-deploy through the database bootstrap flow or `scripts/initialize-database.ps1` when the SQL team owns the server lifecycle
 - [x] Internal ingestion endpoints protected by `INGEST_API_KEY`
 - [x] Subscription identities masked (`subscriptionKey`) in stored analytics rows
-- [x] Entra sign-in and admin group gating enabled via dashboard auth flow and `ADMIN_GROUP_ID`
+- [x] Entra sign-in, admin group gating, and report viewer group gating enabled via dashboard auth flow, `ADMIN_GROUP_ID`, and `REPORT_VIEWER_GROUP_IDS`
+
+Dashboard report access is controlled separately from administrator access. Users must either be in the admin group configured by `ADMIN_GROUP_ID` or in one of the report viewer groups configured by `REPORT_VIEWER_GROUP_IDS`. The current viewer group is named `CapacityReportViewers`; add users to that Entra group before asking them to sign in to the dashboard.
+
+If a user is not signed in, or signs in without membership in `CapacityReportViewers` or another configured viewer group, the React app shows the Access Restricted screen with the message `You do not have access` or `Report access is not enabled for your account`. That screen is expected behavior when the viewer group claim is missing from the user's token.
+![Access Restricted dashboard sign-in screen](image.png)
 
 #### Live ingestion pipeline
 
@@ -702,7 +707,7 @@ Required for deployed dashboard operation:
 Recommended access and quota settings:
 
 - `ADMIN_GROUP_ID` (recommended Object ID for Admin sections; if omitted while auth is enabled, admin gating is disabled)
-- `REPORT_VIEWER_GROUP_IDS` (optional comma-separated Entra security group Object IDs whose members can view reports; leave empty to preserve authenticated-user report access)
+- `REPORT_VIEWER_GROUP_IDS` (recommended comma-separated Entra security group Object IDs whose members can view reports; include the `CapacityReportViewers` group Object ID for the current viewer group. If this is configured and a signed-in user is not in one of those groups, the dashboard displays the Access Restricted view.)
 - `QUOTA_MANAGEMENT_GROUP_ID` (recommended fallback/default management group for live quota discovery and quota admin views)
 
 DB-backed scheduler settings with environment fallback defaults:

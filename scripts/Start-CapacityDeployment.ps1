@@ -327,7 +327,7 @@ function Get-EntraGroupIdByDisplayName([string]$DisplayName) {
     catch {
         $errorText = $_.Exception.Message
         if ($errorText -match 'InteractionRequired|TokenIssuedBeforeRevocationTimestamp|Continuous access evaluation') {
-            throw "Azure CLI cannot currently read Microsoft Entra groups through Microsoft Graph. Choose explicit group object IDs to continue without display-name group lookup. Original Azure CLI error: $errorText"
+            throw 'Microsoft Graph group lookup is unavailable in this Azure CLI session.'
         }
 
         throw "The current Azure CLI login cannot read Microsoft Entra groups. Choose explicit group object IDs to continue without display-name group lookup, or use an identity that can read groups. Original Azure CLI error: $errorText"
@@ -336,7 +336,7 @@ function Get-EntraGroupIdByDisplayName([string]$DisplayName) {
     if ($LASTEXITCODE -ne 0) {
         $errorText = ($groupOutput | Out-String).Trim()
         if ($errorText -match 'InteractionRequired|TokenIssuedBeforeRevocationTimestamp|Continuous access evaluation') {
-            throw "Azure CLI cannot currently read Microsoft Entra groups through Microsoft Graph. Choose explicit group object IDs to continue without display-name group lookup. Original Azure CLI error: $errorText"
+            throw 'Microsoft Graph group lookup is unavailable in this Azure CLI session.'
         }
 
         if ($errorText -match 'NormalizedResponse|msal\.throttled_http_client|msal_http_cache|binary_cache') {
@@ -710,7 +710,7 @@ if ($authEnabled) {
                     throw
                 }
 
-                Write-Warning "Azure CLI could not verify CapacityAdmin and CapacityReportViewers by display name. Enter explicit group Object IDs so the deployment can continue without Microsoft Graph group lookup. Original error: $($_.Exception.Message)"
+                Write-Warning "Microsoft Graph group lookup is unavailable, so the wizard will use explicit group Object IDs instead of resolving CapacityAdmin and CapacityReportViewers by display name."
                 $groupMode = Set-Answer -Name 'AccessGroupMode' -Value 'Use explicit group object IDs'
                 $adminGroupId = Prompt-String -Name 'AdminGroupId' -Question 'Admin group object ID' -Required
                 $reportViewerGroupIds = Prompt-String -Name 'ReportViewerGroupIds' -Question 'Report viewer group object ID or comma-separated IDs' -Required

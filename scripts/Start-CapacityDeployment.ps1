@@ -290,8 +290,30 @@ function Get-AzAccountContext() {
 }
 
 function Get-SignedInUserSummary() {
-    $userJson = az ad signed-in-user show --query '{login:userPrincipalName,id:id}' --output json 2>$null
+    try {
+        $userOutput = az ad signed-in-user show --query '{login:userPrincipalName,id:id}' --output json 2>&1
+    }
+    catch {
+        $errorText = $_.Exception.Message
+        if ($errorText -match 'InteractionRequired|TokenIssuedBeforeRevocationTimestamp|Continuous access evaluation') {
+            Write-Warning "Azure CLI needs an interactive Microsoft Graph token refresh before it can read the signed-in user. Run 'az login --tenant <tenant-id>' and rerun the wizard, or enter the SQL Entra admin login and object ID manually when prompted. Original Azure CLI error: $errorText"
+        }
+        else {
+            Write-Warning "Could not read the signed-in Azure CLI user. Enter the SQL Entra admin login and object ID manually when prompted. Original Azure CLI error: $errorText"
+        }
+
+        return $null
+    }
+
+    $userJson = ($userOutput | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($userJson)) {
+        if ($userJson -match 'InteractionRequired|TokenIssuedBeforeRevocationTimestamp|Continuous access evaluation') {
+            Write-Warning "Azure CLI needs an interactive Microsoft Graph token refresh before it can read the signed-in user. Run 'az login --tenant <tenant-id>' and rerun the wizard, or enter the SQL Entra admin login and object ID manually when prompted. Original Azure CLI error: $userJson"
+        }
+        else {
+            Write-Warning "Could not read the signed-in Azure CLI user. Enter the SQL Entra admin login and object ID manually when prompted. Original Azure CLI error: $userJson"
+        }
+
         return $null
     }
 

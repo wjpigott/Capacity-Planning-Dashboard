@@ -296,7 +296,7 @@ function Get-SignedInUserSummary() {
     catch {
         $errorText = $_.Exception.Message
         if ($errorText -match 'InteractionRequired|TokenIssuedBeforeRevocationTimestamp|Continuous access evaluation') {
-            Write-Warning "Azure CLI needs an interactive Microsoft Graph token refresh before it can read the signed-in user. Run 'az login --tenant <tenant-id>' and rerun the wizard, or enter the SQL Entra admin login and object ID manually when prompted. Original Azure CLI error: $errorText"
+            Write-Warning "Azure CLI could not read the signed-in user from Microsoft Graph, so the wizard will ask for the SQL Entra admin details manually. Original Azure CLI error: $errorText"
         }
         else {
             Write-Warning "Could not read the signed-in Azure CLI user. Enter the SQL Entra admin login and object ID manually when prompted. Original Azure CLI error: $errorText"
@@ -308,7 +308,7 @@ function Get-SignedInUserSummary() {
     $userJson = ($userOutput | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($userJson)) {
         if ($userJson -match 'InteractionRequired|TokenIssuedBeforeRevocationTimestamp|Continuous access evaluation') {
-            Write-Warning "Azure CLI needs an interactive Microsoft Graph token refresh before it can read the signed-in user. Run 'az login --tenant <tenant-id>' and rerun the wizard, or enter the SQL Entra admin login and object ID manually when prompted. Original Azure CLI error: $userJson"
+            Write-Warning "Azure CLI could not read the signed-in user from Microsoft Graph, so the wizard will ask for the SQL Entra admin details manually. Original Azure CLI error: $userJson"
         }
         else {
             Write-Warning "Could not read the signed-in Azure CLI user. Enter the SQL Entra admin login and object ID manually when prompted. Original Azure CLI error: $userJson"
@@ -701,7 +701,7 @@ if ($useCurrentUserForSqlAdmin) {
     $sqlEntraAdminObjectId = Set-Answer -Name 'SqlEntraAdminObjectId' -Value $signedInUser.id
 }
 else {
-    $sqlEntraAdminLogin = Prompt-String -Name 'SqlEntraAdminLogin' -Question 'SQL Entra admin login / UPN' -Required
+    $sqlEntraAdminLogin = Prompt-String -Name 'SqlEntraAdminLogin' -Question 'SQL Entra admin user principal name or group display name' -Required
     $sqlEntraAdminObjectId = Prompt-String -Name 'SqlEntraAdminObjectId' -Question 'SQL Entra admin object ID' -Required
 }
 

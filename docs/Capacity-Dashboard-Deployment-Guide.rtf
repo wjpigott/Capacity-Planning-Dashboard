@@ -58,6 +58,7 @@ You will need these items before either deployment method:\par
 - Session secret. Terraform can generate one when omitted; Bicep deployments should supply it through the wrapper or parameter file. Keep the same value on redeploy unless intentionally rotating sessions.\par
 - Optional worker shared secret\par
 - Optional Entra app registration values if sign-in should be enabled\par
+- Optional Entra access group IDs. If you use the wrapper script and do not pass group IDs, it creates or reuses \f1 CapacityAdmin\f0 and \f1 CapacityReportViewers\f0 when auth is enabled. The Azure CLI identity must be allowed to read and create Entra security groups.\par
 - Preferred management group names if the tenant uses management groups\par
 - Optional explicit subscription lists for fallback RBAC when management groups are not used\par
 \par
@@ -103,7 +104,8 @@ Replace the placeholders in the commands later in this document with your own va
 - \f1 <tenant-id>\f0 if dashboard sign-in is enabled\par
 - \f1 <client-id>\f0 if dashboard sign-in is enabled\par
 - \f1 <client-secret>\f0 if dashboard sign-in is enabled\par
-- \f1 <admin-group-object-id>\f0 if admin access is group-gated\par
+- \f1 <admin-group-object-id>\f0 if admin access is group-gated and the group is centrally managed\par
+- \f1 <report-viewer-group-object-id>\f0 if report access is group-gated and the group is centrally managed\par
 - \f1 <management-group-name>\f0 if management-group-based RBAC will be used\par
 \par
 \b 6A. What Those Secrets Actually Are\b0\par
@@ -167,6 +169,17 @@ This is the most important section for non-standard customer environments.\par
 - Reusing an existing Virtual Network with \f1 ExistingVirtualNetworkName\f0 or \f1 existing_virtual_network_name\f0, plus the two required subnet names\par
 - Manual database initialization against customer-provided SQL names after the app is deployed\par
 \par
+\b App Service naming and package publish behavior:\b0\par
+- The deployment wrapper checks the requested Web App and Function App host names before deploying.\par
+- If \f1 app-capdash-<environment>-<workload-suffix>\f0 or \f1 func-capdash-<environment>-<workload-suffix>-appsvc\f0 is already globally reserved outside the target resource group, the wrapper generates a randomized effective workload suffix and uses that same suffix for infrastructure, web package deployment, worker deployment, and database bootstrap.\par
+- After Bicep or Terraform finishes, the wrapper reads the actual Web App and Function App names from deployment outputs before publishing packages. This avoids deploying to a guessed name.\par
+- Raw Bicep or raw Terraform creates infrastructure only. Use \f1 scripts/deploy-infra.ps1\f0 when you want the dashboard web package and worker package deployed automatically.\par
+\par
+\b Entra access group behavior:\b0\par
+- Raw Bicep and raw Terraform accept group object IDs but do not create Entra groups.\par
+- The wrapper script creates or reuses \f1 CapacityAdmin\f0 and \f1 CapacityReportViewers\f0 when \f1 -AuthEnabled $true\f0 is used and explicit group IDs are omitted.\par
+- If the customer requires centrally managed groups, pre-create the groups and pass \f1 -AdminGroupId\f0 and \f1 -ReportViewerGroupIds\f0, or run with \f1 -CreateMissingEntraAccessGroups $false\f0.\par
+\par
 \b Important behavior when reusing shared services:\b0\par
 - Existing resource names are the switch. If you provide the existing resource name, deployment moves that dependency into reuse mode. Use names, not full Azure resource IDs.\par
 - \f1 ExistingSqlDatabaseName\f0 requires \f1 ExistingSqlServerName\f0 because the reused database must hang off a reused server.\par
@@ -213,7 +226,10 @@ The safest current approach is:\par
 - \f1 -WebQuotaWriterManagementGroupNames @("<management-group-name>")\f0\par
 - \f1 -WorkerRbacManagementGroupNames @("<management-group-name>")\f0\par
 - \f1 -UseAllAccessibleManagementGroups\f0 if the operator should use every non-root management group they can see\par
-- \f1 -AuthEnabled $true\f0 plus tenant, client, secret, and admin group values if sign-in should be enabled. This is already the deployment default now.\par
+- \f1 -AuthEnabled $true\f0 plus tenant, client, and secret values if sign-in should be enabled. This is already the deployment default now. If group IDs are omitted, the wrapper creates or reuses \f1 CapacityAdmin\f0 and \f1 CapacityReportViewers\f0.\par
+- \f1 -AdminGroupId "<admin-group-object-id>"\f0 and \f1 -ReportViewerGroupIds "<report-viewer-group-object-id>"\f0 when the customer already has approved groups\par
+- \f1 -CreateMissingEntraAccessGroups $false\f0 when Entra group creation is centrally managed and the wrapper should not create groups\par
+- \f1 -RandomizeWorkloadSuffixOnNameConflict $false\f0 when the deployment should fail fast instead of generating a randomized suffix for App Service host-name conflicts\par
 - \f1 -ExistingSqlServerName "<sql-server-name>"\f0 to reuse an existing SQL server\par
 - \f1 -ExistingSqlServerResourceGroupName "<sql-rg-name>"\f0 when the existing SQL server is in a different resource group\par
 - \f1 -ExistingSqlDatabaseName "<sql-database-name>"\f0 to reuse an existing SQL database on that server\par
@@ -343,6 +359,7 @@ terraform apply -var-file="terraform.tfvars"\f0\par
 - \f1 web_reader_management_group_names\f0, \f1 web_quota_writer_management_group_names\f0, and \f1 worker_rbac_management_group_names\f0 for management-group-first RBAC\par
 \par
 When using \f1 scripts/deploy-infra.ps1 -Provider Terraform\f0, prefer putting optional customer-owned resource values in \f1 terraform.tfvars\f0. The wrapper now avoids sending empty optional values so it does not wipe tfvars entries such as \f1 web_reader_management_group_names\f0.\par
+The Terraform wrapper also checks App Service host-name availability, randomizes the effective workload suffix on conflict, creates or reuses \f1 CapacityAdmin\f0 and \f1 CapacityReportViewers\f0 when group IDs are omitted, and publishes the web and worker packages after apply. Raw \f1 terraform apply\f0 does not create Entra groups and does not publish application packages; run the wrapper or deploy the packages separately afterward.\par
 \par
 \b 10. Database Step Second\b0\par
 \par
@@ -421,7 +438,9 @@ Do not pass full subnet or VNet resource IDs. Use the VNet name, VNet resource g
 After deployment and database initialization, check these items:\par
 \par
 - The web app is reachable in a browser\par
+- The deployment output or console log shows the effective Web App name. If the workload suffix was randomized, use the generated name for browser testing and app registration callback checks.\par
 - The sign-in page works if auth is enabled\par
+- \f1 CapacityAdmin\f0 and \f1 CapacityReportViewers\f0 exist, or the approved customer group IDs were passed explicitly\par
 - The dashboard loads after sign-in\par
 - The main grid loads data\par
 - Exports work after sign-in\par
@@ -440,7 +459,8 @@ If the person following this guide wants the least surprising path, tell them to
 1. Choose Bicep unless the customer requires Terraform.\par
 2. Use the deployment script, not raw template commands.\par
 3. Treat the database step as second, not first.\par
-4. If the customer already owns SQL, Key Vault, storage, or VNet resources, use the existing-resource inputs and verify private connectivity, subnet delegation, DNS, and RBAC assumptions before deployment.\par
+4. Let the wrapper randomize the workload suffix on App Service host-name conflicts unless the customer requires deterministic names.\par
+5. If the customer already owns SQL, Key Vault, storage, or VNet resources, use the existing-resource inputs and verify private connectivity, subnet delegation, DNS, and RBAC assumptions before deployment.\par
 \par
 \b 17. File References In This Repo\b0\par
 \par
@@ -455,5 +475,5 @@ If the person following this guide wants the least surprising path, tell them to
 \par
 If you need to hand this to a customer or internal operator, use this short message:\par
 \par
-"First deploy the application and Azure resources. Second, complete the database initialization. Prefer management-group-based RBAC for larger estates. If the customer wants to reuse an existing SQL server, Key Vault, worker storage account, or Virtual Network, pass the existing-resource inputs up front and confirm private connectivity, subnet delegation, DNS, and RBAC assumptions before deployment."\par
+"First deploy the application and Azure resources with scripts/deploy-infra.ps1 so the web and worker packages are published after infrastructure succeeds. Second, complete the database initialization. Prefer management-group-based RBAC for larger estates. The wrapper can randomize the workload suffix if an App Service host name is already taken, and it can create or reuse CapacityAdmin and CapacityReportViewers when auth is enabled. If the customer wants to reuse an existing SQL server, Key Vault, worker storage account, or Virtual Network, pass the existing-resource inputs up front and confirm private connectivity, subnet delegation, DNS, and RBAC assumptions before deployment."\par
 }

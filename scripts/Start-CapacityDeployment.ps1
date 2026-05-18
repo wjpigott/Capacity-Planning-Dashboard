@@ -327,23 +327,23 @@ function Test-EntraGroupReadAccess([string]$DisplayName) {
     catch {
         $errorText = $_.Exception.Message
         if ($errorText -match 'InteractionRequired|TokenIssuedBeforeRevocationTimestamp|Continuous access evaluation') {
-            throw "Azure CLI needs an interactive Microsoft Graph token refresh before it can read Microsoft Entra groups. Run 'az login --tenant <tenant-id>' and rerun the wizard, or rerun the wizard and choose explicit group object IDs. Original Azure CLI error: $errorText"
+            throw "Azure CLI cannot currently read Microsoft Entra groups through Microsoft Graph. Choose explicit group object IDs to continue without display-name group lookup. Original Azure CLI error: $errorText"
         }
 
-        throw "The current Azure CLI login cannot read Microsoft Entra groups. Run 'az login --tenant <tenant-id>' with an identity that can read groups, or rerun the wizard and choose explicit group object IDs. Original Azure CLI error: $errorText"
+        throw "The current Azure CLI login cannot read Microsoft Entra groups. Choose explicit group object IDs to continue without display-name group lookup, or use an identity that can read groups. Original Azure CLI error: $errorText"
     }
 
     if ($LASTEXITCODE -ne 0) {
         $errorText = ($groupOutput | Out-String).Trim()
         if ($errorText -match 'InteractionRequired|TokenIssuedBeforeRevocationTimestamp|Continuous access evaluation') {
-            throw "Azure CLI needs an interactive Microsoft Graph token refresh before it can read Microsoft Entra groups. Run 'az login --tenant <tenant-id>' and rerun the wizard, or rerun the wizard and choose explicit group object IDs. Original Azure CLI error: $errorText"
+            throw "Azure CLI cannot currently read Microsoft Entra groups through Microsoft Graph. Choose explicit group object IDs to continue without display-name group lookup. Original Azure CLI error: $errorText"
         }
 
         if ($errorText -match 'NormalizedResponse|msal\.throttled_http_client|msal_http_cache|binary_cache') {
             throw "Azure CLI is logged in, but its local MSAL HTTP cache failed while requesting Microsoft Graph. Run 'az upgrade' if available, delete '%USERPROFILE%\.azure\msal_http_cache.bin', then run 'az login --tenant <tenant-id>' again. Original Azure CLI error: $errorText"
         }
 
-        throw "The current Azure CLI login cannot read Microsoft Entra groups. Run 'az login --tenant <tenant-id>' with an identity that can read groups, or rerun the wizard and choose explicit group object IDs. Original Azure CLI error: $errorText"
+        throw "The current Azure CLI login cannot read Microsoft Entra groups. Choose explicit group object IDs to continue without display-name group lookup, or use an identity that can read groups. Original Azure CLI error: $errorText"
     }
 
     $groupsJson = ($groupOutput | Out-String)
@@ -681,6 +681,25 @@ if ($authEnabled) {
             $answers.Remove('AccessGroupMode')
             $answers.Remove('CreateMissingEntraAccessGroups')
             continue
+        }
+
+        if ($groupMode -eq 'Reuse CapacityAdmin/CapacityReportViewers') {
+            try {
+                [void](Test-EntraGroupReadAccess -DisplayName 'CapacityAdmin')
+                [void](Test-EntraGroupReadAccess -DisplayName 'CapacityReportViewers')
+            }
+            catch {
+                if ($NonInteractive) {
+                    throw
+                }
+
+                Write-Warning "Azure CLI could not verify CapacityAdmin and CapacityReportViewers by display name. Enter explicit group Object IDs so the deployment can continue without Microsoft Graph group lookup. Original error: $($_.Exception.Message)"
+                $groupMode = Set-Answer -Name 'AccessGroupMode' -Value 'Use explicit group object IDs'
+                $adminGroupId = Prompt-String -Name 'AdminGroupId' -Question 'Admin group object ID' -Required
+                $reportViewerGroupIds = Prompt-String -Name 'ReportViewerGroupIds' -Question 'Report viewer group object ID or comma-separated IDs' -Required
+            }
+
+            break
         }
 
         break

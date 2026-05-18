@@ -469,6 +469,8 @@ For a guided install, start with the deployment wizard:
 ./scripts/Start-CapacityDeployment.ps1
 ```
 
+For a recording-friendly walkthrough of the same guided install experience, use [docs/INSTALL-DEMO-SCRIPT.md](docs/INSTALL-DEMO-SCRIPT.md). It includes a video storyboard, suggested answers, narration, validation steps, and common installation pitfalls.
+
 Use plan-only mode when you want to walk the prompts, review the deployment plan, and copy the generated `deploy-infra.ps1` command without starting an Azure deployment:
 
 ```powershell

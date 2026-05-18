@@ -80,6 +80,7 @@ Status legend:
 Dashboard report access is controlled separately from administrator access. Users must either be in the admin group configured by `ADMIN_GROUP_ID` or in one of the report viewer groups configured by `REPORT_VIEWER_GROUP_IDS`. The current viewer group is named `CapacityReportViewers`; add users to that Entra group before asking them to sign in to the dashboard.
 
 If a user is not signed in, or signs in without membership in `CapacityReportViewers` or another configured viewer group, the React app shows the Access Restricted screen with the message `You do not have access` or `Report access is not enabled for your account`. That screen is expected behavior when the viewer group claim is missing from the user's token.
+
 ![Access Restricted dashboard sign-in screen](image.png)
 
 #### Live ingestion pipeline

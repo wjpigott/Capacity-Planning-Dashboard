@@ -98,6 +98,7 @@ Recommended app registration setup:
 
 - Redirect URI: `https://<web-app-name>.azurewebsites.net/auth/callback`
 - Add the admin security group up front if you plan to gate Admin routes with `admin_group_id`
+- Add a groups claim to the app registration token configuration: select **Security groups**, expand **ID**, and keep **Group ID** selected. The dashboard compares `ADMIN_GROUP_ID` and `REPORT_VIEWER_GROUP_IDS` to group Object IDs emitted in the signed-in user's ID token; without this claim, users can sign in but Admin/report access checks still fail.
 - When Terraform is run through `../../scripts/deploy-infra.ps1 -Provider Terraform`, the wrapper reuses existing `CapacityAdmin` and `CapacityReportViewers` groups if `-AdminGroupId` and `-ReportViewerGroupIds` are omitted. Missing groups stop the deployment unless the operator explicitly passes `-CreateMissingEntraAccessGroups $true`. Raw `terraform apply` does not create Entra groups; pass `admin_group_id` and `report_viewer_group_ids` explicitly in that path.
 
 ## Region and naming guidance

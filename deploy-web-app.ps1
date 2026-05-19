@@ -112,14 +112,17 @@ Write-Host "Package created: $zipSize MB"
 # Verify zip contents
 Write-Host "Verifying zip contents..."
 $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
-$hasTools = $zip.Entries | Where-Object { $_.FullName -match 'tools/Get-AzVMAvailability/Get-AzVMAvailability.ps1' }
-$hasPaaSTools = $zip.Entries | Where-Object { $_.FullName -match 'tools/Get-AzPaaSAvailability/Get-AzPaaSAvailability.ps1' }
+$zipEntryNames = @($zip.Entries | ForEach-Object { $_.FullName -replace '\\', '/' })
 $zip.Dispose()
+$hasTools = $zipEntryNames -contains 'tools/Get-AzVMAvailability/Get-AzVMAvailability.ps1'
+$hasPaaSTools = $zipEntryNames -contains 'tools/Get-AzPaaSAvailability/Get-AzPaaSAvailability.ps1'
 
 if ($hasTools) {
     Write-Host "Zip contains Get-AzVMAvailability.ps1"
 } else {
     Write-Host "ERROR: Get-AzVMAvailability.ps1 not found in zip!"
+    Write-Host "Tool entries found in zip:"
+    $zipEntryNames | Where-Object { $_ -like 'tools/*' } | Select-Object -First 20 | ForEach-Object { Write-Host "  $_" }
     exit 1
 }
 
@@ -127,6 +130,8 @@ if ($hasPaaSTools) {
     Write-Host "Zip contains Get-AzPaaSAvailability.ps1"
 } else {
     Write-Host "ERROR: Get-AzPaaSAvailability.ps1 not found in zip!"
+    Write-Host "Tool entries found in zip:"
+    $zipEntryNames | Where-Object { $_ -like 'tools/*' } | Select-Object -First 20 | ForEach-Object { Write-Host "  $_" }
     exit 1
 }
 

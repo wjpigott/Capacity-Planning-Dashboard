@@ -1102,6 +1102,9 @@ try {
         else {
             & $deployWebAppScript -ResourceGroup $ResourceGroupName -AppName $webAppName -SourcePath $repoRoot
         }
+        if ($LASTEXITCODE -ne 0) {
+            throw "Web app package deployment failed with exit code $LASTEXITCODE."
+        }
     }
 
     if ($DeployWorkerApp) {
@@ -1111,6 +1114,9 @@ try {
 
         Write-Host "Infrastructure deployment succeeded. Deploying worker package to $functionAppName..."
         & $deployWorkerScript -ResourceGroupName $ResourceGroupName -FunctionAppName $functionAppName
+        if ($LASTEXITCODE -ne 0) {
+            throw "Worker package deployment failed with exit code $LASTEXITCODE."
+        }
     }
 
     if ($ApplyDatabaseBootstrap) {

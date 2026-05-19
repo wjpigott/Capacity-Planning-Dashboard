@@ -478,21 +478,24 @@ Terraform deployment note:
 - Each Terraform environment needs its own state file, workspace, or remote backend key. Do not reuse one local `infra/terraform/terraform.tfstate` for different resource groups such as dev, test, and customer trial environments.
 - The wrapper refuses to continue when existing Terraform state already manages a different resource group than the one requested by `-ResourceGroupName`, because continuing would make Terraform replace or delete the old state-managed environment.
 
-For a guided install, start with the deployment wizard:
+**Recommended starting point for first-time or customer deployments:** use the guided deployment wizard. It walks the operator through the setup conversation before anything is deployed, including provider, subscription, naming, authentication, Entra group strategy, existing shared services, RBAC scope, package publishing, and database bootstrap.
+
+Run it from PowerShell 7 (`pwsh`) at the repository root:
 
 ```powershell
+pwsh
 ./scripts/Start-CapacityDeployment.ps1
 ```
 
-Use plan-only mode when you want to walk the prompts, review the deployment plan, and copy the generated `deploy-infra.ps1` command without starting an Azure deployment:
+Use plan-only mode when you want to walk the same guided prompts, review the deployment plan, and copy the generated `deploy-infra.ps1` command without starting an Azure deployment:
 
 ```powershell
 ./scripts/Start-CapacityDeployment.ps1 -PlanOnly
 ```
 
-The wizard prompts for provider, subscription, naming, authentication, Entra group strategy, existing shared services, RBAC scope, package publishing, and database bootstrap. It uses secure prompts for secrets, does not write secrets to saved answer files, and only enables Entra group creation after explicit confirmation.
+The wizard uses secure prompts for secrets, does not write secrets to saved answer files, and only enables Entra group creation after explicit confirmation.
 
-Use script-based deployment directly with Central US default:
+Use script-based deployment directly only when you already know the exact deployment inputs and want to bypass the guided setup. Example with Central US default:
 
 ```powershell
 ./scripts/deploy-infra.ps1 \

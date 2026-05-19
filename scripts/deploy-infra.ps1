@@ -298,7 +298,7 @@ function Add-BicepDeploymentParameter([string]$Name, [object]$Value, [switch]$Re
 
 function Add-TerraformVariable([string]$Name, [object]$Value, [switch]$RequiredWhenSet) {
     if (Test-TerraformVariableSupported -VariableName $Name) {
-        return "-var=$Name=$Value"
+        return "-var=$Name=$(ConvertTo-TerraformLiteral $Value)"
     }
 
     $hasMeaningfulValue = $null -ne $Value -and -not [string]::IsNullOrWhiteSpace([string]$Value)
@@ -732,12 +732,12 @@ function Deploy-Terraform {
         if ($ManageEntraWebRedirectUri.IsPresent)                      { $tfVars += "-var=manage_entra_web_redirect_uri=true" }
         if (-not [string]::IsNullOrWhiteSpace($AdminGroupId))          { $tfVars += "-var=admin_group_id=$AdminGroupId" }
         if (-not [string]::IsNullOrWhiteSpace($ReportViewerGroupIds))  { $tfVars += Add-TerraformVariable -Name 'report_viewer_group_ids' -Value $ReportViewerGroupIds }
-        if ($PSBoundParameters.ContainsKey('WebReaderSubscriptionIds') -or $WebReaderSubscriptionIds.Count -gt 0)                   { $tfVars += "-var=web_reader_subscription_ids=$(ConvertTo-TerraformLiteral $WebReaderSubscriptionIds)" }
-        if ($PSBoundParameters.ContainsKey('WebReaderManagementGroupNames') -or $WebReaderManagementGroupNames.Count -gt 0)         { $tfVars += "-var=web_reader_management_group_names=$(ConvertTo-TerraformLiteral $WebReaderManagementGroupNames)" }
-        if ($PSBoundParameters.ContainsKey('WebQuotaWriterSubscriptionIds') -or $WebQuotaWriterSubscriptionIds.Count -gt 0)         { $tfVars += "-var=web_quota_writer_subscription_ids=$(ConvertTo-TerraformLiteral $WebQuotaWriterSubscriptionIds)" }
-        if ($PSBoundParameters.ContainsKey('WebQuotaWriterManagementGroupNames') -or $WebQuotaWriterManagementGroupNames.Count -gt 0){ $tfVars += "-var=web_quota_writer_management_group_names=$(ConvertTo-TerraformLiteral $WebQuotaWriterManagementGroupNames)" }
-        if ($PSBoundParameters.ContainsKey('WorkerRbacSubscriptionIds') -or $WorkerRbacSubscriptionIds.Count -gt 0)                 { $tfVars += "-var=worker_subscription_rbac_subscription_ids=$(ConvertTo-TerraformLiteral $WorkerRbacSubscriptionIds)" }
-        if ($PSBoundParameters.ContainsKey('WorkerRbacManagementGroupNames') -or $WorkerRbacManagementGroupNames.Count -gt 0)       { $tfVars += "-var=worker_rbac_management_group_names=$(ConvertTo-TerraformLiteral $WorkerRbacManagementGroupNames)" }
+        if ($PSBoundParameters.ContainsKey('WebReaderSubscriptionIds') -or $WebReaderSubscriptionIds.Count -gt 0)                   { $tfVars += Add-TerraformVariable -Name 'web_reader_subscription_ids' -Value $WebReaderSubscriptionIds }
+        if ($PSBoundParameters.ContainsKey('WebReaderManagementGroupNames') -or $WebReaderManagementGroupNames.Count -gt 0)         { $tfVars += Add-TerraformVariable -Name 'web_reader_management_group_names' -Value $WebReaderManagementGroupNames }
+        if ($PSBoundParameters.ContainsKey('WebQuotaWriterSubscriptionIds') -or $WebQuotaWriterSubscriptionIds.Count -gt 0)         { $tfVars += Add-TerraformVariable -Name 'web_quota_writer_subscription_ids' -Value $WebQuotaWriterSubscriptionIds }
+        if ($PSBoundParameters.ContainsKey('WebQuotaWriterManagementGroupNames') -or $WebQuotaWriterManagementGroupNames.Count -gt 0){ $tfVars += Add-TerraformVariable -Name 'web_quota_writer_management_group_names' -Value $WebQuotaWriterManagementGroupNames }
+        if ($PSBoundParameters.ContainsKey('WorkerRbacSubscriptionIds') -or $WorkerRbacSubscriptionIds.Count -gt 0)                 { $tfVars += Add-TerraformVariable -Name 'worker_subscription_rbac_subscription_ids' -Value $WorkerRbacSubscriptionIds }
+        if ($PSBoundParameters.ContainsKey('WorkerRbacManagementGroupNames') -or $WorkerRbacManagementGroupNames.Count -gt 0)       { $tfVars += Add-TerraformVariable -Name 'worker_rbac_management_group_names' -Value $WorkerRbacManagementGroupNames }
 
         $resolvedTerraformParameterFile = Resolve-DeploymentPath -Path $ParameterFile
         if ($resolvedTerraformParameterFile) {

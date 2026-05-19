@@ -104,6 +104,15 @@ function Resolve-SqlServerHostName([string]$ServerName) {
     return "$($ServerName.Trim()).database.windows.net"
 }
 
+function New-ManualDatabaseInitializeCommand([string]$SqlServerHostName, [string]$DatabaseName, [string]$IdentityName) {
+    $command = ".\scripts\initialize-database.ps1 -SqlServer `"$SqlServerHostName`" -SqlDatabase `"$DatabaseName`" -AppIdentityName `"$IdentityName`" -AuthenticationMethod ActiveDirectoryInteractive"
+    if (-not [string]::IsNullOrWhiteSpace($SqlEntraAdminLogin)) {
+        $command += " -EntraUser `"$SqlEntraAdminLogin`""
+    }
+
+    return $command
+}
+
 function Get-DatabaseBootstrapFailureGuidance([string]$ManualDatabaseInitializeCommand) {
     return "Database bootstrap failed after infrastructure deployment. If Azure SQL blocks the bootstrap connection, change the SQL server networking setting to Selected networks and add your current client IP, then rerun the database bootstrap. You can also skip database bootstrap during deployment and run the scripts later from an Azure-connected host. Manual command: $ManualDatabaseInitializeCommand"
 }
@@ -499,7 +508,7 @@ $effectiveSqlServerHostName = if ($useExistingSqlServer) {
     Resolve-SqlServerHostName -ServerName "sql-capdash-$Environment-$WorkloadSuffix"
 }
 $effectiveSqlDatabaseName = if ($useExistingSqlDatabase) { $ExistingSqlDatabaseName } else { "sqldb-capdash-$Environment" }
-$manualDatabaseInitializeCommand = ".\scripts\initialize-database.ps1 -SqlServer `"$effectiveSqlServerHostName`" -SqlDatabase `"$effectiveSqlDatabaseName`" -AppIdentityName `"$webAppName`""
+$manualDatabaseInitializeCommand = New-ManualDatabaseInitializeCommand -SqlServerHostName $effectiveSqlServerHostName -DatabaseName $effectiveSqlDatabaseName -IdentityName $webAppName
 
 function New-GeneratedSecret([int]$ByteCount = 32) {
     $bytes = New-Object byte[] $ByteCount
@@ -1082,7 +1091,7 @@ try {
         Invoke-ManagementGroupRbacAssignments -WebPrincipalId $webPrincipalId -WorkerPrincipalId $workerPrincipalId
     }
 
-    $manualDatabaseInitializeCommand = ".\scripts\initialize-database.ps1 -SqlServer `"$effectiveSqlServerHostName`" -SqlDatabase `"$effectiveSqlDatabaseName`" -AppIdentityName `"$webAppName`""
+    $manualDatabaseInitializeCommand = New-ManualDatabaseInitializeCommand -SqlServerHostName $effectiveSqlServerHostName -DatabaseName $effectiveSqlDatabaseName -IdentityName $webAppName
     $databaseBootstrapFailureGuidance = Get-DatabaseBootstrapFailureGuidance -ManualDatabaseInitializeCommand $manualDatabaseInitializeCommand
 
     if ($DeployWebApp) {

@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory = $true)][string]$AppIdentityName,
     [Parameter(Mandatory = $false)][string[]]$RuntimeRoles = @('db_datareader', 'db_datawriter'),
     [Parameter(Mandatory = $false)][switch]$GrantBootstrapRole,
-    [Parameter(Mandatory = $false)][ValidateSet('ActiveDirectoryAzCli', 'ActiveDirectoryDefault', 'ActiveDirectoryInteractive')][string]$AuthenticationMethod = 'ActiveDirectoryAzCli',
+    [Parameter(Mandatory = $false)][ValidateSet('ActiveDirectoryAzCli', 'ActiveDirectoryDefault', 'ActiveDirectoryInteractive', 'ActiveDirectoryDeviceCode', 'ActiveDirectoryIntegrated')][string]$AuthenticationMethod = 'ActiveDirectoryInteractive',
     [Parameter(Mandatory = $false)][string]$EntraUser
 )
 

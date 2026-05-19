@@ -10,10 +10,21 @@ if ([string]::IsNullOrWhiteSpace($ResourceGroup) -or [string]::IsNullOrWhiteSpac
     throw "Provide -ResourceGroup and -AppName, or set AZURE_RESOURCE_GROUP and AZURE_WEBAPP_NAME."
 }
 
-$scriptVersion = '2026-05-18.3'
+$scriptVersion = '2026-05-19.1'
 Write-Host "Starting clean web app deployment..."
 Write-Host "deploy-web-app.ps1 version: $scriptVersion"
 Write-Host "Source: $SourcePath"
+
+function Invoke-NativeCommandAllowStderr([scriptblock]$Command) {
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $script:ErrorActionPreference = 'Continue'
+        return & $Command
+    }
+    finally {
+        $script:ErrorActionPreference = $previousErrorActionPreference
+    }
+}
 
 if (-not $SkipTests) {
     if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
@@ -151,7 +162,7 @@ $deployArgs = @(
     '--timeout', '300'
 )
 
-$deployResult = az @deployArgs 2>&1
+$deployResult = Invoke-NativeCommandAllowStderr { az @deployArgs 2>&1 }
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "Deployment command accepted"

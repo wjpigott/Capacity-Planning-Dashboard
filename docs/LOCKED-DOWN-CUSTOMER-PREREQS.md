@@ -34,6 +34,16 @@ The deployment machine needs outbound access to the services used during setup:
 
 If outbound internet is blocked, the customer should provide an approved package mirror, pre-staged repository zip, Terraform provider cache, and npm package cache before the deployment window.
 
+Recommended tooling on the customer-approved machine:
+
+- Visual Studio Code with the GitHub Copilot extension enabled for operator troubleshooting and script review, if customer policy allows it.
+- Git for cloning or updating the approved repository copy.
+- PowerShell 7 for running the deployment and database helper scripts consistently.
+- Azure CLI for subscription selection, deployment, identity lookup, and RBAC follow-up commands.
+- Node.js and npm, followed by `npm install` from the repository root before web package deployment. The local test gate loads runtime dependencies such as `mssql`, `@azure/identity`, and `@azure/msal-node`.
+- Terraform if the Terraform deployment path is used.
+- `sqlcmd` for manual database initialization and DBA handoff scripts.
+
 ## Pre-Created Azure Resources
 
 The customer platform team should pre-create or approve the following resources before deployment. Some resources can be created by the dashboard infrastructure templates, but in locked-down environments these are often centrally managed and should be ready ahead of time.
@@ -178,6 +188,9 @@ Before the CSA or operator starts:
 
 - RDP/jump-box access is approved and tested.
 - The machine can access the correct GitHub repository or an approved offline copy.
+- Visual Studio Code with GitHub Copilot is installed and approved for use if the customer allows assisted troubleshooting on the deployment machine.
+- Git is installed for repository clone/pull operations.
+- PowerShell 7 is installed for the deployment scripts.
 - Azure CLI is installed and `az login` works for the deployment identity.
 - Terraform is installed if the Terraform path is used.
 - Node.js and npm are installed, and `npm install` can complete from the repo root or approved package cache.

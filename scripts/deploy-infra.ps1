@@ -587,6 +587,57 @@ function Resolve-TerraformCommand() {
     return $null
 }
 
+function Get-AzureResourceGroupSummary() {
+    $resourceGroupJson = Invoke-NativeCommandAllowStderr { az group show --name $ResourceGroupName --query '{id:id,location:location}' --output json 2>$null }
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($resourceGroupJson)) {
+        return $null
+    }
+
+    try {
+        return $resourceGroupJson | ConvertFrom-Json
+    }
+    catch {
+        Write-Warning "Could not parse Azure resource group lookup for '$ResourceGroupName'. Continuing; Terraform will create the resource group if it does not already exist. Azure CLI output: $resourceGroupJson"
+        return $null
+    }
+}
+
+function Import-TerraformResourceGroupIfExists([string]$Terraform, [string[]]$TerraformVarArgs, [object]$ExistingResourceGroup) {
+    $stateResources = & $Terraform state list 2>$null
+    if ($LASTEXITCODE -eq 0 -and @($stateResources) -contains 'azurerm_resource_group.rg') {
+        Write-Host "Terraform state already contains azurerm_resource_group.rg. Skipping resource group import."
+        return
+    }
+
+    if (-not $ExistingResourceGroup -or [string]::IsNullOrWhiteSpace([string]$ExistingResourceGroup.id)) {
+        return
+    }
+
+    try {
+        $subscriptionIdForImport = Invoke-NativeCommandAllowStderr { az account show --query id --output tsv 2>$null }
+    }
+    catch {
+        Write-Warning "Could not resolve the current Azure subscription for Terraform resource group import. Continuing; Terraform will create the resource group if it does not already exist. Azure CLI error: $($_.Exception.Message)"
+        return
+    }
+
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($subscriptionIdForImport)) {
+        Write-Warning "Could not resolve the current Azure subscription for Terraform resource group import. Continuing; Terraform will create the resource group if it does not already exist."
+        return
+    }
+
+    $resourceGroupId = ([string]$ExistingResourceGroup.id).Trim()
+    if ([string]::IsNullOrWhiteSpace($resourceGroupId)) {
+        $resourceGroupId = "/subscriptions/$($subscriptionIdForImport.Trim())/resourceGroups/$ResourceGroupName"
+    }
+
+    Write-Host "Resource group '$ResourceGroupName' already exists. Importing it into Terraform state..."
+    & $Terraform import -input=false @TerraformVarArgs 'azurerm_resource_group.rg' $resourceGroupId
+    if ($LASTEXITCODE -ne 0) {
+        throw "terraform import failed for existing resource group '$ResourceGroupName'. You can retry manually with: terraform import azurerm_resource_group.rg `"$resourceGroupId`""
+    }
+}
+
 function Get-AccessibleManagementGroupNames() {
     try {
         $responseJson = Invoke-NativeCommandAllowStderr { az rest --method get --url 'https://management.azure.com/providers/Microsoft.Management/managementGroups?api-version=2023-04-01' --output json 2>$null }
@@ -731,6 +782,11 @@ function Deploy-Terraform {
         if ($PSBoundParameters.ContainsKey('WorkerRbacSubscriptionIds') -or $WorkerRbacSubscriptionIds.Count -gt 0)                 { Set-TerraformVariableValue -Variables $tfVariables -Name 'worker_subscription_rbac_subscription_ids' -Value $WorkerRbacSubscriptionIds }
         if ($PSBoundParameters.ContainsKey('WorkerRbacManagementGroupNames') -or $WorkerRbacManagementGroupNames.Count -gt 0)       { Set-TerraformVariableValue -Variables $tfVariables -Name 'worker_rbac_management_group_names' -Value $WorkerRbacManagementGroupNames }
 
+        $existingTerraformResourceGroup = Get-AzureResourceGroupSummary
+        if ($existingTerraformResourceGroup -and -not [string]::IsNullOrWhiteSpace([string]$existingTerraformResourceGroup.location)) {
+            Set-TerraformVariableValue -Variables $tfVariables -Name 'resource_group_location' -Value ([string]$existingTerraformResourceGroup.location)
+        }
+
         $tfVars = @()
         $resolvedTerraformParameterFile = Resolve-DeploymentPath -Path $ParameterFile
         if ($resolvedTerraformParameterFile) {
@@ -741,6 +797,8 @@ function Deploy-Terraform {
         $tfVariablesJson = $tfVariables | ConvertTo-Json -Depth 10
         [System.IO.File]::WriteAllText($generatedTerraformVarFile, $tfVariablesJson, (New-Object System.Text.UTF8Encoding($false)))
         $tfVars += "-var-file=$generatedTerraformVarFile"
+
+        Import-TerraformResourceGroupIfExists -Terraform $terraform -TerraformVarArgs $tfVars -ExistingResourceGroup $existingTerraformResourceGroup
 
         Write-Host "Running Terraform apply..."
         & $terraform apply -auto-approve -input=false @tfVars

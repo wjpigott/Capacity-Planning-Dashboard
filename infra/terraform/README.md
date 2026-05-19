@@ -124,7 +124,8 @@ workload_suffix         = "cap003"
 The Terraform configuration declares the resource group as a managed resource. That means:
 
 - If the resource group does not exist yet, Terraform can create it.
-- If the resource group already exists, import it before the first apply.
+- If the resource group already exists and you deploy through `scripts/deploy-infra.ps1` or the guided installer, the wrapper imports `azurerm_resource_group.rg` before `terraform apply` and uses the existing resource group's actual location for `resource_group_location`.
+- If you run Terraform directly, import the resource group before the first apply.
 
 Example import:
 

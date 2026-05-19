@@ -22,25 +22,62 @@ if (-not $sqlcmd) {
     throw 'sqlcmd is required to initialize the database. Install SQL tools first.'
 }
 
+$sqlcmdHelp = (& $sqlcmd.Source '--help' 2>&1 | Out-String)
+$supportsAuthenticationMethod = $sqlcmdHelp -match '--authentication-method'
+
+function Get-SqlCmdAuthenticationArgs() {
+    if ($supportsAuthenticationMethod) {
+        return @('--authentication-method', $AuthenticationMethod)
+    }
+
+    if ($AuthenticationMethod -like 'ActiveDirectory*') {
+        return @('-G')
+    }
+
+    throw "The installed sqlcmd does not support --authentication-method, and '$AuthenticationMethod' cannot be mapped to legacy sqlcmd arguments. Install the newer sqlcmd or use an ActiveDirectory* authentication method."
+}
+
+function Invoke-SqlCmdNative([string[]]$Arguments, [string]$Description) {
+    $output = & $sqlcmd.Source @Arguments 2>&1
+    $exitCode = $LASTEXITCODE
+
+    if ($output) {
+        $output | ForEach-Object { Write-Host $_ }
+    }
+
+    if ($exitCode -ne 0) {
+        $outputText = ($output | Out-String).Trim()
+        $guidance = ''
+        if ($AuthenticationMethod -eq 'ActiveDirectoryAzCli') {
+            $guidance = ' If Azure CLI authentication is not supported by this sqlcmd build, retry with -AuthenticationMethod ActiveDirectoryInteractive -EntraUser <your-upn>, or install the newer sqlcmd that supports --authentication-method ActiveDirectoryAzCli.'
+        }
+
+        if ([string]::IsNullOrWhiteSpace($outputText)) {
+            throw "$Description failed with exit code $exitCode.$guidance"
+        }
+
+        throw "$Description failed with exit code $exitCode. sqlcmd output: $outputText$guidance"
+    }
+
+    return ($output | Out-String).Trim()
+}
+
 function Invoke-SqlCmdFile([string]$InputFile) {
     $args = @(
         '-S', $SqlServer,
         '-d', $SqlDatabase,
-        '--authentication-method', $AuthenticationMethod,
         '-C',
         '-b',
         '-i', $InputFile
     )
 
+    $args += Get-SqlCmdAuthenticationArgs
+
     if (-not [string]::IsNullOrWhiteSpace($EntraUser)) {
         $args += @('-U', $EntraUser)
     }
 
-    & $sqlcmd.Source @args
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "sqlcmd failed for '$InputFile' with exit code $LASTEXITCODE."
-    }
+    [void](Invoke-SqlCmdNative -Arguments $args -Description "sqlcmd file '$InputFile'")
 }
 
 function Invoke-SqlCmdQuery([string]$QueryText) {
@@ -60,7 +97,6 @@ function Invoke-SqlCmdQueryCapture([string]$QueryText) {
     $args = @(
         '-S', $SqlServer,
         '-d', $SqlDatabase,
-        '--authentication-method', $AuthenticationMethod,
         '-C',
         '-b',
         '-h', '-1',
@@ -68,17 +104,13 @@ function Invoke-SqlCmdQueryCapture([string]$QueryText) {
         '-Q', $QueryText
     )
 
+    $args += Get-SqlCmdAuthenticationArgs
+
     if (-not [string]::IsNullOrWhiteSpace($EntraUser)) {
         $args += @('-U', $EntraUser)
     }
 
-    $output = & $sqlcmd.Source @args
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "sqlcmd query failed with exit code $LASTEXITCODE."
-    }
-
-    return ($output | Out-String).Trim()
+    return Invoke-SqlCmdNative -Arguments $args -Description 'sqlcmd query'
 }
 
 function Test-DatabaseTableExists([string]$SchemaName, [string]$TableName) {

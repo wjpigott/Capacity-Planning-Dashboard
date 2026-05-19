@@ -184,7 +184,7 @@ If this command is skipped or cannot reach SQL, the app may deploy successfully 
 
 ## Deployment Machine Checklist
 
-Before the CSA or operator starts:
+Before the operator starts:
 
 - RDP/jump-box access is approved and tested.
 - The machine can access the correct GitHub repository or an approved offline copy.

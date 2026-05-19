@@ -75,6 +75,17 @@ function Resolve-DeploymentPath([string]$Path) {
     return (Resolve-Path $candidatePath).Path
 }
 
+function Invoke-NativeCommandAllowStderr([scriptblock]$Command) {
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $script:ErrorActionPreference = 'Continue'
+        return & $Command
+    }
+    finally {
+        $script:ErrorActionPreference = $previousErrorActionPreference
+    }
+}
+
 function Set-DeploymentResourceNames([string]$Suffix) {
     $script:webAppName = "app-capdash-$Environment-$Suffix"
     $script:functionAppName = "func-capdash-$Environment-$Suffix-appsvc"
@@ -137,7 +148,7 @@ function Test-WebSiteNameUsable([string]$Name, [string]$ResourceGroupName) {
     }
 
     try {
-        $subscriptionIdForNameCheck = az account show --query id --output tsv 2>$null
+        $subscriptionIdForNameCheck = Invoke-NativeCommandAllowStderr { az account show --query id --output tsv 2>$null }
     }
     catch {
         Write-Warning "Could not check App Service name availability for $Name because the current Azure subscription could not be resolved. Continuing with the requested name. Azure CLI error: $($_.Exception.Message)"
@@ -235,7 +246,7 @@ function Resolve-EntraAccessGroupId([string]$DisplayName, [string]$MailNickname,
     }
 
     Write-Host "Creating Entra group '$DisplayName'..."
-    $groupJson = az ad group create --display-name $DisplayName --mail-nickname $MailNickname --output json 2>$null
+    $groupJson = Invoke-NativeCommandAllowStderr { az ad group create --display-name $DisplayName --mail-nickname $MailNickname --output json 2>$null }
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($groupJson)) {
         throw "Could not create Entra group '$DisplayName'. The current Azure CLI identity may not have permission to create Entra security groups. Ask an Entra administrator to create the group and pass its object ID with -AdminGroupId or -ReportViewerGroupIds, or rerun from an identity with group creation rights."
     }
@@ -308,7 +319,7 @@ function Add-ManagementGroupRoleAssignment([string]$ManagementGroupName, [string
     }
 
     $scope = "/providers/Microsoft.Management/managementGroups/$ManagementGroupName"
-    $existingAssignment = az role assignment list --assignee $PrincipalId --role $RoleDefinitionId --scope $scope --query '[0].id' --output tsv 2>$null
+    $existingAssignment = Invoke-NativeCommandAllowStderr { az role assignment list --assignee $PrincipalId --role $RoleDefinitionId --scope $scope --query '[0].id' --output tsv 2>$null }
     if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($existingAssignment)) {
         Write-Host "RBAC already present: $RoleName for principal $PrincipalId at management group $ManagementGroupName."
         return
@@ -485,7 +496,7 @@ function New-GeneratedSecret([int]$ByteCount = 32) {
 }
 
 function Get-SqlAdminAccessToken() {
-    $token = az account get-access-token --resource https://database.windows.net/ --query accessToken --output tsv 2>$null
+    $token = Invoke-NativeCommandAllowStderr { az account get-access-token --resource https://database.windows.net/ --query accessToken --output tsv 2>$null }
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($token)) {
         throw 'Could not acquire an Azure SQL access token from the current Azure CLI login.'
     }
@@ -511,7 +522,7 @@ function Resolve-KeyVaultReferenceSecretValue([string]$SettingValue) {
     }
 
     $secretUri = $matches[1].Trim().Trim("'").Trim('"')
-    $resolvedValue = az keyvault secret show --id $secretUri --query value --output tsv 2>$null
+    $resolvedValue = Invoke-NativeCommandAllowStderr { az keyvault secret show --id $secretUri --query value --output tsv 2>$null }
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($resolvedValue)) {
         throw "Could not resolve the Key Vault secret referenced by $secretUri."
     }
@@ -530,7 +541,7 @@ function Resolve-WebAppSecretSettingValue(
         return $CurrentValue
     }
 
-    $resolvedSetting = az webapp config appsettings list --resource-group $ResourceGroupName --name $WebAppName --query "[?name=='$SettingName'].value | [0]" --output tsv 2>$null
+    $resolvedSetting = Invoke-NativeCommandAllowStderr { az webapp config appsettings list --resource-group $ResourceGroupName --name $WebAppName --query "[?name=='$SettingName'].value | [0]" --output tsv 2>$null }
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($resolvedSetting)) {
         if ($Required) {
             throw "Could not resolve $SettingName from the deployed web app settings. Pass -$($SettingName.Replace('_', '')) explicitly or verify the app setting exists."
@@ -586,7 +597,7 @@ function ConvertTo-TerraformLiteral([object]$Value) {
 
 function Get-AccessibleManagementGroupNames() {
     try {
-        $responseJson = az rest --method get --url 'https://management.azure.com/providers/Microsoft.Management/managementGroups?api-version=2023-04-01' --output json 2>$null
+        $responseJson = Invoke-NativeCommandAllowStderr { az rest --method get --url 'https://management.azure.com/providers/Microsoft.Management/managementGroups?api-version=2023-04-01' --output json 2>$null }
     }
     catch {
         throw "Could not enumerate accessible management groups from the current Azure CLI login. Choose 'Specify management group names' in the wizard, or pass -WebReaderManagementGroupNames and -WorkerRbacManagementGroupNames explicitly. Azure CLI error: $($_.Exception.Message)"

@@ -276,13 +276,24 @@ function Test-CommandAvailable([string]$CommandName) {
     return $null -ne (Get-Command $CommandName -ErrorAction SilentlyContinue)
 }
 
+function Invoke-NativeCommandAllowStderr([scriptblock]$Command) {
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $script:ErrorActionPreference = 'Continue'
+        return & $Command
+    }
+    finally {
+        $script:ErrorActionPreference = $previousErrorActionPreference
+    }
+}
+
 function Get-AzAccountContext() {
     if (-not (Test-CommandAvailable 'az')) {
         return $null
     }
 
     try {
-        $accountJson = az account show --output json 2>$null
+        $accountJson = Invoke-NativeCommandAllowStderr { az account show --output json 2>$null }
     }
     catch {
         return $null
@@ -375,7 +386,7 @@ function Test-AzureDeploymentPreflight([string]$SubscriptionId, [bool]$AuthEnabl
     }
 
     try {
-        $accountJson = az account show --output json 2>$null
+        $accountJson = Invoke-NativeCommandAllowStderr { az account show --output json 2>$null }
     }
     catch {
         throw "Azure CLI is not logged in or could not return the current account. Run 'az login --tenant <tenant-id>' and select the target subscription before deploying. Azure CLI error: $($_.Exception.Message)"
@@ -388,7 +399,7 @@ function Test-AzureDeploymentPreflight([string]$SubscriptionId, [bool]$AuthEnabl
     $account = $accountJson | ConvertFrom-Json
     if (-not [string]::IsNullOrWhiteSpace($SubscriptionId)) {
         try {
-            $subscriptionJson = az account show --subscription $SubscriptionId --output json 2>$null
+            $subscriptionJson = Invoke-NativeCommandAllowStderr { az account show --subscription $SubscriptionId --output json 2>$null }
         }
         catch {
             throw "Azure CLI cannot access subscription '$SubscriptionId'. Run 'az account list --output table' to confirm access, then run 'az account set --subscription $SubscriptionId'. Azure CLI error: $($_.Exception.Message)"

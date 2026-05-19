@@ -49,6 +49,7 @@ __pycache__/
 
 # Local-only docs (not tracked in git)
 .localdocs/
+docs/video/
 
 # Local debug markers
 tools/Get-AzVMAvailability/TEST_MARKER.txt

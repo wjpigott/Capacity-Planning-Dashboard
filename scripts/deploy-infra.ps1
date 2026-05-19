@@ -683,8 +683,14 @@ function Import-TerraformEntraWebRedirectUrisIfExists([string]$Terraform, [strin
 
     $importId = "/applications/$($applicationObjectId.Trim())/redirectUris/Web"
     Write-Host "Importing existing Entra Web redirect URI collection into Terraform state..."
-    & $Terraform import -input=false @TerraformVarArgs $resourceAddress $importId
+    $importOutput = Invoke-NativeCommandAllowStderr { & $Terraform import -input=false @TerraformVarArgs $resourceAddress $importId 2>&1 }
     if ($LASTEXITCODE -ne 0) {
+        $importText = ($importOutput | Out-String)
+        if ($importText -match 'Cannot import non-existent remote object') {
+            Write-Warning "Entra Web redirect URI collection was not found for application '$EntraClientId'. Continuing; Terraform apply will create it if redirect URI management is enabled."
+            return
+        }
+
         throw "terraform import failed for existing Entra Web redirect URI collection. You can retry manually with: terraform import '$resourceAddress' `"$importId`""
     }
 }

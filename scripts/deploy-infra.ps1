@@ -146,15 +146,29 @@ function Test-WebSiteNameUsable([string]$Name, [string]$ResourceGroupName) {
         name = $Name
         type = 'Microsoft.Web/sites'
     } | ConvertTo-Json -Compress
-    $availabilityJson = az rest `
-        --method post `
-        --url "https://management.azure.com/subscriptions/$($subscriptionIdForNameCheck.Trim())/providers/Microsoft.Web/checknameavailability?api-version=2023-12-01" `
-        --headers 'Content-Type=application/json' `
-        --body $availabilityRequest `
-        --output json 2>$null
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($availabilityJson)) {
-        Write-Warning "Could not check App Service name availability for $Name. Continuing with the requested name."
+
+    $availabilityRequestFile = Join-Path $env:TEMP ("capdash-name-availability-{0}.json" -f ([guid]::NewGuid().ToString('N')))
+    try {
+        Set-Content -Path $availabilityRequestFile -Value $availabilityRequest -Encoding utf8
+        $availabilityJson = az rest `
+            --method post `
+            --url "https://management.azure.com/subscriptions/$($subscriptionIdForNameCheck.Trim())/providers/Microsoft.Web/checknameavailability?api-version=2023-12-01" `
+            --headers 'Content-Type=application/json' `
+            --body "@$availabilityRequestFile" `
+            --output json 2>$null
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($availabilityJson)) {
+            Write-Warning "Could not check App Service name availability for $Name. Continuing with the requested name."
+            return $true
+        }
+    }
+    catch {
+        Write-Warning "Could not check App Service name availability for $Name. Continuing with the requested name. Azure CLI error: $($_.Exception.Message)"
         return $true
+    }
+    finally {
+        if (Test-Path $availabilityRequestFile) {
+            Remove-Item $availabilityRequestFile -Force
+        }
     }
 
     $availability = $availabilityJson | ConvertFrom-Json

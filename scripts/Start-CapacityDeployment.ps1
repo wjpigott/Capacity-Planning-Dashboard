@@ -784,12 +784,18 @@ if (Prompt-YesNo -Name 'UseExistingSql' -Question 'Does the customer already hav
 $existingKeyVaultName = ''
 $existingKeyVaultResourceGroupName = ''
 $keyVaultNameOverride = ''
+$keyVaultPublicNetworkAccess = 'Disabled'
 if (Prompt-YesNo -Name 'UseExistingKeyVault' -Question 'Does the customer already have a Key Vault to reuse?' -DefaultValue $false) {
     $existingKeyVaultName = Prompt-String -Name 'ExistingKeyVaultName' -Question 'Existing Key Vault name' -Required
     $existingKeyVaultResourceGroupName = Prompt-String -Name 'ExistingKeyVaultResourceGroupName' -Question 'Existing Key Vault resource group' -DefaultValue $resourceGroupName
 }
 elseif ($provider -eq 'Terraform') {
     $keyVaultNameOverride = Prompt-String -Name 'KeyVaultNameOverride' -Question 'Optional Key Vault name override for Terraform soft-delete/name conflicts'
+}
+
+if ($provider -eq 'Terraform') {
+    $enableKeyVaultPublicNetworkAccess = Prompt-YesNo -Name 'EnableKeyVaultPublicNetworkAccess' -Question 'Allow Terraform runner public network access to Key Vault for secret provisioning?' -DefaultValue $true
+    $keyVaultPublicNetworkAccess = if ($enableKeyVaultPublicNetworkAccess) { 'Enabled' } else { 'Disabled' }
 }
 
 $existingWorkerStorageAccountName = ''
@@ -893,6 +899,7 @@ Add-DeployArgument -Arguments $deployArguments -Name '-WebQuotaWriterSubscriptio
 Add-DeployArgument -Arguments $deployArguments -Name '-WebQuotaWriterManagementGroupNames' -Value $webQuotaWriterManagementGroupNames
 Add-DeployArgument -Arguments $deployArguments -Name '-QuotaManagementGroupId' -Value $quotaManagementGroupId
 Add-DeployArgument -Arguments $deployArguments -Name '-KeyVaultNameOverride' -Value $keyVaultNameOverride
+Add-DeployArgument -Arguments $deployArguments -Name '-KeyVaultPublicNetworkAccess' -Value $keyVaultPublicNetworkAccess
 Add-DeployArgument -Arguments $deployArguments -Name '-ExistingSqlServerName' -Value $existingSqlServerName
 Add-DeployArgument -Arguments $deployArguments -Name '-ExistingSqlServerResourceGroupName' -Value $existingSqlServerResourceGroupName
 Add-DeployArgument -Arguments $deployArguments -Name '-ExistingSqlDatabaseName' -Value $existingSqlDatabaseName
@@ -944,6 +951,7 @@ $plan = [ordered]@{
     AccessGroupMode = if ($authEnabled) { Get-Answer -Name 'AccessGroupMode' -DefaultValue '(not set)' } else { 'Auth disabled' }
     ExistingSql = if ([string]::IsNullOrWhiteSpace($existingSqlServerName)) { 'No' } else { $existingSqlServerName }
     ExistingKeyVault = if ([string]::IsNullOrWhiteSpace($existingKeyVaultName)) { 'No' } else { $existingKeyVaultName }
+    KeyVaultPublicNetworkAccess = if ($provider -eq 'Terraform') { $keyVaultPublicNetworkAccess } else { 'Template default' }
     ExistingWorkerStorage = if ([string]::IsNullOrWhiteSpace($existingWorkerStorageAccountName)) { 'No' } else { $existingWorkerStorageAccountName }
     ExistingVirtualNetwork = if ([string]::IsNullOrWhiteSpace($existingVirtualNetworkName)) { 'No' } else { $existingVirtualNetworkName }
     RbacMode = $rbacMode

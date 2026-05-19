@@ -14,6 +14,7 @@ param(
     [Parameter(Mandatory = $false)][string[]]$WebQuotaWriterManagementGroupNames = @(),
     [Parameter(Mandatory = $false)][string]$QuotaManagementGroupId,
     [Parameter(Mandatory = $false)][string]$KeyVaultNameOverride,
+    [Parameter(Mandatory = $false)][ValidateSet('Enabled','Disabled')][string]$KeyVaultPublicNetworkAccess = 'Enabled',
     [Parameter(Mandatory = $false)][string]$ExistingSqlServerName,
     [Parameter(Mandatory = $false)][string]$ExistingSqlServerResourceGroupName,
     [Parameter(Mandatory = $false)][string]$ExistingSqlDatabaseName,
@@ -756,6 +757,7 @@ function Deploy-Terraform {
         if (-not [string]::IsNullOrWhiteSpace($SessionSecret))       { $tfVariables['session_secret'] = $SessionSecret }
         if (-not [string]::IsNullOrWhiteSpace($WorkerSharedSecret))  { $tfVariables['worker_shared_secret'] = $WorkerSharedSecret }
         if (-not [string]::IsNullOrWhiteSpace($KeyVaultNameOverride)){ $tfVariables['key_vault_name_override'] = $KeyVaultNameOverride }
+        Set-TerraformVariableValue -Variables $tfVariables -Name 'key_vault_public_network_access' -Value $KeyVaultPublicNetworkAccess
         if (-not [string]::IsNullOrWhiteSpace($QuotaManagementGroupId)){ $tfVariables['quota_management_group_id'] = $QuotaManagementGroupId }
         if (-not [string]::IsNullOrWhiteSpace($ExistingSqlServerName))                { $tfVariables['existing_sql_server_name'] = $ExistingSqlServerName }
         if (-not [string]::IsNullOrWhiteSpace($ExistingSqlServerResourceGroupName))   { $tfVariables['existing_sql_server_resource_group_name'] = $ExistingSqlServerResourceGroupName }

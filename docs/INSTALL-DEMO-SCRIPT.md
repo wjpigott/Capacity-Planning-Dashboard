@@ -186,9 +186,14 @@ Clean Terraform demo answers:
 Does the customer already have an Azure SQL server to reuse? (y/N): n
 Does the customer already have a Key Vault to reuse? (y/N): n
 Optional Key Vault name override for Terraform soft-delete/name conflicts:
+Allow Terraform runner public network access to Key Vault for secret provisioning? (Y/n): y
 Does the customer already have a worker storage account to reuse? (y/N): n
 Does the customer already have a Virtual Network to reuse? (y/N): n
 ```
+
+Terraform note:
+
+"Terraform creates the initial Key Vault secrets through the machine running Terraform. For a local installer run, the Key Vault must allow public network access during provisioning. If the customer requires private-only Key Vault access, run Terraform from a host that has approved private-link connectivity and answer `N` to this prompt."
 
 ## Scene 8: RBAC Scope
 

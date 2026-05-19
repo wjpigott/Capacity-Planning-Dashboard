@@ -227,7 +227,7 @@ All variables have defaults and can be overridden via tfvars or CLI flags.
 | `existing_app_service_integration_subnet_name` | `""` | Existing subnet delegated to `Microsoft.Web/serverFarms` for Web App and Function App VNet integration |
 | `existing_private_endpoint_subnet_name` | `""` | Existing subnet for SQL and Key Vault private endpoints |
 | `sql_public_network_access` | `Disabled` | SQL Server public access |
-| `key_vault_public_network_access` | `Disabled` | Key Vault public access |
+| `key_vault_public_network_access` | `Disabled` | Key Vault public access. The guided Terraform wrapper sets this to `Enabled` by default so a local Terraform runner can provision secrets; use `Disabled` only when Terraform runs from a private-link-connected network path. |
 | `existing_key_vault_name` | `""` | Existing Key Vault name to reuse |
 | `existing_key_vault_resource_group_name` | `""` | Optional resource group override for the existing Key Vault |
 | `worker_shared_secret` | `""` | Shared secret between web app and worker (sensitive) |

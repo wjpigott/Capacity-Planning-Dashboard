@@ -924,7 +924,26 @@ This section documents which tables/views are used by each product area and whic
 
 ### Direct Azure API Learn references
 
-The dashboard calls a small set of Azure APIs directly instead of relying only on Az PowerShell wrappers. Use these Learn pages as the canonical references for request shapes, response payloads, and version changes.
+The dashboard calls a small set of Azure Resource Manager APIs directly instead of relying only on Az PowerShell wrappers. All ARM calls use `https://management.azure.com` with a managed-identity or Azure credential bearer token for the `https://management.azure.com/.default` scope.
+
+Quick answer for capacity and quota data:
+
+| Dashboard area | API route pattern | Current API version in code | What it provides |
+| --- | --- | --- | --- |
+| Subscription discovery | `GET /subscriptions` | `2020-01-01` | Enabled subscriptions visible to the dashboard identity. |
+| Management-group subscription discovery | `GET /providers/Microsoft.Management/managementGroups/{managementGroupName}/descendants` | `2020-05-01` | Subscriptions under configured ingestion management groups. |
+| Compute capacity/quota ingestion | `GET /subscriptions/{subscriptionId}/providers/Microsoft.Compute/locations/{region}/usages` | `2024-03-01` | Regional VM-family quota usage and limits written to `dbo.CapacitySnapshot`. |
+| Compute SKU availability | `GET /subscriptions/{subscriptionId}/providers/Microsoft.Compute/skus?$filter=location eq '{region}'` | `2024-03-01` | VM SKUs, families, capabilities, and regional availability used to enrich capacity rows. |
+| Live placement score | `POST /subscriptions/{subscriptionId}/providers/Microsoft.Compute/locations/{region}/placementScores/spot/generate` | `2025-06-05` | On-demand placement score results for selected SKUs, regions, subscription, and desired count. |
+| Quota management-group discovery | `GET /providers/Microsoft.Management/managementGroups` | `2023-04-01` | Management groups visible to the dashboard identity for quota scope selection. |
+| Quota group discovery | `GET /providers/Microsoft.Management/managementGroups/{managementGroupId}/providers/Microsoft.Quota/groupQuotas` | `2025-09-01` | Quota groups under the selected management group. |
+| Quota group subscriptions | `GET /providers/Microsoft.Management/managementGroups/{managementGroupId}/providers/Microsoft.Quota/groupQuotas/{groupQuotaName}/subscriptions` | `2025-09-01` | Subscriptions associated with a quota group. |
+| Quota allocation/readiness | `GET /providers/Microsoft.Management/managementGroups/{managementGroupId}/subscriptions/{subscriptionId}/providers/Microsoft.Quota/groupQuotas/{groupQuotaName}/resourceProviders/Microsoft.Compute/quotaAllocations/{region}` | `2025-09-01` | Per-subscription quota allocation details for Compute families in a region. |
+| Quota apply | `PATCH /providers/Microsoft.Management/managementGroups/{managementGroupId}/subscriptions/{subscriptionId}/providers/Microsoft.Quota/groupQuotas/{groupQuotaName}/resourceProviders/Microsoft.Compute/quotaAllocations/{region}` | `2025-09-01` | Submits quota allocation changes for approved quota move/apply rows. |
+| AI quota ingestion | `GET /subscriptions/{subscriptionId}/providers/Microsoft.CognitiveServices/locations/{region}/usages` | `2023-05-01` | Azure OpenAI and optionally broader Azure AI quota rows. |
+| AI model catalog | `GET /subscriptions/{subscriptionId}/providers/Microsoft.CognitiveServices/locations/{region}/models` | `2024-10-01`, fallback `2023-05-01` | Provider-aware model availability catalog by region. |
+
+Use these Learn pages as the canonical references for request shapes, response payloads, and version changes.
 
 #### Capacity Score and Capacity Recommender
 

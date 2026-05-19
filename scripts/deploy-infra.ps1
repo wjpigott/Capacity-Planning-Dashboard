@@ -113,6 +113,14 @@ function New-ManualDatabaseInitializeCommand([string]$SqlServerHostName, [string
     return $command
 }
 
+function New-ManualWebPackageDeployCommand([string]$ResourceGroupName, [string]$AppName) {
+    return ".\deploy-web-app.ps1 -ResourceGroup `"$ResourceGroupName`" -AppName `"$AppName`""
+}
+
+function New-ManualWorkerPackageDeployCommand([string]$ResourceGroupName, [string]$FunctionAppName) {
+    return ".\scripts\deploy-worker.ps1 -ResourceGroupName `"$ResourceGroupName`" -FunctionAppName `"$FunctionAppName`""
+}
+
 function Get-DatabaseBootstrapFailureGuidance([string]$ManualDatabaseInitializeCommand) {
     return "Database bootstrap failed after infrastructure deployment. If Azure SQL blocks the bootstrap connection, change the SQL server networking setting to Selected networks and add your current client IP, then rerun the database bootstrap. You can also skip database bootstrap during deployment and run the scripts later from an Azure-connected host. Manual command: $ManualDatabaseInitializeCommand"
 }
@@ -1092,6 +1100,8 @@ try {
     }
 
     $manualDatabaseInitializeCommand = New-ManualDatabaseInitializeCommand -SqlServerHostName $effectiveSqlServerHostName -DatabaseName $effectiveSqlDatabaseName -IdentityName $webAppName
+    $manualWebPackageDeployCommand = New-ManualWebPackageDeployCommand -ResourceGroupName $ResourceGroupName -AppName $webAppName
+    $manualWorkerPackageDeployCommand = New-ManualWorkerPackageDeployCommand -ResourceGroupName $ResourceGroupName -FunctionAppName $functionAppName
     $databaseBootstrapFailureGuidance = Get-DatabaseBootstrapFailureGuidance -ManualDatabaseInitializeCommand $manualDatabaseInitializeCommand
 
     if ($DeployWebApp) {
@@ -1116,6 +1126,11 @@ try {
         }
     }
 
+    if (-not $DeployWebApp) {
+        Write-Host 'Dashboard web package deployment was skipped. Run this command from the repository root when you are ready to publish the web app:' -ForegroundColor Yellow
+        Write-Host $manualWebPackageDeployCommand -ForegroundColor Yellow
+    }
+
     if ($DeployWorkerApp) {
         if (-not (Test-Path $deployWorkerScript)) {
             throw "Worker deployment script not found: $deployWorkerScript"
@@ -1126,6 +1141,11 @@ try {
         if ($LASTEXITCODE -ne 0) {
             throw "Worker package deployment failed with exit code $LASTEXITCODE."
         }
+    }
+
+    if (-not $DeployWorkerApp) {
+        Write-Host 'Worker package deployment was skipped. Run this command from the repository root when you are ready to publish the function app:' -ForegroundColor Yellow
+        Write-Host $manualWorkerPackageDeployCommand -ForegroundColor Yellow
     }
 
     if ($ApplyDatabaseBootstrap) {

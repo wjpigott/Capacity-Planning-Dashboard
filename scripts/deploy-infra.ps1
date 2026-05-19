@@ -297,6 +297,16 @@ function Test-BicepParameterSupported([string]$ParameterName) {
     return [bool](Select-String -Path $templatePath -Pattern ("^\s*param\s+{0}\b" -f [regex]::Escape($ParameterName)) -Quiet)
 }
 
+function Test-BicepParameterDeclared([string]$Content, [string]$ParameterName) {
+    return $Content -match ("(?m)^\s*param\s+{0}\b" -f [regex]::Escape($ParameterName))
+}
+
+function Add-BicepParamLineIfMissing([System.Collections.Generic.List[string]]$Lines, [string]$SourceContent, [string]$ParameterName, [string]$Line) {
+    if (-not (Test-BicepParameterDeclared -Content $SourceContent -ParameterName $ParameterName)) {
+        $Lines.Add($Line)
+    }
+}
+
 function Test-TerraformVariableSupported([string]$VariableName) {
     $variablesPath = Join-Path $repoRoot 'infra\terraform\variables.tf'
     if (-not (Test-Path $variablesPath)) {
@@ -589,7 +599,17 @@ function Resolve-WebAppSecretSettingValue(
         return $CurrentValue
     }
 
-    return Resolve-KeyVaultReferenceSecretValue -SettingValue $resolvedSetting.Trim()
+    try {
+        return Resolve-KeyVaultReferenceSecretValue -SettingValue $resolvedSetting.Trim()
+    }
+    catch {
+        if ($Required) {
+            throw
+        }
+
+        Write-Warning "Could not reuse existing $SettingName from '$WebAppName': $($_.Exception.Message) A fresh value will be generated or supplied for this deployment run."
+        return $CurrentValue
+    }
 }
 
 function Resolve-TerraformCommand() {
@@ -771,7 +791,7 @@ function Get-AccessibleManagementGroupNames() {
         throw "Could not enumerate accessible management groups from the current Azure CLI login. Choose 'Specify management group names' in the wizard, or pass -WebReaderManagementGroupNames and -WorkerRbacManagementGroupNames explicitly."
     }
 
-    $response = $responseJson | ConvertFrom-Json -Depth 20
+    $response = $responseJson | ConvertFrom-Json
     if (-not $response -or -not $response.value) {
         return @()
     }
@@ -1034,12 +1054,12 @@ if ($hasManagementGroupRbac) {
 
 if ($resolvedParameterFile -and [System.IO.Path]::GetExtension($resolvedParameterFile).Equals('.bicepparam', [System.StringComparison]::OrdinalIgnoreCase)) {
     $temporaryParameterFile = Join-Path (Split-Path -Path $resolvedParameterFile -Parent) ("capdash-runtime-{0}.bicepparam" -f ([guid]::NewGuid().ToString('N')))
-    $temporaryBicepParamLines = @(
-        (Get-Content -Path $resolvedParameterFile -Raw).TrimEnd(),
-        '',
-        "param ingestApiKey = '$IngestApiKey'",
-        "param sessionSecret = '$SessionSecret'"
-    )
+    $sourceBicepParamContent = (Get-Content -Path $resolvedParameterFile -Raw).TrimEnd()
+    $temporaryBicepParamLines = [System.Collections.Generic.List[string]]::new()
+    $temporaryBicepParamLines.Add($sourceBicepParamContent)
+    $temporaryBicepParamLines.Add('')
+    Add-BicepParamLineIfMissing -Lines $temporaryBicepParamLines -SourceContent $sourceBicepParamContent -ParameterName 'ingestApiKey' -Line "param ingestApiKey = '$IngestApiKey'"
+    Add-BicepParamLineIfMissing -Lines $temporaryBicepParamLines -SourceContent $sourceBicepParamContent -ParameterName 'sessionSecret' -Line "param sessionSecret = '$SessionSecret'"
 
     if ($WorkerRbacSubscriptionIds.Count -gt 0 -or $WorkerRbacManagementGroupNames.Count -gt 0 -or $WebReaderSubscriptionIds.Count -gt 0 -or $WebReaderManagementGroupNames.Count -gt 0 -or $WebQuotaWriterSubscriptionIds.Count -gt 0 -or $WebQuotaWriterManagementGroupNames.Count -gt 0) {
         $webSubscriptionParamLines = $WebReaderSubscriptionIds | ForEach-Object { "  '$_'" }
@@ -1057,21 +1077,19 @@ if ($resolvedParameterFile -and [System.IO.Path]::GetExtension($resolvedParamete
         $assignWorkerComputeRecommendationsRoleBicep = $AssignWorkerComputeRecommendationsRole.ToString().ToLowerInvariant()
         $assignWorkerCostManagementReaderRoleBicep = $AssignWorkerCostManagementReaderRole.ToString().ToLowerInvariant()
         $assignWorkerBillingReaderRoleBicep = $AssignWorkerBillingReaderRole.ToString().ToLowerInvariant()
-        $temporaryBicepParamLines += @(
-            "param webReaderSubscriptionIds = $webSubscriptionParamBlock",
-            "param webReaderManagementGroupNames = $webManagementGroupParamBlock",
-            "param webQuotaWriterSubscriptionIds = $webQuotaWriterSubscriptionParamBlock",
-            "param webQuotaWriterManagementGroupNames = $webQuotaWriterManagementGroupParamBlock",
-            "param workerSubscriptionRbacSubscriptionIds = $workerSubscriptionParamBlock",
-            "param workerRbacManagementGroupNames = $workerManagementGroupParamBlock",
-            "param assignWorkerComputeRecommendationsRole = $assignWorkerComputeRecommendationsRoleBicep",
-            "param assignWorkerCostManagementReaderRole = $assignWorkerCostManagementReaderRoleBicep",
-            "param assignWorkerBillingReaderRole = $assignWorkerBillingReaderRoleBicep",
-            "param deployManagementGroupRbacAssignments = false"
-        )
+        Add-BicepParamLineIfMissing -Lines $temporaryBicepParamLines -SourceContent $sourceBicepParamContent -ParameterName 'webReaderSubscriptionIds' -Line "param webReaderSubscriptionIds = $webSubscriptionParamBlock"
+        Add-BicepParamLineIfMissing -Lines $temporaryBicepParamLines -SourceContent $sourceBicepParamContent -ParameterName 'webReaderManagementGroupNames' -Line "param webReaderManagementGroupNames = $webManagementGroupParamBlock"
+        Add-BicepParamLineIfMissing -Lines $temporaryBicepParamLines -SourceContent $sourceBicepParamContent -ParameterName 'webQuotaWriterSubscriptionIds' -Line "param webQuotaWriterSubscriptionIds = $webQuotaWriterSubscriptionParamBlock"
+        Add-BicepParamLineIfMissing -Lines $temporaryBicepParamLines -SourceContent $sourceBicepParamContent -ParameterName 'webQuotaWriterManagementGroupNames' -Line "param webQuotaWriterManagementGroupNames = $webQuotaWriterManagementGroupParamBlock"
+        Add-BicepParamLineIfMissing -Lines $temporaryBicepParamLines -SourceContent $sourceBicepParamContent -ParameterName 'workerSubscriptionRbacSubscriptionIds' -Line "param workerSubscriptionRbacSubscriptionIds = $workerSubscriptionParamBlock"
+        Add-BicepParamLineIfMissing -Lines $temporaryBicepParamLines -SourceContent $sourceBicepParamContent -ParameterName 'workerRbacManagementGroupNames' -Line "param workerRbacManagementGroupNames = $workerManagementGroupParamBlock"
+        Add-BicepParamLineIfMissing -Lines $temporaryBicepParamLines -SourceContent $sourceBicepParamContent -ParameterName 'assignWorkerComputeRecommendationsRole' -Line "param assignWorkerComputeRecommendationsRole = $assignWorkerComputeRecommendationsRoleBicep"
+        Add-BicepParamLineIfMissing -Lines $temporaryBicepParamLines -SourceContent $sourceBicepParamContent -ParameterName 'assignWorkerCostManagementReaderRole' -Line "param assignWorkerCostManagementReaderRole = $assignWorkerCostManagementReaderRoleBicep"
+        Add-BicepParamLineIfMissing -Lines $temporaryBicepParamLines -SourceContent $sourceBicepParamContent -ParameterName 'assignWorkerBillingReaderRole' -Line "param assignWorkerBillingReaderRole = $assignWorkerBillingReaderRoleBicep"
+        Add-BicepParamLineIfMissing -Lines $temporaryBicepParamLines -SourceContent $sourceBicepParamContent -ParameterName 'deployManagementGroupRbacAssignments' -Line 'param deployManagementGroupRbacAssignments = false'
     }
 
-    $temporaryBicepParamContent = $temporaryBicepParamLines -join [Environment]::NewLine
+    $temporaryBicepParamContent = $temporaryBicepParamLines.ToArray() -join [Environment]::NewLine
     Set-Content -Path $temporaryParameterFile -Value $temporaryBicepParamContent -Encoding utf8
     $resolvedParameterFile = $temporaryParameterFile
 }
@@ -1154,7 +1172,7 @@ try {
         }
 
         if (-not [string]::IsNullOrWhiteSpace($deploymentResultJson)) {
-            $deploymentResult = $deploymentResultJson | ConvertFrom-Json -Depth 100
+            $deploymentResult = $deploymentResultJson | ConvertFrom-Json
             if ($deploymentResult.properties.outputs.webAppName.value) {
                 $webAppName = $deploymentResult.properties.outputs.webAppName.value
             }

@@ -17,6 +17,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    throw "Capacity deployment must be run from PowerShell 7 or later. Current host is $($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion). Start PowerShell 7 with 'pwsh', then run: cd $((Resolve-Path (Join-Path $PSScriptRoot '..')).Path); .\scripts\Start-CapacityDeployment.ps1"
+}
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $deployScript = Join-Path $repoRoot 'scripts\deploy-infra.ps1'
 
@@ -69,7 +73,7 @@ function Read-AnswersFile([string]$Path) {
         return @{}
     }
 
-    return ConvertTo-Hashtable ($json | ConvertFrom-Json -Depth 20)
+    return ConvertTo-Hashtable ($json | ConvertFrom-Json)
 }
 
 function Get-Answer([string]$Name, [object]$DefaultValue = $null) {
@@ -285,6 +289,87 @@ function Invoke-NativeCommandAllowStderr([scriptblock]$Command) {
     finally {
         $script:ErrorActionPreference = $previousErrorActionPreference
     }
+}
+
+function Get-MissingNpmDependencyNames([string]$ProjectRoot) {
+    $packageJsonPath = Join-Path $ProjectRoot 'package.json'
+    if (-not (Test-Path $packageJsonPath)) {
+        throw "package.json not found at $packageJsonPath"
+    }
+
+    $packageJson = Get-Content -Path $packageJsonPath -Raw | ConvertFrom-Json
+    if (-not $packageJson.dependencies) {
+        return @()
+    }
+
+    $nodeModulesPath = Join-Path $ProjectRoot 'node_modules'
+    return @(
+        $packageJson.dependencies.PSObject.Properties.Name |
+            Where-Object {
+                $dependencyPath = Join-Path $nodeModulesPath ($_ -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+                -not (Test-Path $dependencyPath)
+            }
+    )
+}
+
+function Invoke-NpmInstall([string]$ProjectRoot) {
+    Write-Host 'Running npm install before deployment...' -ForegroundColor Cyan
+    Push-Location $ProjectRoot
+    try {
+        & npm install | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            throw "npm install failed with exit code $LASTEXITCODE."
+        }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+function Resolve-WebPackageTestGate([bool]$DeployWebApp, [bool]$SkipWebAppTests) {
+    if (-not $DeployWebApp -or $SkipWebAppTests) {
+        return $SkipWebAppTests
+    }
+
+    if (-not (Test-CommandAvailable 'npm')) {
+        $message = 'npm was not found on PATH. Install Node.js/npm before running the web package test gate.'
+        if ($NonInteractive) {
+            throw $message
+        }
+
+        Write-Warning $message
+        if (Prompt-YesNo -Name 'SkipWebAppTestsBecauseNpmMissing' -Question 'Skip npm test and continue deployment anyway?' -DefaultValue $false) {
+            return Set-Answer -Name 'SkipWebAppTests' -Value $true
+        }
+
+        throw 'Deployment cancelled. Install Node.js/npm or rerun with web tests intentionally skipped.'
+    }
+
+    $missingDependencies = @(Get-MissingNpmDependencyNames -ProjectRoot $repoRoot)
+    if ($missingDependencies.Count -eq 0) {
+        return $SkipWebAppTests
+    }
+
+    Write-Warning "npm dependencies are not restored in $repoRoot. Missing packages include: $($missingDependencies -join ', ')."
+    if ($NonInteractive) {
+        throw 'Run npm install from the repository root before deployment, or set SkipWebAppTests to true intentionally.'
+    }
+
+    if (Prompt-YesNo -Name 'RunNpmInstallBeforeDeployment' -Question 'Run npm install now before deployment?' -DefaultValue $true) {
+        Invoke-NpmInstall -ProjectRoot $repoRoot
+        $missingDependencies = @(Get-MissingNpmDependencyNames -ProjectRoot $repoRoot)
+        if ($missingDependencies.Count -eq 0) {
+            return $SkipWebAppTests
+        }
+
+        Write-Warning "npm install completed, but these dependencies are still missing: $($missingDependencies -join ', ')."
+    }
+
+    if (Prompt-YesNo -Name 'SkipWebAppTestsBecauseDependenciesMissing' -Question 'Skip npm test and continue deployment anyway?' -DefaultValue $false) {
+        return Set-Answer -Name 'SkipWebAppTests' -Value $true
+    }
+
+    throw 'Deployment cancelled. Run npm install from the repository root or rerun with web tests intentionally skipped.'
 }
 
 function Get-AzAccountContext() {
@@ -871,10 +956,7 @@ elseif ($workerSecretMode -eq 'Provide existing') {
 
 $deployWebApp = Prompt-YesNo -Name 'DeployWebApp' -Question 'Deploy the dashboard web package after infrastructure succeeds?' -DefaultValue $true
 $skipWebAppTests = $false
-if ($deployWebApp -and -not (Test-CommandAvailable 'npm')) {
-    Write-Warning 'npm was not found on PATH. The web package can still be deployed, but the pre-deploy npm test gate will be skipped on this machine.'
-    $skipWebAppTests = Set-Answer -Name 'SkipWebAppTests' -Value $true
-}
+$skipWebAppTests = [bool](Resolve-WebPackageTestGate -DeployWebApp $deployWebApp -SkipWebAppTests $skipWebAppTests)
 $deployWorkerApp = Prompt-YesNo -Name 'DeployWorkerApp' -Question 'Deploy the worker package after infrastructure succeeds?' -DefaultValue $true
 $defaultBootstrap = [string]::IsNullOrWhiteSpace($existingSqlServerName)
 $applyDatabaseBootstrap = Prompt-YesNo -Name 'ApplyDatabaseBootstrap' -Question 'Run database bootstrap through the deployed web app?' -DefaultValue $defaultBootstrap

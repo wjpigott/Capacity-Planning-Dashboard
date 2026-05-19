@@ -85,6 +85,17 @@ If a user is not signed in, or signs in without membership in `CapacityReportVie
 
 ![Access Restricted dashboard sign-in screen](image.png)
 
+Troubleshooting `Report access is not enabled for your account`:
+
+1. Check the deployed app's auth diagnostics at `https://<web-app-name>.azurewebsites.net/api/auth/me`.
+2. If `adminGroupConfigured` and `reportViewerGroupConfigured` are `true`, but `groupClaimPresent` is `false` and `groupCount` is `0`, the app settings are present but the signed-in token does not contain Entra group IDs.
+3. Open the Microsoft Entra app registration used by `ENTRA_CLIENT_ID`.
+4. Go to **Token configuration**.
+5. Add a **Groups** claim.
+6. Select **Security groups**, expand **ID**, and keep **Group ID** selected.
+7. Save the app registration change, then restart the App Service so new sessions use the current configuration.
+8. Have the affected user visit `/auth/logout`, close the browser or use an InPrivate window, sign in again, and recheck `/api/auth/me`. A working token should show `groupClaimPresent: true` and `isReportViewer: true` for members of `CapacityReportViewers`.
+
 #### Live ingestion pipeline
 
 - [x] Managed identity token flow for ARM ingestion

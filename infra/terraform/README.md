@@ -309,6 +309,7 @@ With `environment = "dev"` and `workload_suffix = "demo001"`:
 ## Provider configuration
 
 - **azurerm ~> 3.0** with `storage_use_azuread = true` (identity-based storage access)
+- **time ~> 0.11** for short waits after Azure RBAC assignments that must propagate before data-plane operations
 - `key_vault.purge_soft_delete_on_destroy = false` (Key Vault names remain reserved after destroy)
 - `resource_group.prevent_deletion_if_contains_resources = false` (allows clean destroy even when App Insights creates hidden resources)
 
@@ -318,6 +319,7 @@ With `environment = "dev"` and `workload_suffix = "demo001"`:
 - Sensitive variables marked with `sensitive = true` in Terraform
 - SQL Server uses Entra-only authentication (no SQL auth)
 - SQL and Key Vault default to private network access via private endpoints
+- Terraform assigns the deploying principal `Key Vault Secrets Officer` on the dashboard vault before writing initial secrets, then waits briefly for RBAC propagation
 - Web App and Function App use system-assigned managed identities
 - Function App storage uses identity-based access (`shared_access_key_enabled = false`)
 - VNet integration routes all traffic through the virtual network (`vnet_route_all_enabled = true`)

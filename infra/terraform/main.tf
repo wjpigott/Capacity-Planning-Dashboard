@@ -355,16 +355,31 @@ data "azurerm_key_vault" "kv" {
   resource_group_name = local.effective_key_vault_resource_group_name
 }
 
+resource "azurerm_role_assignment" "deployer_to_kv" {
+  scope                = local.effective_key_vault_id
+  role_definition_name = "Key Vault Secrets Officer"
+  principal_id         = data.azurerm_client_config.current.object_id
+}
+
+resource "time_sleep" "key_vault_deployer_rbac" {
+  depends_on      = [azurerm_role_assignment.deployer_to_kv]
+  create_duration = "45s"
+}
+
 resource "azurerm_key_vault_secret" "ingest_api_key" {
   name         = local.ingest_api_key_secret_name
   value        = local.effective_ingest_api_key
   key_vault_id = local.effective_key_vault_id
+
+  depends_on = [time_sleep.key_vault_deployer_rbac]
 }
 
 resource "azurerm_key_vault_secret" "session_secret" {
   name         = local.session_secret_secret_name
   value        = local.effective_session_secret
   key_vault_id = local.effective_key_vault_id
+
+  depends_on = [time_sleep.key_vault_deployer_rbac]
 }
 
 resource "azurerm_key_vault_secret" "worker_shared_secret" {
@@ -372,6 +387,8 @@ resource "azurerm_key_vault_secret" "worker_shared_secret" {
   name         = local.worker_shared_secret_secret_name
   value        = var.worker_shared_secret
   key_vault_id = local.effective_key_vault_id
+
+  depends_on = [time_sleep.key_vault_deployer_rbac]
 }
 
 resource "azurerm_key_vault_secret" "entra_client_secret" {
@@ -379,6 +396,8 @@ resource "azurerm_key_vault_secret" "entra_client_secret" {
   name         = local.entra_client_secret_secret_name
   value        = var.entra_client_secret
   key_vault_id = local.effective_key_vault_id
+
+  depends_on = [time_sleep.key_vault_deployer_rbac]
 }
 
 # ──────────────────────────────────────────────

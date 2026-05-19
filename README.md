@@ -497,6 +497,8 @@ By default, `./scripts/deploy-infra.ps1` now does both steps:
 - provisions the Azure resources from `infra/bicep/main.bicep`
 - publishes the dashboard web package, including `react/`, to the target App Service
 
+If you skip follow-on steps, the wrapper prints the exact manual PowerShell commands to run afterward. This includes the web package command when `-DeployWebApp $false`, the worker package command when `-DeployWorkerApp $false`, and the database initialization command when `-ApplyDatabaseBootstrap $false` or when database bootstrap cannot run because the web package was not deployed.
+
 The script checks whether the requested App Service host names are available before deploying. If `app-capdash-<environment>-<workloadSuffix>` or `func-capdash-<environment>-<workloadSuffix>-appsvc` is already used outside the target resource group, the script generates a randomized workload suffix and uses that effective suffix for both infrastructure deployment and the follow-on web/worker package publish. After the infrastructure step, the script reads the actual web app and function app names from Bicep or Terraform outputs so content is deployed to the created resources instead of a guessed name.
 
 When `-AuthEnabled $true` is used, `./scripts/deploy-infra.ps1` also resolves the default dashboard access groups when explicit IDs are not supplied:

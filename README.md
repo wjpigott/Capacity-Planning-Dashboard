@@ -11,6 +11,17 @@ This version marks the current deployed `main` branch as the initial proof-of-co
 
 Release history is tracked in `docs/RELEASE-NOTES.md`. Git tags should use the same version string as the release, for example `v1.0.0-poc`, so others can retrieve the exact code behind a deployed version.
 
+## What's new for deployments
+
+**Recommended starting point for first-time or customer deployments:** use the guided deployment wizard. It walks the operator through the setup conversation before anything is deployed, including provider, subscription, naming, authentication, Entra group strategy, existing shared services, RBAC scope, package publishing, and database bootstrap.
+
+Run it from PowerShell 7 (`pwsh`) at the repository root:
+
+```powershell
+pwsh
+./scripts/Start-CapacityDeployment.ps1
+```
+
 ## License
 
 This project is licensed under the terms of the [MIT License](LICENSE).

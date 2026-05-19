@@ -82,10 +82,15 @@ Suggested demo answer:
 
 - Choose `Bicep` for the standard guided path.
 - Choose `Terraform` only when this environment is intended to be Terraform-managed from the start, or after existing resources have been imported into Terraform state.
+- For a Terraform demo, leave the optional parameter/tfvars file path blank unless the customer has a prepared `.tfvars` file.
 
 Narration:
 
 "The wizard supports both Bicep and Terraform. Bicep is the straightforward path for this demo. Terraform is available when the customer wants Terraform to own the environment, but Terraform will only manage resources that exist in its state. If an existing app was created by another method, do not point Terraform at the same names and expect it to ignore them. Import the resources first or use a new suffix for a clean Terraform deployment."
+
+Terraform recording note:
+
+"When I choose Terraform, the wrapper still collects the same deployment decisions. Behind the scenes, it writes those answers to Terraform variables and then runs `terraform init` followed by `terraform apply`. For a clean recording, I use a fresh workload suffix and leave the optional tfvars path empty."
 
 ## Scene 4: Subscription, Resource Group, Region, and Names
 
@@ -120,12 +125,14 @@ Entra tenant ID for dashboard sign-in
 Entra app registration client ID
 Entra app registration client secret
 Auth redirect URI for the Entra app registration
+Allow Terraform wrapper to add the generated callback URI to the app registration?
 ```
 
 Suggested demo answer:
 
 - Enable auth: `Y`.
 - Redirect URI: accept the generated value unless the customer has a specific app hostname plan.
+- Terraform app registration update: answer `Y` only if the deployment identity has permission to update the app registration redirect URI.
 
 Narration:
 
@@ -167,10 +174,21 @@ Suggested demo answer:
 
 - Use current signed-in user for SQL admin when appropriate.
 - For a clean demo, answer `N` to existing SQL, Key Vault, worker storage, and VNet.
+- If you answer `Y` to an existing resource prompt, be ready to provide its exact existing resource name and resource group when asked.
 
 Narration:
 
 "For a clean demo environment, I let the deployment create the default platform resources. In a customer environment, these prompts are where we plug into existing SQL, Key Vault, storage, or networking standards."
+
+Clean Terraform demo answers:
+
+```text
+Does the customer already have an Azure SQL server to reuse? (y/N): n
+Does the customer already have a Key Vault to reuse? (y/N): n
+Optional Key Vault name override for Terraform soft-delete/name conflicts:
+Does the customer already have a worker storage account to reuse? (y/N): n
+Does the customer already have a Virtual Network to reuse? (y/N): n
+```
 
 ## Scene 8: RBAC Scope
 
@@ -186,6 +204,16 @@ Suggested demo answer:
 - Enter the management group names the dashboard should read from.
 - Use the same management group names for worker RBAC when appropriate.
 - Enable quota write RBAC only if quota apply workflows are in scope for this deployment.
+
+For a clean Terraform management-group demo, use values like:
+
+```text
+Management group names for Web App Reader access (comma-separated): TopDemoMg
+Management group names for worker RBAC (comma-separated) [TopDemoMg]:
+Default quota management group ID/name [TopDemoMg]:
+Grant quota write RBAC for quota apply workflows now? (y/N): y
+Management group names for GroupQuota Request Operator (comma-separated) [TopDemoMg]:
+```
 
 Narration:
 
@@ -229,6 +257,10 @@ Narration:
 
 "Before anything runs, the wizard shows the deployment plan and the exact `deploy-infra.ps1` command it will call. This is the checkpoint: confirm the subscription, resource group, environment, suffix, auth redirect URI, RBAC mode, package deploy choices, and database bootstrap choice."
 
+Terraform narration add-on:
+
+"For Terraform, the preview still shows the PowerShell command because the wizard hands off to the deployment wrapper. The wrapper then runs Terraform with a generated variable file, so list values like management group names are passed safely without requiring the operator to hand-write Terraform syntax."
+
 For the first recording pass, stop after `PlanOnly` completes.
 
 ## Scene 11: Run Preflight or Deploy
@@ -248,6 +280,14 @@ For the real deployment:
 Narration:
 
 "Preflight checks Azure CLI login, subscription access, Entra group lookup, and the expected callback URL. Once preflight is clean, the real deployment uses the same guided flow and asks for final confirmation before making changes."
+
+For Terraform, expected terminal milestones include:
+
+```text
+Running Terraform init...
+Terraform has been successfully initialized!
+Running Terraform apply...
+```
 
 ## Scene 12: Post-Deploy Validation
 

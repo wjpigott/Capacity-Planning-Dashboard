@@ -16,7 +16,7 @@ Do not use older `capacity-dashboard` clones or cached folders. In controlled en
 
 ## Operator Machine Requirement
 
-A Microsoft CSA laptop is usually not on the customer's ExpressRoute, private DNS, or internal firewall path. For private SQL, private Key Vault, and private endpoint validation, the deployment must run from a customer-approved machine that can reach those private endpoints.
+If the user's computer running the deployment is not on the customer's ExpressRoute, private DNS, or internal firewall path. For private SQL, private Key Vault, and private endpoint validation, the deployment must run from a customer-approved machine that can reach those private endpoints.
 
 Recommended options:
 

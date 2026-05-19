@@ -639,6 +639,39 @@ function Import-TerraformResourceGroupIfExists([string]$Terraform, [string[]]$Te
     }
 }
 
+function Import-TerraformEntraWebRedirectUrisIfExists([string]$Terraform, [string[]]$TerraformVarArgs) {
+    if (-not $ManageEntraWebRedirectUri.IsPresent -or -not $AuthEnabled -or [string]::IsNullOrWhiteSpace($EntraClientId)) {
+        return
+    }
+
+    $resourceAddress = 'module.dashboard_web_redirect_uris[0].azuread_application_redirect_uris.dashboard_web'
+    $stateResources = & $Terraform state list 2>$null
+    if ($LASTEXITCODE -eq 0 -and @($stateResources) -contains $resourceAddress) {
+        Write-Host "Terraform state already contains $resourceAddress. Skipping Entra redirect URI import."
+        return
+    }
+
+    try {
+        $applicationObjectId = Invoke-NativeCommandAllowStderr { az ad app show --id $EntraClientId --query id --output tsv 2>$null }
+    }
+    catch {
+        Write-Warning "Could not resolve Entra application object ID for Terraform redirect URI import. Continuing; Terraform may ask you to import the redirect URI resource manually. Azure CLI error: $($_.Exception.Message)"
+        return
+    }
+
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($applicationObjectId)) {
+        Write-Warning "Could not resolve Entra application object ID for Terraform redirect URI import. Continuing; Terraform may ask you to import the redirect URI resource manually."
+        return
+    }
+
+    $importId = "/applications/$($applicationObjectId.Trim())/redirectUris/Web"
+    Write-Host "Importing existing Entra Web redirect URI collection into Terraform state..."
+    & $Terraform import -input=false @TerraformVarArgs $resourceAddress $importId
+    if ($LASTEXITCODE -ne 0) {
+        throw "terraform import failed for existing Entra Web redirect URI collection. You can retry manually with: terraform import '$resourceAddress' `"$importId`""
+    }
+}
+
 function Get-AccessibleManagementGroupNames() {
     try {
         $responseJson = Invoke-NativeCommandAllowStderr { az rest --method get --url 'https://management.azure.com/providers/Microsoft.Management/managementGroups?api-version=2023-04-01' --output json 2>$null }
@@ -801,6 +834,7 @@ function Deploy-Terraform {
         $tfVars += "-var-file=$generatedTerraformVarFile"
 
         Import-TerraformResourceGroupIfExists -Terraform $terraform -TerraformVarArgs $tfVars -ExistingResourceGroup $existingTerraformResourceGroup
+        Import-TerraformEntraWebRedirectUrisIfExists -Terraform $terraform -TerraformVarArgs $tfVars
 
         Write-Host "Running Terraform apply..."
         & $terraform apply -auto-approve -input=false @tfVars

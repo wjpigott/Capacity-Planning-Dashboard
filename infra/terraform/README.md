@@ -91,6 +91,7 @@ Optional app registration management:
 
 - Set `manage_entra_web_redirect_uri = true` if you want Terraform to append the generated dashboard callback URL to the existing app registration's web redirect URIs.
 - Terraform will look up the app registration by `entra_client_id` and preserve any existing web redirect URIs it can read.
+- If you deploy through `scripts/deploy-infra.ps1` or the guided installer, the wrapper imports the existing Web redirect URI collection before `terraform apply` so Terraform can manage it safely.
 - The identity running Terraform must be allowed to read and update Entra applications. With a service principal, that means `Application.ReadWrite.OwnedBy` or `Application.ReadWrite.All`, plus ownership of the app when using `OwnedBy`.
 - If you need to preserve redirect URIs that Terraform cannot read yet or want to keep non-production callbacks explicit, add them to `extra_entra_web_redirect_uris`.
 

@@ -33,8 +33,7 @@ if (-not $SkipTests) {
 
     $packageJsonPath = Join-Path $SourcePath 'package.json'
     if (-not (Test-Path $packageJsonPath)) {
-        Write-Host "ERROR: package.json not found at $packageJsonPath"
-        exit 1
+        throw "package.json not found at $packageJsonPath"
     }
 
     Write-Host "Running test gate: npm test"
@@ -42,8 +41,7 @@ if (-not $SkipTests) {
     try {
         & npm test
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "Tests failed; deployment aborted"
-            exit $LASTEXITCODE
+            throw "Tests failed; deployment aborted. npm test exited with code $LASTEXITCODE."
         }
         Write-Host "Tests passed"
     } finally {
@@ -100,16 +98,14 @@ if (Test-Path $toolsCheck) {
     Write-Host "  Expected: $toolsCheck"
     Write-Host "  Staging contents:"
     Get-ChildItem $stagingPath -Recurse | Select-Object FullName | Format-Table -Wrap
-    exit 1
+    throw "Get-AzVMAvailability.ps1 was not found in staging."
 }
 
 $paasToolsCheck = Join-Path $stagingPath 'tools\Get-AzPaaSAvailability\Get-AzPaaSAvailability.ps1'
 if (Test-Path $paasToolsCheck) {
     Write-Host "Verified: Get-AzPaaSAvailability.ps1 is in staging"
 } else {
-    Write-Host "ERROR: Get-AzPaaSAvailability.ps1 NOT found in staging!"
-    Write-Host "  Expected: $paasToolsCheck"
-    exit 1
+    throw "Get-AzPaaSAvailability.ps1 was not found in staging. Expected: $paasToolsCheck"
 }
 
 # Create zip
@@ -136,7 +132,7 @@ if ($hasTools) {
     Write-Host "ERROR: Get-AzVMAvailability.ps1 not found in zip!"
     Write-Host "Tool entries found in zip:"
     $zipEntryNames | Where-Object { $_ -like 'tools/*' } | Select-Object -First 20 | ForEach-Object { Write-Host "  $_" }
-    exit 1
+    throw "Get-AzVMAvailability.ps1 was not found in the deployment zip."
 }
 
 if ($hasPaaSTools) {
@@ -145,7 +141,7 @@ if ($hasPaaSTools) {
     Write-Host "ERROR: Get-AzPaaSAvailability.ps1 not found in zip!"
     Write-Host "Tool entries found in zip:"
     $zipEntryNames | Where-Object { $_ -like 'tools/*' } | Select-Object -First 20 | ForEach-Object { Write-Host "  $_" }
-    exit 1
+    throw "Get-AzPaaSAvailability.ps1 was not found in the deployment zip."
 }
 
 # Deploy
@@ -183,7 +179,7 @@ if ($LASTEXITCODE -eq 0) {
 } else {
     Write-Host "Deployment failed with exit code $LASTEXITCODE"
     Write-Host "Output: $deployResult"
-    exit 1
+    throw "Azure App Service zip deployment failed with exit code $LASTEXITCODE."
 }
 
 Write-Host ""

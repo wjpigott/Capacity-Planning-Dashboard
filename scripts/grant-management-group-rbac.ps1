@@ -41,14 +41,20 @@ function Ensure-ManagementGroupRoleAssignment([string]$ManagementGroupName, [str
         return
     }
 
-    az role assignment create `
+    $createOutput = az role assignment create `
         --assignee-object-id $PrincipalId `
         --assignee-principal-type ServicePrincipal `
         --role $RoleDefinitionId `
         --scope $scope `
-        --output none
+        --output none 2>&1
 
     if ($LASTEXITCODE -ne 0) {
+        $createOutputText = ($createOutput | Out-String).Trim()
+        if ($createOutputText -match 'RoleAssignmentExists') {
+            Write-Host "Exists  $RoleName for principal $PrincipalId at $scope" -ForegroundColor DarkGray
+            return
+        }
+
         throw "Failed to assign $RoleName for principal $PrincipalId at $scope. Run this script with an identity that has Owner or User Access Administrator at that management group."
     }
 

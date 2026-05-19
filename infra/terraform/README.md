@@ -46,6 +46,7 @@ infra/terraform/
 
 - Terraform >= 1.5.0
 - Azure CLI authenticated (`az login`) with **Contributor** + **User Access Administrator** on the target subscription
+- Node.js and npm with repo dependencies restored from the repository root (`npm install`) before using `scripts/deploy-infra.ps1` to publish the web package; the web publish step runs `npm test` locally before upload
 - State is stored locally in `terraform.tfstate` (update `backend.tf` to use a remote backend if needed)
 
 ## Before first apply

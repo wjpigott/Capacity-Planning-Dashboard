@@ -401,12 +401,14 @@ Recommended dev publish workflow:
 az login
 az account show --output table
 az account set --subscription "<subscription-name-or-id>"
+npm install
 ./deploy-web-app.ps1
 ```
 
 Notes:
 
 - `deploy-web-app.ps1` now runs `npm test` before packaging and deployment. Use `-SkipTests` only when you intentionally want to bypass the local test gate.
+- Fresh clones must run `npm install` before deployment so the local test gate can load dependencies such as `mssql`, `@azure/identity`, and `@azure/msal-node`.
 - The current `npm test` suite is read-only and logic-focused. It does not require on-prem SQL connectivity or Azure API access.
 - The deployment script already stages the correct runtime files and publishes them to the App Service name you pass in.
 - The deployment package stages the repo's `react/` folder, root `server.js`, root `web.config`, and shared `sku-catalog.js`, so a fresh pull plus redeploy publishes the current React experience and keeps `/api/*` routed to Express on Windows App Service.

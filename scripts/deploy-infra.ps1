@@ -125,6 +125,16 @@ function Get-DatabaseBootstrapFailureGuidance([string]$ManualDatabaseInitializeC
     return "Database bootstrap failed after infrastructure deployment. If Azure SQL blocks the bootstrap connection, change the SQL server networking setting to Selected networks and add your current client IP, then rerun the database bootstrap. You can also skip database bootstrap during deployment and run the scripts later from an Azure-connected host. Manual command: $ManualDatabaseInitializeCommand"
 }
 
+function Show-ManualDatabaseInitializeGuidance([string]$ManualDatabaseInitializeCommand, [string]$Reason) {
+    if (-not [string]::IsNullOrWhiteSpace($Reason)) {
+        Write-Warning $Reason
+    }
+
+    Write-Warning 'The dashboard app will not be able to read DB-backed APIs until this database initialization command succeeds and grants roles to the web app managed identity.'
+    Write-Host 'Run this command from an Azure-connected host when you are ready to initialize the database:' -ForegroundColor Yellow
+    Write-Host $ManualDatabaseInitializeCommand -ForegroundColor Yellow
+}
+
 function New-WorkloadSuffixWithToken([string]$BaseSuffix) {
     $sanitizedBase = ($BaseSuffix.ToLowerInvariant() -replace '[^a-z0-9-]', '')
     if ([string]::IsNullOrWhiteSpace($sanitizedBase)) {
@@ -1127,6 +1137,10 @@ if ($hasManagementGroupRbac) {
     $deploymentArgs += Add-BicepDeploymentParameter -Name 'deployManagementGroupRbacAssignments' -Value 'false'
 }
 
+$infrastructureDeploymentSucceeded = $false
+$databaseBootstrapCompleted = $false
+$manualDatabaseInitializeGuidanceShown = $false
+
 try {
     $webPrincipalId = $null
     $workerPrincipalId = $null
@@ -1158,6 +1172,8 @@ try {
 
         Invoke-ManagementGroupRbacAssignments -WebPrincipalId $webPrincipalId -WorkerPrincipalId $workerPrincipalId
     }
+
+    $infrastructureDeploymentSucceeded = $true
 
     $manualDatabaseInitializeCommand = New-ManualDatabaseInitializeCommand -SqlServerHostName $effectiveSqlServerHostName -DatabaseName $effectiveSqlDatabaseName -IdentityName $webAppName
     $manualWebPackageDeployCommand = New-ManualWebPackageDeployCommand -ResourceGroupName $ResourceGroupName -AppName $webAppName
@@ -1210,10 +1226,8 @@ try {
 
     if ($ApplyDatabaseBootstrap) {
         if (-not $DeployWebApp) {
-            Write-Warning 'Skipping database bootstrap because -DeployWebApp was set to $false and the bootstrap endpoint is provided by the deployed web app package.'
-            Write-Warning 'The dashboard app will not be able to read DB-backed APIs until this database initialization command succeeds and grants roles to the web app managed identity.'
-            Write-Host 'Run this command from an Azure-connected host when you are ready to initialize the database:' -ForegroundColor Yellow
-            Write-Host $manualDatabaseInitializeCommand -ForegroundColor Yellow
+            Show-ManualDatabaseInitializeGuidance -ManualDatabaseInitializeCommand $manualDatabaseInitializeCommand -Reason 'Skipping database bootstrap because -DeployWebApp was set to $false and the bootstrap endpoint is provided by the deployed web app package.'
+            $manualDatabaseInitializeGuidanceShown = $true
         }
         else {
             $bootstrapUri = "https://$webAppName.azurewebsites.net/internal/db/bootstrap"
@@ -1265,19 +1279,23 @@ try {
 
             if ($bootstrapResult) {
                 Write-Host "Database bootstrap completed successfully."
+                $databaseBootstrapCompleted = $true
             }
         }
     }
     else {
-        Write-Host 'Database bootstrap was skipped. Run this command from an Azure-connected host when you are ready to initialize the database:' -ForegroundColor Yellow
-        Write-Warning 'The dashboard app will not be able to read DB-backed APIs until this database initialization command succeeds and grants roles to the web app managed identity.'
-        Write-Host $manualDatabaseInitializeCommand -ForegroundColor Yellow
+        Show-ManualDatabaseInitializeGuidance -ManualDatabaseInitializeCommand $manualDatabaseInitializeCommand -Reason 'Database bootstrap was skipped.'
+        $manualDatabaseInitializeGuidanceShown = $true
     }
 
     Show-ManagementGroupRbacFollowUps
 }
 finally {
     Show-ManagementGroupRbacFollowUps
+
+    if ($infrastructureDeploymentSucceeded -and -not $databaseBootstrapCompleted -and -not $manualDatabaseInitializeGuidanceShown -and -not [string]::IsNullOrWhiteSpace($manualDatabaseInitializeCommand)) {
+        Show-ManualDatabaseInitializeGuidance -ManualDatabaseInitializeCommand $manualDatabaseInitializeCommand -Reason 'Database bootstrap did not complete during this deployment run.'
+    }
 
     if ($temporaryParameterFile -and (Test-Path $temporaryParameterFile)) {
         Remove-Item $temporaryParameterFile -Force

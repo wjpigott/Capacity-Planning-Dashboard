@@ -10,7 +10,9 @@ if ([string]::IsNullOrWhiteSpace($ResourceGroup) -or [string]::IsNullOrWhiteSpac
     throw "Provide -ResourceGroup and -AppName, or set AZURE_RESOURCE_GROUP and AZURE_WEBAPP_NAME."
 }
 
+$scriptVersion = '2026-05-18.3'
 Write-Host "Starting clean web app deployment..."
+Write-Host "deploy-web-app.ps1 version: $scriptVersion"
 Write-Host "Source: $SourcePath"
 
 if (-not $SkipTests) {

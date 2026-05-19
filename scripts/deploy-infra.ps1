@@ -1151,6 +1151,7 @@ try {
     if ($ApplyDatabaseBootstrap) {
         if (-not $DeployWebApp) {
             Write-Warning 'Skipping database bootstrap because -DeployWebApp was set to $false and the bootstrap endpoint is provided by the deployed web app package.'
+            Write-Warning 'The dashboard app will not be able to read DB-backed APIs until this database initialization command succeeds and grants roles to the web app managed identity.'
             Write-Host 'Run this command from an Azure-connected host when you are ready to initialize the database:' -ForegroundColor Yellow
             Write-Host $manualDatabaseInitializeCommand -ForegroundColor Yellow
         }
@@ -1209,6 +1210,7 @@ try {
     }
     else {
         Write-Host 'Database bootstrap was skipped. Run this command from an Azure-connected host when you are ready to initialize the database:' -ForegroundColor Yellow
+        Write-Warning 'The dashboard app will not be able to read DB-backed APIs until this database initialization command succeeds and grants roles to the web app managed identity.'
         Write-Host $manualDatabaseInitializeCommand -ForegroundColor Yellow
     }
 

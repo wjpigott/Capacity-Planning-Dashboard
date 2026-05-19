@@ -876,7 +876,7 @@ if ($deployWebApp -and -not (Test-CommandAvailable 'npm')) {
     $skipWebAppTests = Set-Answer -Name 'SkipWebAppTests' -Value $true
 }
 $deployWorkerApp = Prompt-YesNo -Name 'DeployWorkerApp' -Question 'Deploy the worker package after infrastructure succeeds?' -DefaultValue $true
-$defaultBootstrap = [string]::IsNullOrWhiteSpace($existingSqlServerName) -and [string]::IsNullOrWhiteSpace($existingVirtualNetworkName)
+$defaultBootstrap = [string]::IsNullOrWhiteSpace($existingSqlServerName)
 $applyDatabaseBootstrap = Prompt-YesNo -Name 'ApplyDatabaseBootstrap' -Question 'Run database bootstrap through the deployed web app?' -DefaultValue $defaultBootstrap
 if ($applyDatabaseBootstrap -and -not $deployWebApp) {
     Write-Warning 'Database bootstrap uses the deployed web app package. It will be skipped because web package deployment is disabled.'

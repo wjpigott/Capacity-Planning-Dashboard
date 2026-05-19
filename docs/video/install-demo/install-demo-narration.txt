@@ -1,0 +1,43 @@
+
+Slide 1: Guided Install Overview
+In this walkthrough, we deploy the Capacity Planning Dashboard using the guided installer. The wizard collects the Azure, Entra, SQL, RBAC, package, and bootstrap choices, then previews the deployment command before making changes.
+
+Slide 2: Start From Azure CLI Context
+Start by confirming Azure CLI is signed into the tenant and subscription where the dashboard will be deployed. Then run the guided installer from the repository root.
+
+Slide 3: Choose Terraform
+The wizard supports Bicep and Terraform. Choose Terraform when the environment should be managed by Terraform from the start. For a clean demo, use a fresh suffix and leave the optional tfvars path blank.
+
+Slide 4: Name The Environment
+The environment and workload suffix become part of the generated names. Keep suffix randomization enabled so the installer can recover if an App Service host name is already taken.
+
+Slide 5: Configure Entra Sign-In
+The dashboard uses Microsoft Entra sign-in. Use the prepared app registration, accept the generated callback URL for the deployed app, and confirm the token configuration emits Security Group Object IDs in the ID token.
+
+Slide 6: Reuse Access Groups
+For the standard path, reuse CapacityAdmin and CapacityReportViewers. Admin access and report viewer access are separate, and the wizard resolves the group object IDs before deployment.
+
+Slide 7: Clean Demo: Create Platform Resources
+For a clean recording, let the deployment create the default SQL server, Key Vault, worker storage, and networking resources. Only answer yes when you want to demonstrate reuse and have the exact resource names ready.
+
+Slide 8: Set RBAC Scope
+RBAC determines what the dashboard and worker can read or execute after deployment. In this demo, use a management group such as TopDemoMg for dashboard reader access, worker RBAC, and quota workflows.
+
+Slide 9: Secrets, Packages, Bootstrap
+For a normal clean install, let the deployment resolve or generate the application secrets, generate the worker shared secret, publish both packages, and run database bootstrap so the environment is usable at the end.
+
+Slide 10: Review The Preview
+Before anything runs, the wizard shows the deployment plan and the exact wrapper command. Confirm the subscription, resource group, suffix, auth redirect URI, RBAC mode, package choices, and database bootstrap choice.
+
+Slide 11: Terraform Runs Through The Wrapper
+After preflight, the wrapper runs Terraform init and Terraform apply. Guided answers are passed through a generated Terraform variable file, so list values such as management group names do not require the operator to hand write Terraform syntax.
+
+Slide 12: Validate The Deployment
+After deployment, open the dashboard URL, sign in, and check the auth diagnostics endpoint. The quickest validation is that the app sees the signed in user, group claims are present, and admin and report access match the Entra groups.
+
+Slide 13: Common Pitfalls
+Most installation issues come from the wrong folder, wrong Azure context, reused names, missing group claims, or central RBAC ownership. The guided installer is designed to surface those choices early and produce a clear handoff when another team owns part of the setup.
+
+Slide 14: Ready For Users
+That is the guided install experience end to end. The operator chooses Bicep or Terraform, configures Entra access, selects RBAC scope, publishes the app and worker, bootstraps the database, and validates sign-in and role access.
+

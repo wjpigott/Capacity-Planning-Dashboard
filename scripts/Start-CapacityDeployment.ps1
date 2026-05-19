@@ -281,7 +281,13 @@ function Get-AzAccountContext() {
         return $null
     }
 
-    $accountJson = az account show --output json 2>$null
+    try {
+        $accountJson = az account show --output json 2>$null
+    }
+    catch {
+        return $null
+    }
+
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($accountJson)) {
         return $null
     }
@@ -368,14 +374,26 @@ function Test-AzureDeploymentPreflight([string]$SubscriptionId, [bool]$AuthEnabl
         throw "Azure CLI was not found on PATH. Install Azure CLI, then run 'az login' before deploying."
     }
 
-    $accountJson = az account show --output json 2>$null
+    try {
+        $accountJson = az account show --output json 2>$null
+    }
+    catch {
+        throw "Azure CLI is not logged in or could not return the current account. Run 'az login --tenant <tenant-id>' and select the target subscription before deploying. Azure CLI error: $($_.Exception.Message)"
+    }
+
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($accountJson)) {
         throw "Azure CLI is not logged in. Run 'az login --tenant <tenant-id>' and select the target subscription before deploying."
     }
 
     $account = $accountJson | ConvertFrom-Json
     if (-not [string]::IsNullOrWhiteSpace($SubscriptionId)) {
-        $subscriptionJson = az account show --subscription $SubscriptionId --output json 2>$null
+        try {
+            $subscriptionJson = az account show --subscription $SubscriptionId --output json 2>$null
+        }
+        catch {
+            throw "Azure CLI cannot access subscription '$SubscriptionId'. Run 'az account list --output table' to confirm access, then run 'az account set --subscription $SubscriptionId'. Azure CLI error: $($_.Exception.Message)"
+        }
+
         if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($subscriptionJson)) {
             throw "Azure CLI cannot access subscription '$SubscriptionId'. Run 'az account list --output table' to confirm access, then run 'az account set --subscription $SubscriptionId'."
         }

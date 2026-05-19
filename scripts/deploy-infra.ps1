@@ -136,7 +136,14 @@ function Test-WebSiteNameUsable([string]$Name, [string]$ResourceGroupName) {
         Write-Warning "Could not check whether App Service '$Name' already exists in resource group '$ResourceGroupName'. Continuing with global name availability check. Azure CLI error: $resourceShowError"
     }
 
-    $subscriptionIdForNameCheck = az account show --query id --output tsv 2>$null
+    try {
+        $subscriptionIdForNameCheck = az account show --query id --output tsv 2>$null
+    }
+    catch {
+        Write-Warning "Could not check App Service name availability for $Name because the current Azure subscription could not be resolved. Continuing with the requested name. Azure CLI error: $($_.Exception.Message)"
+        return $true
+    }
+
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($subscriptionIdForNameCheck)) {
         Write-Warning "Could not check App Service name availability for $Name because the current Azure subscription could not be resolved. Continuing with the requested name."
         return $true
@@ -578,9 +585,15 @@ function ConvertTo-TerraformLiteral([object]$Value) {
 }
 
 function Get-AccessibleManagementGroupNames() {
-    $responseJson = az rest --method get --url 'https://management.azure.com/providers/Microsoft.Management/managementGroups?api-version=2023-04-01' --output json 2>$null
+    try {
+        $responseJson = az rest --method get --url 'https://management.azure.com/providers/Microsoft.Management/managementGroups?api-version=2023-04-01' --output json 2>$null
+    }
+    catch {
+        throw "Could not enumerate accessible management groups from the current Azure CLI login. Choose 'Specify management group names' in the wizard, or pass -WebReaderManagementGroupNames and -WorkerRbacManagementGroupNames explicitly. Azure CLI error: $($_.Exception.Message)"
+    }
+
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($responseJson)) {
-        throw 'Could not enumerate accessible management groups from the current Azure CLI login.'
+        throw "Could not enumerate accessible management groups from the current Azure CLI login. Choose 'Specify management group names' in the wizard, or pass -WebReaderManagementGroupNames and -WorkerRbacManagementGroupNames explicitly."
     }
 
     $response = $responseJson | ConvertFrom-Json -Depth 20

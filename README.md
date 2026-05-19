@@ -462,6 +462,8 @@ Terraform deployment note:
 - Terraform now supports the same management-group-first RBAC model as Bicep: use management-group name arrays as the preferred path for larger estates, and keep subscription arrays only as the fallback for smaller customers.
 - `./scripts/deploy-infra.ps1 -Provider Terraform` now passes the same management-group and subscription RBAC inputs through to Terraform and still publishes the dashboard web app and worker packages after a successful apply.
 - Terraform may still target an existing resource group that needs to be imported into state before the first apply.
+- Each Terraform environment needs its own state file, workspace, or remote backend key. Do not reuse one local `infra/terraform/terraform.tfstate` for different resource groups such as dev, test, and customer trial environments.
+- The wrapper refuses to continue when existing Terraform state already manages a different resource group than the one requested by `-ResourceGroupName`, because continuing would make Terraform replace or delete the old state-managed environment.
 
 For a guided install, start with the deployment wizard:
 

@@ -620,9 +620,63 @@ function Get-AzureResourceGroupSummary() {
     }
 }
 
+function Get-TerraformStateResources([string]$Terraform) {
+    try {
+        $stateOutput = Invoke-NativeCommandAllowStderr { & $Terraform state list 2>&1 }
+    }
+    catch {
+        $errorText = $_.Exception.Message
+        if ($errorText -match 'No state file was found') {
+            return @()
+        }
+
+        throw "terraform state list failed before deployment. Terraform error: $errorText"
+    }
+
+    $stateText = ($stateOutput | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        if ($stateText -match 'No state file was found') {
+            return @()
+        }
+
+        throw "terraform state list failed before deployment. Terraform output: $stateText"
+    }
+
+    return @($stateOutput | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | ForEach-Object { ([string]$_).Trim() })
+}
+
+function Get-ResourceGroupNameFromTerraformState([string]$Terraform) {
+    $stateOutput = Invoke-NativeCommandAllowStderr { & $Terraform state show -no-color 'azurerm_resource_group.rg' 2>&1 }
+    $stateText = ($stateOutput | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Terraform state contains azurerm_resource_group.rg, but its details could not be read. Refusing to continue because this could replace or delete the wrong resource group. Terraform output: $stateText"
+    }
+
+    $idMatch = [regex]::Match($stateText, '(?im)^\s*id\s*=\s*"(?<id>[^"]+)"')
+    if ($idMatch.Success) {
+        $id = $idMatch.Groups['id'].Value.Trim()
+        $resourceGroupIdMatch = [regex]::Match($id, '(?i)/resourceGroups/(?<name>[^/]+)')
+        if ($resourceGroupIdMatch.Success) {
+            return $resourceGroupIdMatch.Groups['name'].Value.Trim()
+        }
+    }
+
+    $nameMatch = [regex]::Match($stateText, '(?im)^\s*name\s*=\s*"(?<name>[^"]+)"')
+    if ($nameMatch.Success) {
+        return $nameMatch.Groups['name'].Value.Trim()
+    }
+
+    throw 'Terraform state contains azurerm_resource_group.rg, but the managed resource group name could not be parsed. Refusing to continue because this could replace or delete the wrong resource group.'
+}
+
 function Import-TerraformResourceGroupIfExists([string]$Terraform, [string[]]$TerraformVarArgs, [object]$ExistingResourceGroup) {
-    $stateResources = & $Terraform state list 2>$null
-    if ($LASTEXITCODE -eq 0 -and @($stateResources) -contains 'azurerm_resource_group.rg') {
+    $stateResources = Get-TerraformStateResources -Terraform $Terraform
+    if (@($stateResources) -contains 'azurerm_resource_group.rg') {
+        $stateResourceGroupName = Get-ResourceGroupNameFromTerraformState -Terraform $Terraform
+        if (-not [string]::Equals($stateResourceGroupName, $ResourceGroupName, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Terraform state already manages resource group '$stateResourceGroupName', but this deployment requested '$ResourceGroupName'. Refusing to continue because Terraform would replace or delete the state-managed resource group. Use a separate Terraform state/workspace/backend key for each environment, or back up/remove the local terraform.tfstate before deploying a new resource group."
+        }
+
         Write-Host "Terraform state already contains azurerm_resource_group.rg. Skipping resource group import."
         return
     }
@@ -662,8 +716,8 @@ function Import-TerraformEntraWebRedirectUrisIfExists([string]$Terraform, [strin
     }
 
     $resourceAddress = 'module.dashboard_web_redirect_uris[0].azuread_application_redirect_uris.dashboard_web'
-    $stateResources = & $Terraform state list 2>$null
-    if ($LASTEXITCODE -eq 0 -and @($stateResources) -contains $resourceAddress) {
+    $stateResources = Get-TerraformStateResources -Terraform $Terraform
+    if (@($stateResources) -contains $resourceAddress) {
         Write-Host "Terraform state already contains $resourceAddress. Skipping Entra redirect URI import."
         return
     }

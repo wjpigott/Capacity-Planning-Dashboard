@@ -128,6 +128,13 @@ The Terraform configuration declares the resource group as a managed resource. T
 - If the resource group already exists and you deploy through `scripts/deploy-infra.ps1` or the guided installer, the wrapper imports `azurerm_resource_group.rg` before `terraform apply` and uses the existing resource group's actual location for `resource_group_location`.
 - If you run Terraform directly, import the resource group before the first apply.
 
+Important state rule:
+
+- One Terraform state represents one managed environment. If local state already contains `azurerm_resource_group.rg` for `CapacityPlanning` and you change `resource_group_name` to `CreateTFTest`, Terraform will plan to replace the state-managed resource group instead of creating an independent environment.
+- Use a separate local state file, Terraform workspace, or remote backend key for each independent resource group/environment.
+- The `scripts/deploy-infra.ps1 -Provider Terraform` wrapper fails fast when the state-managed resource group name does not match `-ResourceGroupName`, before Terraform can delete the old environment.
+- If you intentionally want a new independent environment with local state, back up or move `infra/terraform/terraform.tfstate` and `infra/terraform/terraform.tfstate.backup` before deploying the new resource group.
+
 Example import:
 
 ```powershell

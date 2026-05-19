@@ -296,12 +296,25 @@ function Add-BicepDeploymentParameter([string]$Name, [object]$Value, [switch]$Re
     return @()
 }
 
-function Add-TerraformVariable([string]$Name, [object]$Value, [switch]$RequiredWhenSet) {
+function Set-TerraformVariableValue([System.Collections.IDictionary]$Variables, [string]$Name, [object]$Value, [switch]$RequiredWhenSet) {
     if (Test-TerraformVariableSupported -VariableName $Name) {
-        return "-var=$Name=$(ConvertTo-TerraformLiteral $Value)"
+        $Variables[$Name] = $Value
+        return
     }
 
-    $hasMeaningfulValue = $null -ne $Value -and -not [string]::IsNullOrWhiteSpace([string]$Value)
+    $hasMeaningfulValue = $false
+    if ($null -ne $Value) {
+        if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
+            $hasMeaningfulValue = @($Value).Count -gt 0
+        }
+        elseif ($Value -is [bool]) {
+            $hasMeaningfulValue = $true
+        }
+        else {
+            $hasMeaningfulValue = -not [string]::IsNullOrWhiteSpace([string]$Value)
+        }
+    }
+
     if ($RequiredWhenSet -and $hasMeaningfulValue) {
         throw "The Terraform module does not support variable '$Name'. Update infra/terraform before using this deployment option."
     }
@@ -309,8 +322,6 @@ function Add-TerraformVariable([string]$Name, [object]$Value, [switch]$RequiredW
     if ($hasMeaningfulValue) {
         Write-Warning "The Terraform module does not support variable '$Name'. This value will be omitted."
     }
-
-    return @()
 }
 
 function Add-ManagementGroupRoleAssignment([string]$ManagementGroupName, [string]$PrincipalId, [string]$RoleDefinitionId, [string]$RoleName) {
@@ -576,25 +587,6 @@ function Resolve-TerraformCommand() {
     return $null
 }
 
-function ConvertTo-TerraformLiteral([object]$Value) {
-    if ($null -eq $Value) {
-        return 'null'
-    }
-
-    if ($Value -is [bool]) {
-        return $Value.ToString().ToLowerInvariant()
-    }
-
-    if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
-        $items = @($Value | ForEach-Object { ConvertTo-TerraformLiteral $_ })
-        return "[$($items -join ',')]"
-    }
-
-    $stringValue = [string]$Value
-    $escapedValue = $stringValue.Replace('\', '\\').Replace('"', '\"')
-    return '"' + $escapedValue + '"'
-}
-
 function Get-AccessibleManagementGroupNames() {
     try {
         $responseJson = Invoke-NativeCommandAllowStderr { az rest --method get --url 'https://management.azure.com/providers/Microsoft.Management/managementGroups?api-version=2023-04-01' --output json 2>$null }
@@ -690,67 +682,68 @@ function Deploy-Terraform {
     }
 
     Push-Location $tfDir
+    $generatedTerraformVarFile = $null
     try {
         Write-Host "Running Terraform init..."
         & $terraform init -input=false
         if ($LASTEXITCODE -ne 0) { throw 'terraform init failed' }
 
-        $tfVars = @(
-            "-var=location=$Location",
-            "-var=environment=$Environment",
-            "-var=workload_suffix=$WorkloadSuffix",
-            "-var=resource_group_name=$ResourceGroupName",
-            "-var=sql_entra_admin_login=$SqlEntraAdminLogin",
-            "-var=sql_entra_admin_object_id=$SqlEntraAdminObjectId",
-            "-var=assign_worker_compute_recommendations_role=$($AssignWorkerComputeRecommendationsRole.ToString().ToLowerInvariant())",
-            "-var=assign_worker_cost_management_reader_role=$($AssignWorkerCostManagementReaderRole.ToString().ToLowerInvariant())",
-            "-var=assign_worker_billing_reader_role=$($AssignWorkerBillingReaderRole.ToString().ToLowerInvariant())"
-        )
+        $tfVariables = [ordered]@{
+            location = $Location
+            environment = $Environment
+            workload_suffix = $WorkloadSuffix
+            resource_group_name = $ResourceGroupName
+            sql_entra_admin_login = $SqlEntraAdminLogin
+            sql_entra_admin_object_id = $SqlEntraAdminObjectId
+            assign_worker_compute_recommendations_role = [bool]$AssignWorkerComputeRecommendationsRole
+            assign_worker_cost_management_reader_role = [bool]$AssignWorkerCostManagementReaderRole
+            assign_worker_billing_reader_role = [bool]$AssignWorkerBillingReaderRole
+            auth_enabled = [bool]$AuthEnabled
+        }
 
-        if (-not [string]::IsNullOrWhiteSpace($IngestApiKey))        { $tfVars += "-var=ingest_api_key=$IngestApiKey" }
-        if (-not [string]::IsNullOrWhiteSpace($SessionSecret))       { $tfVars += "-var=session_secret=$SessionSecret" }
-        $tfVars += "-var=auth_enabled=$($AuthEnabled.ToString().ToLowerInvariant())"
+        if (-not [string]::IsNullOrWhiteSpace($IngestApiKey))        { $tfVariables['ingest_api_key'] = $IngestApiKey }
+        if (-not [string]::IsNullOrWhiteSpace($SessionSecret))       { $tfVariables['session_secret'] = $SessionSecret }
+        if (-not [string]::IsNullOrWhiteSpace($WorkerSharedSecret))  { $tfVariables['worker_shared_secret'] = $WorkerSharedSecret }
+        if (-not [string]::IsNullOrWhiteSpace($KeyVaultNameOverride)){ $tfVariables['key_vault_name_override'] = $KeyVaultNameOverride }
+        if (-not [string]::IsNullOrWhiteSpace($QuotaManagementGroupId)){ $tfVariables['quota_management_group_id'] = $QuotaManagementGroupId }
+        if (-not [string]::IsNullOrWhiteSpace($ExistingSqlServerName))                { $tfVariables['existing_sql_server_name'] = $ExistingSqlServerName }
+        if (-not [string]::IsNullOrWhiteSpace($ExistingSqlServerResourceGroupName))   { $tfVariables['existing_sql_server_resource_group_name'] = $ExistingSqlServerResourceGroupName }
+        if (-not [string]::IsNullOrWhiteSpace($ExistingSqlDatabaseName))              { $tfVariables['existing_sql_database_name'] = $ExistingSqlDatabaseName }
+        if (-not [string]::IsNullOrWhiteSpace($ExistingKeyVaultName))                 { $tfVariables['existing_key_vault_name'] = $ExistingKeyVaultName }
+        if (-not [string]::IsNullOrWhiteSpace($ExistingKeyVaultResourceGroupName))    { $tfVariables['existing_key_vault_resource_group_name'] = $ExistingKeyVaultResourceGroupName }
+        if (-not [string]::IsNullOrWhiteSpace($ExistingWorkerStorageAccountName))     { $tfVariables['existing_worker_storage_account_name'] = $ExistingWorkerStorageAccountName }
+        if (-not [string]::IsNullOrWhiteSpace($ExistingWorkerStorageResourceGroupName)){ $tfVariables['existing_worker_storage_account_resource_group_name'] = $ExistingWorkerStorageResourceGroupName }
+        if (-not [string]::IsNullOrWhiteSpace($ExistingVirtualNetworkName))           { Set-TerraformVariableValue -Variables $tfVariables -Name 'existing_virtual_network_name' -Value $ExistingVirtualNetworkName -RequiredWhenSet }
+        if (-not [string]::IsNullOrWhiteSpace($ExistingVirtualNetworkResourceGroupName)){ Set-TerraformVariableValue -Variables $tfVariables -Name 'existing_virtual_network_resource_group_name' -Value $ExistingVirtualNetworkResourceGroupName }
+        if (-not [string]::IsNullOrWhiteSpace($ExistingAppServiceIntegrationSubnetName)){ Set-TerraformVariableValue -Variables $tfVariables -Name 'existing_app_service_integration_subnet_name' -Value $ExistingAppServiceIntegrationSubnetName -RequiredWhenSet }
+        if (-not [string]::IsNullOrWhiteSpace($ExistingPrivateEndpointSubnetName))    { Set-TerraformVariableValue -Variables $tfVariables -Name 'existing_private_endpoint_subnet_name' -Value $ExistingPrivateEndpointSubnetName -RequiredWhenSet }
+        if (-not [string]::IsNullOrWhiteSpace($EntraTenantId))       { $tfVariables['entra_tenant_id'] = $EntraTenantId }
+        if (-not [string]::IsNullOrWhiteSpace($EntraClientId))       { $tfVariables['entra_client_id'] = $EntraClientId }
+        if (-not [string]::IsNullOrWhiteSpace($EntraClientSecret))   { $tfVariables['entra_client_secret'] = $EntraClientSecret }
+        if (-not [string]::IsNullOrWhiteSpace($AuthRedirectUri))     { $tfVariables['auth_redirect_uri'] = $AuthRedirectUri }
+        if ($ManageEntraWebRedirectUri.IsPresent)                    { $tfVariables['manage_entra_web_redirect_uri'] = $true }
+        if (-not [string]::IsNullOrWhiteSpace($AdminGroupId))        { $tfVariables['admin_group_id'] = $AdminGroupId }
+        if (-not [string]::IsNullOrWhiteSpace($ReportViewerGroupIds)){ Set-TerraformVariableValue -Variables $tfVariables -Name 'report_viewer_group_ids' -Value $ReportViewerGroupIds }
+        if ($PSBoundParameters.ContainsKey('WebReaderSubscriptionIds') -or $WebReaderSubscriptionIds.Count -gt 0)                   { Set-TerraformVariableValue -Variables $tfVariables -Name 'web_reader_subscription_ids' -Value $WebReaderSubscriptionIds }
+        if ($PSBoundParameters.ContainsKey('WebReaderManagementGroupNames') -or $WebReaderManagementGroupNames.Count -gt 0)         { Set-TerraformVariableValue -Variables $tfVariables -Name 'web_reader_management_group_names' -Value $WebReaderManagementGroupNames }
+        if ($PSBoundParameters.ContainsKey('WebQuotaWriterSubscriptionIds') -or $WebQuotaWriterSubscriptionIds.Count -gt 0)         { Set-TerraformVariableValue -Variables $tfVariables -Name 'web_quota_writer_subscription_ids' -Value $WebQuotaWriterSubscriptionIds }
+        if ($PSBoundParameters.ContainsKey('WebQuotaWriterManagementGroupNames') -or $WebQuotaWriterManagementGroupNames.Count -gt 0){ Set-TerraformVariableValue -Variables $tfVariables -Name 'web_quota_writer_management_group_names' -Value $WebQuotaWriterManagementGroupNames }
+        if ($PSBoundParameters.ContainsKey('WorkerRbacSubscriptionIds') -or $WorkerRbacSubscriptionIds.Count -gt 0)                 { Set-TerraformVariableValue -Variables $tfVariables -Name 'worker_subscription_rbac_subscription_ids' -Value $WorkerRbacSubscriptionIds }
+        if ($PSBoundParameters.ContainsKey('WorkerRbacManagementGroupNames') -or $WorkerRbacManagementGroupNames.Count -gt 0)       { Set-TerraformVariableValue -Variables $tfVariables -Name 'worker_rbac_management_group_names' -Value $WorkerRbacManagementGroupNames }
 
-        if (-not [string]::IsNullOrWhiteSpace($WorkerSharedSecret))    { $tfVars += "-var=worker_shared_secret=$WorkerSharedSecret" }
-        if (-not [string]::IsNullOrWhiteSpace($KeyVaultNameOverride))  { $tfVars += "-var=key_vault_name_override=$KeyVaultNameOverride" }
-        if (-not [string]::IsNullOrWhiteSpace($QuotaManagementGroupId)){ $tfVars += "-var=quota_management_group_id=$QuotaManagementGroupId" }
-        if (-not [string]::IsNullOrWhiteSpace($ExistingSqlServerName))                { $tfVars += "-var=existing_sql_server_name=$ExistingSqlServerName" }
-        if (-not [string]::IsNullOrWhiteSpace($ExistingSqlServerResourceGroupName))   { $tfVars += "-var=existing_sql_server_resource_group_name=$ExistingSqlServerResourceGroupName" }
-        if (-not [string]::IsNullOrWhiteSpace($ExistingSqlDatabaseName))              { $tfVars += "-var=existing_sql_database_name=$ExistingSqlDatabaseName" }
-        if (-not [string]::IsNullOrWhiteSpace($ExistingKeyVaultName))                 { $tfVars += "-var=existing_key_vault_name=$ExistingKeyVaultName" }
-        if (-not [string]::IsNullOrWhiteSpace($ExistingKeyVaultResourceGroupName))    { $tfVars += "-var=existing_key_vault_resource_group_name=$ExistingKeyVaultResourceGroupName" }
-        if (-not [string]::IsNullOrWhiteSpace($ExistingWorkerStorageAccountName))     { $tfVars += "-var=existing_worker_storage_account_name=$ExistingWorkerStorageAccountName" }
-        if (-not [string]::IsNullOrWhiteSpace($ExistingWorkerStorageResourceGroupName)){ $tfVars += "-var=existing_worker_storage_account_resource_group_name=$ExistingWorkerStorageResourceGroupName" }
-        if (-not [string]::IsNullOrWhiteSpace($ExistingVirtualNetworkName))           { $tfVars += Add-TerraformVariable -Name 'existing_virtual_network_name' -Value $ExistingVirtualNetworkName -RequiredWhenSet }
-        if (-not [string]::IsNullOrWhiteSpace($ExistingVirtualNetworkResourceGroupName)){ $tfVars += Add-TerraformVariable -Name 'existing_virtual_network_resource_group_name' -Value $ExistingVirtualNetworkResourceGroupName }
-        if (-not [string]::IsNullOrWhiteSpace($ExistingAppServiceIntegrationSubnetName)){ $tfVars += Add-TerraformVariable -Name 'existing_app_service_integration_subnet_name' -Value $ExistingAppServiceIntegrationSubnetName -RequiredWhenSet }
-        if (-not [string]::IsNullOrWhiteSpace($ExistingPrivateEndpointSubnetName))    { $tfVars += Add-TerraformVariable -Name 'existing_private_endpoint_subnet_name' -Value $ExistingPrivateEndpointSubnetName -RequiredWhenSet }
-        if (-not [string]::IsNullOrWhiteSpace($EntraTenantId))         { $tfVars += "-var=entra_tenant_id=$EntraTenantId" }
-        if (-not [string]::IsNullOrWhiteSpace($EntraClientId))         { $tfVars += "-var=entra_client_id=$EntraClientId" }
-        if (-not [string]::IsNullOrWhiteSpace($EntraClientSecret))     { $tfVars += "-var=entra_client_secret=$EntraClientSecret" }
-        if (-not [string]::IsNullOrWhiteSpace($AuthRedirectUri))       { $tfVars += "-var=auth_redirect_uri=$AuthRedirectUri" }
-        if ($ManageEntraWebRedirectUri.IsPresent)                      { $tfVars += "-var=manage_entra_web_redirect_uri=true" }
-        if (-not [string]::IsNullOrWhiteSpace($AdminGroupId))          { $tfVars += "-var=admin_group_id=$AdminGroupId" }
-        if (-not [string]::IsNullOrWhiteSpace($ReportViewerGroupIds))  { $tfVars += Add-TerraformVariable -Name 'report_viewer_group_ids' -Value $ReportViewerGroupIds }
-        if ($PSBoundParameters.ContainsKey('WebReaderSubscriptionIds') -or $WebReaderSubscriptionIds.Count -gt 0)                   { $tfVars += Add-TerraformVariable -Name 'web_reader_subscription_ids' -Value $WebReaderSubscriptionIds }
-        if ($PSBoundParameters.ContainsKey('WebReaderManagementGroupNames') -or $WebReaderManagementGroupNames.Count -gt 0)         { $tfVars += Add-TerraformVariable -Name 'web_reader_management_group_names' -Value $WebReaderManagementGroupNames }
-        if ($PSBoundParameters.ContainsKey('WebQuotaWriterSubscriptionIds') -or $WebQuotaWriterSubscriptionIds.Count -gt 0)         { $tfVars += Add-TerraformVariable -Name 'web_quota_writer_subscription_ids' -Value $WebQuotaWriterSubscriptionIds }
-        if ($PSBoundParameters.ContainsKey('WebQuotaWriterManagementGroupNames') -or $WebQuotaWriterManagementGroupNames.Count -gt 0){ $tfVars += Add-TerraformVariable -Name 'web_quota_writer_management_group_names' -Value $WebQuotaWriterManagementGroupNames }
-        if ($PSBoundParameters.ContainsKey('WorkerRbacSubscriptionIds') -or $WorkerRbacSubscriptionIds.Count -gt 0)                 { $tfVars += Add-TerraformVariable -Name 'worker_subscription_rbac_subscription_ids' -Value $WorkerRbacSubscriptionIds }
-        if ($PSBoundParameters.ContainsKey('WorkerRbacManagementGroupNames') -or $WorkerRbacManagementGroupNames.Count -gt 0)       { $tfVars += Add-TerraformVariable -Name 'worker_rbac_management_group_names' -Value $WorkerRbacManagementGroupNames }
-
+        $tfVars = @()
         $resolvedTerraformParameterFile = Resolve-DeploymentPath -Path $ParameterFile
         if ($resolvedTerraformParameterFile) {
             $tfVars += "-var-file=$resolvedTerraformParameterFile"
         }
 
-        $tfVars += "-var=workload_suffix=$WorkloadSuffix"
-        $tfVars += "-var=auth_enabled=$($AuthEnabled.ToString().ToLowerInvariant())"
-        if (-not [string]::IsNullOrWhiteSpace($AdminGroupId))          { $tfVars += "-var=admin_group_id=$AdminGroupId" }
-        if (-not [string]::IsNullOrWhiteSpace($ReportViewerGroupIds))  { $tfVars += Add-TerraformVariable -Name 'report_viewer_group_ids' -Value $ReportViewerGroupIds }
+        $generatedTerraformVarFile = Join-Path ([System.IO.Path]::GetTempPath()) ("capacity-dashboard-{0}.tfvars.json" -f [guid]::NewGuid().ToString('N'))
+        $tfVariablesJson = $tfVariables | ConvertTo-Json -Depth 10
+        [System.IO.File]::WriteAllText($generatedTerraformVarFile, $tfVariablesJson, (New-Object System.Text.UTF8Encoding($false)))
+        $tfVars += "-var-file=$generatedTerraformVarFile"
 
         Write-Host "Running Terraform apply..."
-    & $terraform apply -auto-approve -input=false @tfVars
+        & $terraform apply -auto-approve -input=false @tfVars
         if ($LASTEXITCODE -ne 0) { throw 'terraform apply failed' }
 
         if ([string]::IsNullOrWhiteSpace($script:IngestApiKey)) {
@@ -775,6 +768,10 @@ function Deploy-Terraform {
         Write-Host "Terraform deployment succeeded." -ForegroundColor Green
     }
     finally {
+        if ($generatedTerraformVarFile -and (Test-Path $generatedTerraformVarFile)) {
+            Remove-Item -Path $generatedTerraformVarFile -Force -ErrorAction SilentlyContinue
+        }
+
         Pop-Location
     }
 }

@@ -2,7 +2,7 @@
 
 Use this checklist when deploying the Capacity Planning Dashboard into a tightly controlled customer environment where shared services, networking, identity, and database administration are owned by customer platform teams.
 
-The goal is to have the required Azure resources, private networking, DNS, identities, and operator access ready before a Microsoft CSA or deployment operator runs the dashboard deployment scripts from the customer-approved network.
+The goal is to have the required Azure resources, private networking, DNS, identities, and operator access ready before a deployment operator runs the dashboard deployment scripts from the customer-approved network.
 
 ## Deployment Source
 

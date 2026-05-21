@@ -5110,7 +5110,7 @@ function App() {
           <div className="rx-topbar__intro">
             <div className="rx-topbar__environment-row">
               <div className="rx-kicker">{deploymentEnvironment.label}</div>
-              <strong className="rx-capacity-reminder">REMEMBER: QUOTA DOES NOT EQUAL CAPACITY. AZURE PLACEMENT SCORE IS A CONFIDENCE SIGNAL, NOT A RESERVATION OR DEPLOYMENT GUARANTEE.</strong>
+              <strong className="rx-capacity-reminder">REMEMBER: QUOTA DOES NOT EQUAL CAPACITY. AZURE PLACEMENT SPOT SCORE IS A CONFIDENCE SIGNAL, NOT A RESERVATION OR DEPLOYMENT GUARANTEE.</strong>
             </div>
           </div>
           <div className="rx-topbar__actions">

@@ -705,6 +705,35 @@ function livePlacementLegendItems() {
   ];
 }
 
+function CapacityStatusLegend() {
+  return (
+    <div className="rx-capacity-status-key">
+      <div className="rx-panel__header">
+        <div>
+          <h2>Capacity Status Key</h2>
+          <p>Capacity is an ARM/quota eligibility signal. It is not a live Azure capacity reservation or deployment guarantee.</p>
+        </div>
+      </div>
+      <div className="rx-capacity-score-key">
+        <table className="rx-capacity-score-key__table" aria-label="Capacity status key">
+          <tbody>
+            {['OK', 'CONSTRAINED', 'LIMITED', 'PARTIAL', 'BLOCKED'].map((status) => {
+              const meta = matrixStatusMeta(status);
+              return (
+                <tr key={status}>
+                  <th scope="row"><StatusPill value={status} /></th>
+                  <td><strong>{meta.short}</strong></td>
+                  <td>{meta.description}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function regionMatrixRows(rows, selectedRegion, presetRegions) {
   const scopedRows = (rows || []).filter((row) => rowMatchesResourceType(row, 'Compute'));
   const regions = selectedRegion && selectedRegion !== 'all'
@@ -1401,6 +1430,7 @@ function DataTable({ title, subtitle, columns, rows, emptyMessage, tableClassNam
 
   const pageStart = normalizedPageSize && sortedRows.length > 0 ? ((currentPage - 1) * normalizedPageSize) + 1 : (sortedRows.length > 0 ? 1 : 0);
   const pageEnd = normalizedPageSize ? Math.min(currentPage * normalizedPageSize, sortedRows.length) : sortedRows.length;
+  const showCapacityStatusLegend = title === 'Recommendation Results' && sortableColumns.some((column) => column.key === 'capacity');
 
   return (
     <section className={classNames('rx-panel', 'rx-panel--table', sectionClassName)}>
@@ -1410,6 +1440,7 @@ function DataTable({ title, subtitle, columns, rows, emptyMessage, tableClassNam
           {subtitle ? <p>{subtitle}</p> : null}
         </div>
       </div>
+      {showCapacityStatusLegend ? <div className="rx-table-legend"><CapacityStatusLegend /></div> : null}
       <div className="rx-table-wrap">
         <table className={classNames('rx-table', tableClassName)}>
           <thead>

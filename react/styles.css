@@ -997,6 +997,33 @@ body {
   padding: 7px 8px;
 }
 
+.rx-table-legend {
+  margin: 0 0 14px;
+}
+
+.rx-capacity-status-key {
+  padding: 12px 14px;
+  border: 1px solid rgba(213, 224, 235, 0.9);
+  border-radius: 10px;
+  background: rgba(239, 245, 251, 0.72);
+}
+
+.rx-capacity-status-key .rx-panel__header {
+  margin-bottom: 8px;
+}
+
+.rx-capacity-status-key .rx-panel__header h2 {
+  font-size: 16px;
+}
+
+.rx-capacity-status-key .rx-capacity-score-key__table td:first-of-type {
+  width: 132px;
+  padding-right: 14px;
+  color: var(--rx-ink);
+  font-weight: 800;
+  white-space: nowrap;
+}
+
 .rx-capacity-grid__subscription {
   min-width: 19ch;
 }

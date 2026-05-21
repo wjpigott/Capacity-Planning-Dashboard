@@ -1039,12 +1039,25 @@ body {
   font-size: 16px;
 }
 
+.rx-capacity-status-key .rx-capacity-score-key__table {
+  table-layout: auto;
+}
+
+.rx-capacity-status-key .rx-capacity-score-key__table th {
+  width: 86px;
+  padding-right: 12px;
+}
+
 .rx-capacity-status-key .rx-capacity-score-key__table td:first-of-type {
-  width: 132px;
-  padding-right: 14px;
+  width: 120px;
+  padding-right: 18px;
   color: var(--rx-ink);
   font-weight: 800;
   white-space: nowrap;
+}
+
+.rx-capacity-status-key .rx-capacity-score-key__table td:last-of-type {
+  width: auto;
 }
 
 .rx-capacity-grid__subscription {

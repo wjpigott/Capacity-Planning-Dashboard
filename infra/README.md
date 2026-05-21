@@ -108,6 +108,7 @@ Use these deploy-script switches when the customer already has shared Azure depe
 - `-ExistingPrivateEndpointSubnetName "<private-endpoint-subnet-name>"`
 
 Providing an existing resource name is enough to switch that dependency into reuse mode. `-ExistingSqlDatabaseName` is optional and only applies when you also pass `-ExistingSqlServerName`.
+SQL SKU note: the Azure SQL logical server does not determine DTU vs vCore; the database SKU does. If you pass only `-ExistingSqlServerName`, the deployment creates the dashboard database as the template default `S0` DTU database. If the customer requires vCore, serverless, Hyperscale, an elastic pool, or another governed database SKU, pre-create the database and pass both `-ExistingSqlServerName` and `-ExistingSqlDatabaseName`.
 For existing-network mode, `-ExistingVirtualNetworkResourceGroupName` is optional and defaults to `-ResourceGroupName`, but the VNet name and both subnet names must be supplied together.
 
 Example:
@@ -178,3 +179,5 @@ See [`terraform/README.md`](terraform/README.md) for the full variable table, fi
 2. Deploy the worker function app zip package (`scripts/deploy-worker.ps1`).
 3. Apply SQL schema and migrations (`scripts/apply-schema.ps1` or the web app bootstrap endpoint).
 4. Configure Entra app registration and consent (external to both templates).
+
+Manual database initialization can target any pre-created database by name. Use `scripts/initialize-database.ps1 -SqlServer "<server>.database.windows.net" -SqlDatabase "<database>" -AppIdentityName "<web-app-managed-identity-name>"` for the full DBA handoff path. If the customer requires vCore, serverless, Hyperscale, an elastic pool, or another governed SKU, pre-create that database, pass it to deployment as `-ExistingSqlDatabaseName`, and pass the same name to manual database scripts through `-SqlDatabase`.

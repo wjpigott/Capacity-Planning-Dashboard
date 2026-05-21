@@ -451,6 +451,7 @@ Private or DBA-managed SQL note:
 - If Azure SQL is pre-created by a customer DBA team and exposed only through private access with Entra-only auth, do not assume the app identity can create schema objects on first start.
 - `scripts/deploy-infra.ps1` now tries two install paths: app-identity bootstrap first, then an Azure-side admin-assisted bootstrap using the current Azure CLI login if that login is an Entra SQL admin.
 - If neither path can administer the database, hand off `scripts/initialize-database.ps1` to the DBA team. That script applies `sql/schema.sql`, runs all files in `sql/migrations/`, and grants the dashboard web app identity the runtime roles it needs.
+- Manual database scripts accept `-SqlDatabase`, so a DBA can target a customer-managed or pre-created vCore database directly. The script does not infer the database name from the SQL server.
 - `dbo.DashboardSetting` is part of the provisioned schema and is also backfilled by `sql/migrations/20260420-add-dashboard-setting.sql`. Scheduler settings are expected to come from schema/bootstrap, not from opportunistic runtime table creation.
 - `dbo.QuotaCandidateSnapshot` is also expected to be provisioned by schema/bootstrap. The app now fails fast if that table is missing instead of attempting runtime table creation.
 - If the React Data Ingestion page reports that SQL scheduler settings are unavailable because `DashboardSetting` is not provisioned, rerun the database bootstrap path instead of re-enabling runtime `CREATE TABLE` behavior.
@@ -462,6 +463,17 @@ Private or DBA-managed SQL note:
 	-SqlDatabase "<sql-database-name>" \
 	-AppIdentityName "<web-app-managed-identity-name>"
 ```
+
+Manual database PowerShell scripts:
+
+| Script | Use for | Required target parameters | Example |
+|---|---|---|---|
+| `scripts/initialize-database.ps1` | Preferred full DBA handoff/bootstrap path. Applies `sql/schema.sql`, runs every file in `sql/migrations/`, creates the web app managed-identity database user when needed, and grants runtime roles. | `-SqlServer`, `-SqlDatabase`, `-AppIdentityName` | `./scripts/initialize-database.ps1 -SqlServer "<server>.database.windows.net" -SqlDatabase "<database>" -AppIdentityName "<web-app-managed-identity-name>"` |
+| `scripts/apply-schema.ps1` | Applies only the base schema file. Use for low-level/manual recovery when you intentionally do not want the full migration chain. | `-SqlServer`, `-SqlDatabase`, plus `-UseEntra` or SQL auth parameters | `./scripts/apply-schema.ps1 -SqlServer "<server>.database.windows.net" -SqlDatabase "<database>" -UseEntra -EntraUser "<admin-upn>"` |
+| `scripts/apply-migration.ps1` | Applies one specific migration file. Use when a DBA needs to run an individual migration after the base schema exists. | `-SqlServer`, `-SqlDatabase`, `-MigrationFile`, plus `-UseEntra` or SQL auth parameters | `./scripts/apply-migration.ps1 -SqlServer "<server>.database.windows.net" -SqlDatabase "<database>" -MigrationFile "sql/migrations/<migration-file>.sql" -UseEntra -EntraUser "<admin-upn>"` |
+| `scripts/apply-database-upgrade.ps1` | Applies a selected upgrade/repair SQL file, including legacy repair files that can replace `__APP_IDENTITY_NAME__`. Use for drifted existing environments, not for normal fresh bootstrap. | `-SqlServer`, `-SqlDatabase`; optional `-SqlFile`, `-AuthenticationMethod`, `-AppIdentityName` | `./scripts/apply-database-upgrade.ps1 -SqlServer "<server>.database.windows.net" -SqlDatabase "<database>" -SqlFile "sql/test-repair-manual.sql" -AuthenticationMethod ActiveDirectoryInteractive -AppIdentityName "<web-app-managed-identity-name>"` |
+
+For customer-managed vCore, serverless, Hyperscale, or elastic-pool databases, pre-create the database with the desired SKU, pass that database name to deployment as `-ExistingSqlDatabaseName`, and use the same name in the manual database script `-SqlDatabase` parameter.
 
 **Capacity Recommender configuration:**
 
@@ -542,6 +554,7 @@ Existing shared-service reuse:
 - If the customer already has Azure SQL, Key Vault, the worker storage account, or a Virtual Network in place, pass the `deploy-infra.ps1` reuse switches instead of forcing the template to create duplicates.
 - Supported switches are `-ExistingSqlServerName`, `-ExistingSqlDatabaseName`, `-ExistingKeyVaultName`, `-ExistingWorkerStorageAccountName`, `-ExistingVirtualNetworkName`, `-ExistingAppServiceIntegrationSubnetName`, and `-ExistingPrivateEndpointSubnetName`.
 - Providing an existing resource name is enough to switch that dependency into reuse mode. `-ExistingSqlDatabaseName` is optional and only applies when `-ExistingSqlServerName` is also set.
+- SQL SKU note: the Azure SQL logical server does not determine DTU vs vCore; the database SKU does. If you pass only `-ExistingSqlServerName`, the deployment creates the dashboard database as the template default `S0` DTU database. If the customer requires vCore, serverless, Hyperscale, an elastic pool, or another governed database SKU, pre-create the database and pass both `-ExistingSqlServerName` and `-ExistingSqlDatabaseName`.
 - Optional resource-group overrides are also available when the reused dependency lives outside the dashboard resource group: `-ExistingSqlServerResourceGroupName`, `-ExistingKeyVaultResourceGroupName`, `-ExistingWorkerStorageResourceGroupName`, and `-ExistingVirtualNetworkResourceGroupName`.
 - When reusing an existing Virtual Network, provide the VNet name plus both subnet names. The App Service integration subnet must already be delegated to `Microsoft.Web/serverFarms`; the private endpoint subnet must already support private endpoints for any newly-created SQL or Key Vault private endpoints.
 - When reusing an existing SQL server or Key Vault, the infra templates assume the customer-managed private endpoint and DNS path already exists and do not create a new SQL or Key Vault private endpoint for that dependency.

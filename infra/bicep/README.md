@@ -99,6 +99,8 @@ Optional resource-group overrides are also available for reuse scenarios:
 - `existingWorkerStorageAccountResourceGroupName`
 - `existingVirtualNetworkResourceGroupName`
 
+SQL SKU note: the Azure SQL logical server does not determine DTU vs vCore; the database SKU does. If you pass only `existingSqlServerName`, the deployment creates the dashboard database as the template default `S0` DTU database. If the customer requires vCore, serverless, Hyperscale, an elastic pool, or another governed database SKU, pre-create the database and pass both `existingSqlServerName` and `existingSqlDatabaseName`.
+
 ## Environment strategy
 
 - Keep `dev` as the mutable build-and-verify environment.
@@ -146,8 +148,18 @@ Customer deployment note:
 - `deploy-infra.ps1` does not automatically switch to local `sqlcmd` execution just because the operator machine has SQL connectivity. Its built-in path still calls the deployed web app bootstrap endpoints unless you disable that step.
 - When the customer runbook requires a separate DBA or network-approved initialization step, pass `-ApplyDatabaseBootstrap $false` during infra/app deployment and then run `scripts/initialize-database.ps1` explicitly afterward.
 - If Azure SQL stays private-only, run `scripts/initialize-database.ps1` from an approved network path such as an ExpressRoute-connected admin workstation, a self-hosted deployment runner, or an Azure VM that can reach the SQL endpoint.
+- Manual database scripts accept `-SqlDatabase`, so a DBA can target a customer-managed or pre-created vCore database directly. Use the same database name passed to deployment as `-ExistingSqlDatabaseName`.
 - Do not assume a random operator laptop or hosted CI runner can reach the SQL endpoint just because the customer has ExpressRoute.
 - Keep the web app managed identity at runtime roles such as `db_datareader` and `db_datawriter` after initialization rather than relying on permanent DDL rights in the app.
+
+Manual database script quick reference:
+
+| Script | Use for | Example |
+|---|---|---|
+| `scripts/initialize-database.ps1` | Preferred full bootstrap: base schema, all migrations, and web app managed-identity database roles. | `./scripts/initialize-database.ps1 -SqlServer "<server>.database.windows.net" -SqlDatabase "<database>" -AppIdentityName "<web-app-managed-identity-name>"` |
+| `scripts/apply-schema.ps1` | Base schema only. Use for low-level/manual recovery when the full migration chain is not desired. | `./scripts/apply-schema.ps1 -SqlServer "<server>.database.windows.net" -SqlDatabase "<database>" -UseEntra -EntraUser "<admin-upn>"` |
+| `scripts/apply-migration.ps1` | One specific migration file after the base schema exists. | `./scripts/apply-migration.ps1 -SqlServer "<server>.database.windows.net" -SqlDatabase "<database>" -MigrationFile "sql/migrations/<migration-file>.sql" -UseEntra -EntraUser "<admin-upn>"` |
+| `scripts/apply-database-upgrade.ps1` | Selected upgrade/repair SQL file for drifted existing environments. | `./scripts/apply-database-upgrade.ps1 -SqlServer "<server>.database.windows.net" -SqlDatabase "<database>" -SqlFile "sql/test-repair-manual.sql" -AuthenticationMethod ActiveDirectoryInteractive -AppIdentityName "<web-app-managed-identity-name>"` |
 
 Use `-DeployWebApp $false` only when you intentionally want an infra-only run.
 

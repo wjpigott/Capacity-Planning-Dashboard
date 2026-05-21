@@ -686,27 +686,27 @@ const CAPACITY_EXPORT_STATUS_META = {
   OK: {
     fill: 'FFC6EFCE',
     font: 'FF006100',
-    description: 'Ready to deploy. No restrictions.'
+    description: 'No saved ARM restriction or quota blocker. Not a live capacity guarantee.'
   },
   LIMITED: {
     fill: 'FFFFEB9C',
     font: 'FF9C6500',
-    description: "Your subscription can't use this. Request access via support ticket."
+    description: 'Subscription, access, or quota headroom is limited for this SKU/region.'
   },
   CONSTRAINED: {
     fill: 'FFFCE4D6',
     font: 'FF9C6500',
-    description: 'Azure is low on hardware. Try a different zone or wait.'
+    description: 'Quota is exhausted or ARM returned a zone/location constraint. Check quota and REST reason fields.'
   },
   PARTIAL: {
     fill: 'FFFFF2CC',
     font: 'FF9C6500',
-    description: 'Some zones work, others are blocked. No zone redundancy.'
+    description: 'Mixed saved signals: at least one SKU/zone is unblocked and at least one has a blocker.'
   },
   RESTRICTED: {
     fill: 'FFFFC7CE',
     font: 'FF9C0006',
-    description: 'Cannot deploy. Pick a different region or SKU.'
+    description: 'No unblocked saved SKU signal for this cell. Verify REST reason, quota, or placement.'
   },
   DEFAULT: {
     fill: 'FFF3F2F1',

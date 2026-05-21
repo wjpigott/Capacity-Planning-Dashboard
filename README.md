@@ -230,6 +230,48 @@ Optional ingestion scope settings:
 
 When `CAPACITY_WORKER_BASE_URL` is set, live placement refresh calls the Azure Function worker first. The currently verified working Azure dev baseline uses `CAPACITY_WORKER_SHARED_SECRET` on the web app and `WORKER_SHARED_SECRET` on the function app. If the worker is unavailable and `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK` is not `true`, the dashboard falls back to the in-process App Service path to preserve rollback safety.
 
+## Azure VM availability REST reason fields
+
+The VM availability scanner uses Azure Resource Manager REST data from `Microsoft.Compute/skus` and regional `Microsoft.Compute/locations/{region}/usages`. The SKU response does not return literal `OK`, `LIMITED`, or `RESTRICTED` values. Those labels are dashboard-friendly interpretations of the raw `restrictions` array.
+
+Important distinction: the historical `OK` label meant ARM returned no SKU restriction for that subscription, region, and SKU. It did not mean Azure had confirmed live physical capacity for a deployment at that moment. Treat `OK` as eligibility/no-restriction evidence, not as an allocation guarantee.
+
+Use the sample REST script to inspect the source payload for a region, family, or SKU list:
+
+```powershell
+.\tools\Test-AzVMAvailabilityRestCall.ps1 -Region eastus2 -FamilyFilter E
+.\tools\Test-AzVMAvailabilityRestCall.ps1 -Region eastus2 -SkuFilter Standard_E104i_v5,Standard_E128-32ads_v7 -ShowRaw
+```
+
+The script gets an ARM token from the current Az PowerShell context, then calls:
+
+```http
+GET https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.Compute/skus?api-version=2021-07-01&$filter=location eq '{region}'
+GET https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.Compute/locations/{region}/usages?api-version=2023-09-01
+```
+
+Important REST fields:
+
+| REST field | Meaning |
+| --- | --- |
+| `locationInfo.zones` | Zones where the SKU is listed for the region. If there are no restrictions, this is the evidence behind the old `OK` zone display. |
+| `restrictions[].reasonCode` | Azure's returned reason for a restriction, such as `NotAvailableForSubscription`. |
+| `restrictions[].type` | Restriction scope, commonly `Location` or `Zone`. |
+| `restrictions[].restrictionInfo.zones` | Specific zones affected by a zone-scoped restriction. |
+| `family` | Compute quota family/resource name used to match the regional usage quota row. |
+
+Historical label mapping:
+
+| Raw ARM evidence | Previous friendly label | What it really means |
+| --- | --- |
+| `restrictions` is empty | `OK` | ARM did not return a restriction blocking this subscription from using the SKU in the region. This is not a live capacity guarantee. |
+| `reasonCode=NotAvailableForSubscription` | `LIMITED` | ARM returned an explicit subscription/region/zone restriction for the SKU. |
+| Other location or zone restrictions | `RESTRICTED`, `PARTIAL`, or capacity-constrained display depending on affected zones | ARM returned a blocking location or zone restriction; inspect `type`, `reasonCode`, and `restrictionInfo.zones`. |
+
+For example, a SKU with no restrictions may show `RestRestriction = NoRestrictionsReturned` in the sample script. That does not mean Azure returned the word `OK`; it means ARM returned no restriction records for that SKU in that subscription and region. A restricted SKU may show `reasonCode=NotAvailableForSubscription,type=Location; reasonCode=NotAvailableForSubscription,type=Zone`, which is the raw evidence that older reports summarized as `LIMITED`.
+
+Quota and live placement are separate signals. The `usages` call shows quota headroom (`limit - currentValue`) for the SKU's quota family; it does not prove regional hardware capacity. For stronger deployment-time confidence, use the live placement score path or validate with an actual deployment request for the desired SKU, region, zone, and count.
+
 Report runtime dependency reference:
 
 | Area | Uses PowerShell for normal report read? | Runtime/status notes |

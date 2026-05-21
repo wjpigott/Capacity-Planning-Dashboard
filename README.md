@@ -1042,6 +1042,15 @@ Use these Learn pages as the canonical references for request shapes, response p
 Note:
 The Capacity Score direct placement-score path currently uses the same underlying placement-score contract surfaced by `Invoke-AzSpotPlacementScore`, but we did not find a public Learn REST page for the `Microsoft.Compute/locations/{location}/placementScores/spot/generate` ARM operation. Treat the Az.Compute cmdlet page above as the public reference for that contract until Microsoft publishes a REST Learn page.
 
+Live placement score interpretation:
+
+- The dashboard calls `POST /subscriptions/{subscriptionId}/providers/Microsoft.Compute/locations/{anchorRegion}/placementScores/spot/generate?api-version=2025-06-05` with `desiredLocations`, `desiredSizes`, and `desiredCount`.
+- Azure returns a placement score such as `High`, `Medium`, `Low`, `RestrictedSkuNotAvailable`, or `SkuNotAvailable`, plus fields such as `isQuotaAvailable` when available.
+- `High`, `Medium`, and `Low` are Azure placement confidence signals for that exact subscription, SKU, region, and desired VM count. They are not capacity reservations and do not guarantee that a later deployment will succeed.
+- `isQuotaAvailable: true` only means the quota signal for the request is available. A row can still return `RestrictedSkuNotAvailable`, which means quota and placement are separate signals.
+- Customer-safe wording: use this as a placement-risk indicator for planning, then validate with an actual deployment request for the final SKU, region, zone, count, policy, network, disk, and availability settings.
+- To inspect the raw REST payload before changing dashboard behavior, run `tools/Test-CapacityScorePlacementRestCall.ps1` from an authenticated Az PowerShell session.
+
 #### Quota discovery and quota move workflows
 
 - Management groups list: https://learn.microsoft.com/en-us/rest/api/managementgroups/management-groups/list?view=rest-managementgroups-2020-05-01

@@ -675,32 +675,32 @@ function livePlacementLegendItems() {
     {
       value: 'High',
       title: 'High',
-      description: 'Azure returned a strong live placement score for this SKU and region.'
+      description: 'Azure returned a stronger placement score for the selected subscription, SKU, region, and desired VM count. This is not a reservation.'
     },
     {
       value: 'Medium',
       title: 'Medium',
-      description: 'Azure returned a usable but not ideal live placement score.'
+      description: 'Azure returned a moderate placement score for the requested VM count. Deployment may still depend on quota, policy, zones, and changing capacity.'
     },
     {
       value: 'Low',
       title: 'Low',
-      description: 'Azure returned a weak live placement score. Placement may still fail.'
+      description: 'Azure returned a weak placement score for the requested VM count. Treat this as a higher placement-risk signal.'
     },
     {
       value: 'Limited',
       title: 'Limited',
-      description: 'Azure returned a subscription or access restriction. The SKU may exist in the region, but this subscription cannot place it as-is.'
+      description: 'Azure returned a subscription, quota, or access restriction. The SKU may exist in the region, but this subscription cannot place it as requested.'
     },
     {
       value: 'Unavailable',
       title: 'Unavailable',
-      description: 'Azure explicitly said the SKU is not available for placement in that region.'
+      description: 'Azure explicitly said the SKU is not available for placement in that region for this request.'
     },
     {
       value: 'N/A',
       title: 'N/A',
-      description: 'No saved live placement result is available for this SKU and region yet. This is not the same as unavailable.'
+      description: 'No saved Azure placement score is available for this SKU and region yet. This is not the same as unavailable.'
     }
   ];
 }
@@ -2084,10 +2084,10 @@ function AdminIngestionView(props) {
           </article>
           <article className="rx-scope-card">
             <h3>Capacity Score Live</h3>
-            <p>Azure Live Score is refreshed only when a user runs Refresh Live Placement from Capacity Score. The last checked result is retained in SQL for the selected scope.</p>
+            <p>Azure Placement is refreshed only when a user runs Refresh Live Placement from Capacity Score. The last checked placement score is retained in SQL for the selected scope.</p>
             <dl>
               <dt>Scheduling</dt><dd>Not scheduled</dd>
-              <dt>Updates</dt><dd>Azure Live Score, Checked, and live placement state</dd>
+              <dt>Updates</dt><dd>Azure Placement, Checked, and placement state</dd>
               <dt>Capacity snapshots</dt><dd>Not changed by live placement</dd>
             </dl>
           </article>
@@ -4969,7 +4969,7 @@ function App() {
             <div className="rx-panel__header">
               <div>
                 <h2>Regional SKU Capacity Score</h2>
-                <p>Refresh runs a targeted live Azure capacity check, then saves the latest placement result to SQL.</p>
+                <p>Refresh asks Azure Compute for a placement score for the selected subscription, SKU scope, regions, and desired VM count, then saves the latest result to SQL.</p>
               </div>
             </div>
             <div className="rx-field-grid rx-field-grid--filters">
@@ -5000,7 +5000,7 @@ function App() {
           </section>
 
           <section className="rx-panel rx-panel--compact rx-panel--muted">
-            <div className="rx-panel__header"><div><h2>Capacity Score Key</h2><p>Regional Availability is a saved ARM/quota eligibility signal. Azure Placement is the live placement signal.</p></div></div>
+            <div className="rx-panel__header"><div><h2>Capacity Score Key</h2><p>Regional Availability is a saved ARM/quota eligibility signal. Azure Placement is an Azure placement-score confidence signal for the requested VM count.</p></div></div>
             <div className="rx-capacity-score-key">
               <h3>Azure Placement</h3>
               <table className="rx-capacity-score-key__table" aria-label="Azure placement score key">
@@ -5017,6 +5017,7 @@ function App() {
                   </tr>
                 </tbody>
               </table>
+              <p className="rx-capacity-score-key__note">Azure Placement uses Azure Compute's placement score API for the selected subscription, VM size, region, and desired VM count. It provides a placement confidence signal such as High, Medium, Low, or a restriction response. It is useful for planning and risk reduction, but it is not a capacity reservation and does not guarantee a future deployment will succeed.</p>
             </div>
           </section>
 
@@ -5109,7 +5110,7 @@ function App() {
           <div className="rx-topbar__intro">
             <div className="rx-topbar__environment-row">
               <div className="rx-kicker">{deploymentEnvironment.label}</div>
-              <strong className="rx-capacity-reminder">REMEMBER: QUOTA DOES NOT EQUAL CAPACITY. THIS TOOL IS NOT CHECKING AZURE LIVE CAPACITY.</strong>
+              <strong className="rx-capacity-reminder">REMEMBER: QUOTA DOES NOT EQUAL CAPACITY. ARM/QUOTA STATUS IS NOT LIVE AZURE CAPACITY.</strong>
             </div>
           </div>
           <div className="rx-topbar__actions">

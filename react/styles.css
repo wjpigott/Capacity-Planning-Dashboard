@@ -1338,7 +1338,7 @@ body {
 }
 
 .rx-capacity-score-key h3 {
-  margin: 0 0 6px;
+  margin: 0 0 4px;
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1353,7 +1353,7 @@ body {
 
 .rx-capacity-score-key__table th,
 .rx-capacity-score-key__table td {
-  padding: 4px 0;
+  padding: 3px 0;
   vertical-align: middle;
   text-align: left;
   border-top: 1px solid rgba(23, 50, 77, 0.08);
@@ -1365,8 +1365,8 @@ body {
 }
 
 .rx-capacity-score-key__table th {
-  width: 108px;
-  padding-right: 14px;
+  width: 92px;
+  padding-right: 10px;
   white-space: nowrap;
   color: var(--rx-ink);
   font-size: 12px;
@@ -1380,8 +1380,19 @@ body {
 }
 
 .rx-capacity-score-key__table .rx-pill {
-  min-width: 70px;
+  min-width: 62px;
   justify-content: center;
+}
+
+.rx-capacity-score-key__note {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-left: 3px solid rgba(17, 94, 89, 0.35);
+  border-radius: 0 8px 8px 0;
+  background: rgba(236, 253, 245, 0.58);
+  color: var(--rx-ink);
+  font-size: 12px;
+  line-height: 1.42;
 }
 
 .rx-capacity-score-table .rx-pill {

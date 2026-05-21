@@ -5107,7 +5107,10 @@ function App() {
       <main className="rx-main">
         <header className={classNames('rx-topbar', drawerOpen && 'is-drawer-open')}>
           <div className="rx-topbar__intro">
-            <div className="rx-kicker">{deploymentEnvironment.label}</div>
+            <div className="rx-topbar__environment-row">
+              <div className="rx-kicker">{deploymentEnvironment.label}</div>
+              <strong className="rx-capacity-reminder">REMEMBER: QUOTA DOES NOT EQUAL CAPACITY. THIS TOOL IS NOT CHECKING AZURE LIVE CAPACITY.</strong>
+            </div>
           </div>
           <div className="rx-topbar__actions">
             {isAdminView ? <label className="rx-check rx-check--sql-toggle"><input type="checkbox" checked={showSqlPreview} disabled={uiSettingsBusy} onChange={(event) => handleShowSqlPreviewChange(event.target.checked)} />Show SQL</label> : null}

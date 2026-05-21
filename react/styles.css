@@ -212,6 +212,29 @@ body {
   gap: 4px;
 }
 
+.rx-topbar__environment-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+}
+
+.rx-capacity-reminder {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 5px 10px;
+  border: 1px solid rgba(156, 91, 0, 0.35);
+  border-radius: 8px;
+  background: #fff5dd;
+  color: #7a3f00;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  line-height: 1.25;
+  text-transform: uppercase;
+}
+
 .rx-topbar h2 {
   font-size: clamp(2rem, 4vw, 3.25rem);
   line-height: 1.05;
@@ -1443,6 +1466,10 @@ body {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--rx-brand);
+}
+
+.rx-topbar__environment-row .rx-kicker {
+  margin-bottom: 0;
 }
 
 .rx-hero h1 {

@@ -48,7 +48,7 @@ const REPORT_VIEWS = [
   { key: 'paas-availability', label: 'PaaS Availability', adminOnly: false },
   { key: 'shareable-quota-report', label: 'Shareable Quota Report', adminOnly: false },
   { key: 'sku-chart', label: 'Top SKUs', adminOnly: false },
-  { key: 'capacity-score', label: 'Capacity Score', adminOnly: false },
+  { key: 'capacity-score', label: 'Capacity Spot Score', adminOnly: false },
   { key: 'family-summary', label: 'Family Summary', adminOnly: false },
   { key: 'region-matrix', label: 'Region Matrix', adminOnly: false },
   { key: 'trend', label: 'Trend History', adminOnly: false },
@@ -2069,7 +2069,7 @@ function AdminIngestionView(props) {
         </div>
       </section>
       <section className="rx-panel rx-panel--compact rx-panel--muted">
-        <div className="rx-panel__header"><div><h2>Scheduler Scope</h2><p>Read-only view of the configured Capacity Ingest execution scope. Capacity Score live placement is on-demand only and stores the last checked result.</p></div></div>
+        <div className="rx-panel__header"><div><h2>Scheduler Scope</h2><p>Read-only view of the configured Capacity Ingest execution scope. Capacity Spot Score live placement is on-demand only and stores the last checked result.</p></div></div>
         <div className="rx-scope-grid">
           <article className="rx-scope-card">
             <h3>Capacity Ingest</h3>
@@ -2083,8 +2083,8 @@ function AdminIngestionView(props) {
             </dl>
           </article>
           <article className="rx-scope-card">
-            <h3>Capacity Score Live</h3>
-            <p>Azure Placement is refreshed only when a user runs Refresh Live Placement from Capacity Score. The last checked placement score is retained in SQL for the selected scope.</p>
+            <h3>Capacity Spot Score Live</h3>
+            <p>Azure Placement is refreshed only when a user runs Refresh Live Placement from Capacity Spot Score. The last checked placement score is retained in SQL for the selected scope.</p>
             <dl>
               <dt>Scheduling</dt><dd>Not scheduled</dd>
               <dt>Updates</dt><dd>Azure Placement, Checked, and placement state</dd>
@@ -3111,7 +3111,7 @@ function App() {
   const [trendRows, setTrendRows] = useState([]);
   const [trendGranularity, setTrendGranularity] = useState('daily');
   const [familyRows, setFamilyRows] = useState([]);
-  const [capacityScores, setCapacityScores] = useState({ rows: [], pagination: { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false }, subscriptionSummary: [], desiredCount: '1', status: { tone: 'info', message: 'Load or refresh live placement to populate saved capacity score snapshots.', detail: '' }, busy: false });
+  const [capacityScores, setCapacityScores] = useState({ rows: [], pagination: { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false }, subscriptionSummary: [], desiredCount: '1', status: { tone: 'info', message: 'Load or refresh live placement to populate saved capacity spot score snapshots.', detail: '' }, busy: false });
   const [aiModelState, setAiModelState] = useState({ rows: [], regions: [], loading: false, status: { tone: 'info', message: 'AI model availability report ready.', detail: 'Open the sidebar report to review Azure AI model and provider coverage.' } });
   const [paasState, setPaaSState] = useState({ rows: [], summary: { rowCount: 0, serviceSummary: [], requestedService: 'All', requestedRegionPreset: 'USMajor', requestedRegions: [] }, facets: { services: [], regions: [], categories: [] }, filters: { service: 'All', regionPreset: 'USMajor' }, status: { tone: 'info', message: 'Load cached PaaS availability or refresh to run a live scan.' }, busy: { load: false, refresh: false }, capturedAtUtc: null, metadata: null });
   const [exportBusyFormat, setExportBusyFormat] = useState('');
@@ -4151,8 +4151,8 @@ function App() {
           busy: false,
           status: {
             tone: 'error',
-            message: error.message || 'Failed to load capacity score data.',
-            detail: 'The requested Capacity Score page could not be loaded.'
+            message: error.message || 'Failed to load capacity spot score data.',
+            detail: 'The requested Capacity Spot Score page could not be loaded.'
           }
         }));
       }
@@ -4968,8 +4968,8 @@ function App() {
           <section className="rx-panel rx-panel--compact">
             <div className="rx-panel__header">
               <div>
-                <h2>Regional SKU Capacity Score</h2>
-                <p>Refresh asks Azure Compute for a placement score for the selected subscription, SKU scope, regions, and desired VM count, then saves the latest result to SQL.</p>
+                <h2>Regional SKU Capacity Spot Score</h2>
+                <p>Azure Placement uses Azure Compute's Spot Placement Score capability for the selected subscription, VM size, region, and desired VM count. It returns a placement confidence or restriction signal, not a capacity reservation or deployment guarantee.</p>
               </div>
             </div>
             <div className="rx-field-grid rx-field-grid--filters">
@@ -5000,7 +5000,7 @@ function App() {
           </section>
 
           <section className="rx-panel rx-panel--compact rx-panel--muted">
-            <div className="rx-panel__header"><div><h2>Capacity Score Key</h2><p>Regional Availability is a saved ARM/quota eligibility signal. Azure Placement is an Azure placement-score confidence signal for the requested VM count.</p></div></div>
+            <div className="rx-panel__header"><div><h2>Capacity Spot Score Key</h2><p>Regional Availability is a saved ARM/quota eligibility signal. Azure Placement is an Azure Spot Placement Score confidence signal for the requested VM count.</p></div></div>
             <div className="rx-capacity-score-key">
               <h3>Azure Placement</h3>
               <table className="rx-capacity-score-key__table" aria-label="Azure placement score key">
@@ -5022,7 +5022,7 @@ function App() {
           </section>
 
           <DataTable
-            title="Capacity Score"
+            title="Capacity Spot Score"
             subtitle="Latest saved capacity snapshot plus refreshed Azure live placement details."
             tableClassName="rx-table--dense rx-capacity-score-table"
             sectionClassName="rx-panel--compact"
@@ -5042,7 +5042,7 @@ function App() {
               { key: 'reason', label: 'Reason', headerClassName: 'rx-capacity-score-table__reason', cellClassName: 'rx-capacity-score-table__reason', render: (row) => <span title={row.reason || ''}>{row.reason || 'n/a'}</span> }
             ]}
             rows={capacityScores.rows}
-            emptyMessage="No capacity score entries available."
+            emptyMessage="No capacity spot score entries available."
             getRowClassName={getCapacityScoreRowClassName}
           />
           <ServerPagination pagination={capacityScores.pagination} onPageChange={(pageNumber) => setCapacityScores((current) => ({ ...current, pagination: { ...current.pagination, pageNumber: Math.max(1, pageNumber) } }))} onPageSizeChange={(pageSize) => setCapacityScores((current) => ({ ...current, pagination: { ...current.pagination, pageNumber: 1, pageSize: Math.max(1, pageSize) } }))} />
@@ -5110,7 +5110,7 @@ function App() {
           <div className="rx-topbar__intro">
             <div className="rx-topbar__environment-row">
               <div className="rx-kicker">{deploymentEnvironment.label}</div>
-              <strong className="rx-capacity-reminder">REMEMBER: QUOTA DOES NOT EQUAL CAPACITY. ARM/QUOTA STATUS IS NOT LIVE AZURE CAPACITY.</strong>
+              <strong className="rx-capacity-reminder">REMEMBER: QUOTA DOES NOT EQUAL CAPACITY. AZURE PLACEMENT SCORE IS A CONFIDENCE SIGNAL, NOT A RESERVATION OR DEPLOYMENT GUARANTEE.</strong>
             </div>
           </div>
           <div className="rx-topbar__actions">

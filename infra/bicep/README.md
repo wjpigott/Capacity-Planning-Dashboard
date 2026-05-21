@@ -22,6 +22,24 @@ Existing shared-service reuse is supported for:
 - Worker host Storage Account
 - Virtual Network with pre-created App Service integration and private endpoint subnets
 
+## Azure service purpose map
+
+Use this table during customer reviews to explain why each Azure service exists and which resources are infrastructure dependencies rather than dashboard data stores.
+
+| Azure service | Created by default? | Used for | Stores dashboard/report data? | Notes |
+|---|---:|---|---:|---|
+| App Service Plan + Web App | Yes | Hosts the React dashboard, Express API, authentication flow, admin pages, and SQL-backed report APIs. | No | Runtime host only; report data is read from Azure SQL. |
+| Dedicated App Service Plan + Function App | Yes | PowerShell 7 worker for live placement, PaaS availability refresh, recommendations fallback, and quota move/apply execution paths. | No | Required only when the worker execution paths are deployed. |
+| Worker Storage Account | Yes, unless reusing an existing account | Azure Functions host storage for the worker Function App through identity-based `AzureWebJobsStorage`. | No | This is not a report archive or business-data store. It exists for Function App runtime state, locks, queues/tables/blobs used by the Azure Functions host. |
+| System-assigned managed identities | Yes | Let the Web App and Function App access Azure resources without stored credentials. | No | The Web App and Function App each have their own identity and RBAC. |
+| Azure SQL Server + SQL Database | Yes, unless reusing existing SQL | Capacity snapshots, latest capacity view, trend history, dashboard settings, operation/error logs, live placement snapshots, PaaS snapshots, AI catalog data, and quota candidate history. | Yes | This is the primary dashboard data store for the full deployment. |
+| Virtual Network and subnets | Yes, unless reusing existing network | Private routing for Web App/Function App integration and private endpoints. | No | Requires a delegated App Service integration subnet and a private endpoint subnet. |
+| SQL Private Endpoint + Private DNS | Yes when creating SQL and private SQL access is enabled | Private connectivity from the app hosts to Azure SQL. | No | Skipped when reusing a SQL server that already has customer-managed private connectivity. |
+| Key Vault | Yes, unless reusing existing vault | Stores deployment/runtime secrets such as app secrets and internal shared secrets. | No | Uses RBAC authorization and managed identity access. |
+| Key Vault Private Endpoint + Private DNS | Yes when creating Key Vault and private vault access is enabled | Private connectivity from the app hosts to Key Vault. | No | Skipped when reusing a Key Vault that already has customer-managed private connectivity. |
+| Application Insights + Log Analytics | Yes | Application telemetry, diagnostics, and operational troubleshooting. | No | Does not replace Azure SQL for dashboard report data. |
+| Role assignments | Yes, based on parameters | Grants least-required access for Key Vault, worker host storage, cross-subscription reads, live placement, billing/pricing, and quota apply. | No | Scope depends on management-group or subscription parameters. |
+
 ## Security design
 
 - No subscription IDs, tenant IDs, resource group names, or secrets are stored in this repo.

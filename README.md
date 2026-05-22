@@ -263,7 +263,7 @@ Important REST fields:
 #### Historical label mapping
 
 | Raw ARM evidence | Previous friendly label | What it really means |
-| --- | --- |
+| --- | --- | --- |
 | `restrictions` is empty | `OK` | ARM did not return a restriction blocking this subscription from using the SKU in the region. This is not a live capacity guarantee. |
 | `reasonCode=NotAvailableForSubscription` | `LIMITED` | ARM returned an explicit subscription/region/zone restriction for the SKU. |
 | Other location or zone restrictions | `RESTRICTED`, `PARTIAL`, or capacity-constrained display | ARM returned a blocking location or zone restriction. Inspect `type`, `reasonCode`, and `restrictionInfo.zones` to understand the affected zones. |

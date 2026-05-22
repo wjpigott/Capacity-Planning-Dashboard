@@ -260,13 +260,13 @@ Important REST fields:
 | `restrictions[].restrictionInfo.zones` | Specific zones affected by a zone-scoped restriction. |
 | `family` | Compute quota family/resource name used to match the regional usage quota row. |
 
-Historical label mapping:
+#### Historical label mapping
 
 | Raw ARM evidence | Previous friendly label | What it really means |
 | --- | --- |
 | `restrictions` is empty | `OK` | ARM did not return a restriction blocking this subscription from using the SKU in the region. This is not a live capacity guarantee. |
 | `reasonCode=NotAvailableForSubscription` | `LIMITED` | ARM returned an explicit subscription/region/zone restriction for the SKU. |
-| Other location or zone restrictions | `RESTRICTED`, `PARTIAL`, or capacity-constrained display depending on affected zones | ARM returned a blocking location or zone restriction; inspect `type`, `reasonCode`, and `restrictionInfo.zones`. |
+| Other location or zone restrictions | `RESTRICTED`, `PARTIAL`, or capacity-constrained display | ARM returned a blocking location or zone restriction. Inspect `type`, `reasonCode`, and `restrictionInfo.zones` to understand the affected zones. |
 
 For example, a SKU with no restrictions may show `RestRestriction = NoRestrictionsReturned` in the sample script. That does not mean Azure returned the word `OK`; it means ARM returned no restriction records for that SKU in that subscription and region. A restricted SKU may show `reasonCode=NotAvailableForSubscription,type=Location; reasonCode=NotAvailableForSubscription,type=Zone`, which is the raw evidence that older reports summarized as `LIMITED`.
 

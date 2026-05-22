@@ -532,6 +532,44 @@ The `GET_AZ_VM_AVAILABILITY_ROOT` environment variable tells the recommender wra
 
 Quota apply uses the vendored `tools/Get-AzVMAvailability` copy that ships with this repo, so it does not depend on a separate external checkout.
 
+## Firewall and outbound API requirements
+
+The dashboard uses Azure Resource Manager, Microsoft identity endpoints, Azure SQL, Key Vault, storage, and optional public pricing/package endpoints. In locked-down environments, allow these endpoints from the deployment machine and, where applicable, from the deployed Web App and Function App outbound path. See [docs/LOCKED-DOWN-CUSTOMER-PREREQS.md](docs/LOCKED-DOWN-CUSTOMER-PREREQS.md) for the fuller locked-down deployment checklist.
+
+| Source | Destination/FQDN | Protocol | Required for | Notes |
+| --- | --- | --- | --- | --- |
+| Deployment machine | `github.com` | HTTPS 443 | Clone or update the repository | Can be replaced with a customer-approved offline package. |
+| Deployment machine | `management.azure.com` | HTTPS 443 | Azure CLI, ARM deployments, RBAC, and validation | Required for deployment and resource operations. |
+| Deployment machine | `login.microsoftonline.com` | HTTPS 443 | Azure login and token acquisition | Required for Azure CLI and PowerShell authentication. |
+| Deployment machine | `registry.npmjs.org` | HTTPS 443 | `npm install` | Can be replaced with an approved npm mirror or package cache. |
+| Deployment machine | `releases.hashicorp.com`, `registry.terraform.io` | HTTPS 443 | Terraform provider restore | Required only when the Terraform deployment path is used. |
+| Deployment machine | `<sql-server>.database.windows.net` or SQL private endpoint | TCP 1433 | Manual database bootstrap | Required only when running database initialization directly from the deployment machine. |
+| Web App | `management.azure.com` | HTTPS 443 | ARM read APIs, quota discovery, placement score, AI ingestion, and PaaS ingestion | Uses managed identity or configured Azure credential token. |
+| Web App | `login.microsoftonline.com` | HTTPS 443 | Entra token acquisition | Needed for Azure credential flows. |
+| Web App | `<sql-server>.database.windows.net` or SQL private endpoint | TCP 1433 | Dashboard data store | Prefer private endpoint in locked-down environments. |
+| Web App | `<keyvault>.vault.azure.net` or Key Vault private endpoint | HTTPS 443 | Runtime secrets | Prefer private endpoint in locked-down environments. |
+| Web App | `prices.azure.com` | HTTPS 443 | Optional pricing enrichment | Needed only when pricing features are enabled. |
+| Function App worker | `management.azure.com` | HTTPS 443 | Live placement, PaaS scans, and quota worker paths | Uses managed identity. |
+| Function App worker | Storage account blob, queue, table, and file endpoints or private endpoints | HTTPS 443 | Function host storage | Required by Azure Functions host storage. |
+| Browser/user | `<web-app>.azurewebsites.net` or App Service private endpoint | HTTPS 443 | Dashboard UI and same-origin API | If App Service private endpoint is used, customer DNS and network routing must resolve privately. |
+
+The browser does not call Azure Resource Manager directly. Browser traffic is same-origin to the dashboard Web App. Azure API calls are made server-side by the Web App or Function App worker using managed identity or configured Azure credentials.
+
+### Azure APIs called by feature
+
+| Feature | Azure API family | Endpoint pattern | Public internet host |
+| --- | --- | --- | --- |
+| Subscription discovery | Azure Resource Manager | `/subscriptions`, `/providers/Microsoft.Management/managementGroups/...` | `management.azure.com` |
+| Compute quota ingestion | `Microsoft.Compute` | `/subscriptions/{subscriptionId}/providers/Microsoft.Compute/locations/{region}/usages` | `management.azure.com` |
+| Compute SKU availability | `Microsoft.Compute` | `/subscriptions/{subscriptionId}/providers/Microsoft.Compute/skus` | `management.azure.com` |
+| Capacity Spot Score | `Microsoft.Compute` Spot Placement Score | `/subscriptions/{subscriptionId}/providers/Microsoft.Compute/locations/{region}/placementScores/spot/generate` | `management.azure.com` |
+| Quota groups and quota apply | `Microsoft.Quota` | `/providers/Microsoft.Quota/groupQuotas/...` | `management.azure.com` |
+| AI quota and model catalog | `Microsoft.CognitiveServices` | `/providers/Microsoft.CognitiveServices/locations/{region}/usages`, `/models` | `management.azure.com` |
+| PaaS Availability | SQL, DocumentDB, Web, App, ContainerService, Storage, and other resource providers | Provider-specific ARM routes | `management.azure.com` |
+| Optional pricing | Azure Retail Prices | `/api/retail/prices` | `prices.azure.com` |
+
+If public internet egress is blocked, provide approved routes or mirrors for GitHub, npm, Terraform providers, Azure login, Azure Resource Manager, Azure SQL, Key Vault, storage, and optional pricing. For SQL, Key Vault, storage, and App Service private endpoints, validate DNS from both the deployment machine and the App Service/Function outbound path.
+
 ## Infrastructure deployment
 
 Terraform deployment note:

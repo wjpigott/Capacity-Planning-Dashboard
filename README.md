@@ -41,9 +41,11 @@ This project is licensed under the terms of the [MIT License](LICENSE).
 
 ## Architecture
 
-- Primary editable source (Draw.io): `docs/current-architecture.drawio`
-- Current-state Mermaid source: `docs/current-architecture.mmd`
-- Rendered PNG: `docs/current-architecture.png`
+- Primary editable source (Draw.io): [docs/current-architecture.drawio](docs/current-architecture.drawio)
+- Current-state Mermaid source: [docs/current-architecture.mmd](docs/current-architecture.mmd)
+- Rendered PNG: [docs/current-architecture.png](docs/current-architecture.png)
+
+![Current Capacity Dashboard architecture](docs/current-architecture.png)
 
 The current-state diagram reflects what is deployed now: App Service hosting the static UI + Express API, Azure SQL with Entra-only auth, managed identity database access, Key Vault RBAC integration, Function App worker private ingress through Private Link, and App Insights/Log Analytics.
 

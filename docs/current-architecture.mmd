@@ -16,6 +16,12 @@ flowchart LR
         Worker[Azure Function App worker\nPowerShell 7.4\nSystem-assigned managed identity]
     end
 
+    subgraph PrivateIngress[Private Ingress]
+        direction TB
+        FuncPE[Function App private endpoint\nsubresource: sites]
+        FuncDns[Private DNS zone\nprivatelink.azurewebsites.net]
+    end
+
     subgraph Data[Data Platform]
         direction TB
         Sql[(Azure SQL Database\nCapacitySnapshot + AIModelAvailability\nCapacityLatest + AIModelAvailabilityLatest\nDashboardSetting AI cadence defaults)]
@@ -43,7 +49,8 @@ flowchart LR
     end
 
     User --> Browser --> WebApp --> Api
-    Api --> Worker
+    Api -->|Private Link + shared worker secret| FuncPE --> Worker
+    FuncDns --> FuncPE
     Api -->|Managed identity auth| Sql
     Seed --> Sql
     Entra --> Sql
@@ -58,7 +65,7 @@ flowchart LR
     Local --> Infra --> Worker
     Local --> Seed
 
-    class Experience,Data,Access,Security,Delivery group;
+    class Experience,PrivateIngress,Data,Access,Security,Delivery group;
     class WebApp,Api,Worker app;
     class Sql,Seed data;
     class Entra,Kv,Appi,Log azure;

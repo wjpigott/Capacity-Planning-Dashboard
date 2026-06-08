@@ -45,7 +45,7 @@ This project is licensed under the terms of the [MIT License](LICENSE).
 - Current-state Mermaid source: `docs/current-architecture.mmd`
 - Rendered PNG: `docs/current-architecture.png`
 
-The current-state diagram reflects what is deployed now: App Service hosting the static UI + Express API, Azure SQL with Entra-only auth, managed identity database access, Key Vault RBAC integration, and App Insights/Log Analytics.
+The current-state diagram reflects what is deployed now: App Service hosting the static UI + Express API, Azure SQL with Entra-only auth, managed identity database access, Key Vault RBAC integration, Function App worker private ingress through Private Link, and App Insights/Log Analytics.
 
 The next execution split is now scaffolded in-repo: a dedicated Azure Functions PowerShell 7 worker host under `functions/CapacityWorker/` for live placement and future quota move/apply orchestration.
 
@@ -552,6 +552,7 @@ The dashboard uses Azure Resource Manager, Microsoft identity endpoints, Azure S
 | Web App | `login.microsoftonline.com` | HTTPS 443 | Entra token acquisition | Needed for Azure credential flows. |
 | Web App | `<sql-server>.database.windows.net` or SQL private endpoint | TCP 1433 | Dashboard data store | Prefer private endpoint in locked-down environments. |
 | Web App | `<keyvault>.vault.azure.net` or Key Vault private endpoint | HTTPS 443 | Runtime secrets | Prefer private endpoint in locked-down environments. |
+| Web App | `<function-app>.azurewebsites.net` through Function App private endpoint | HTTPS 443 | Worker-backed live placement, PaaS scans, recommendations, and quota apply paths | Default infra creates `privatelink.azurewebsites.net` and disables Function App public ingress. |
 | Web App | `prices.azure.com` | HTTPS 443 | Optional pricing enrichment | Needed only when pricing features are enabled. |
 | Function App worker | `management.azure.com` | HTTPS 443 | Live placement, PaaS scans, and quota worker paths | Uses managed identity. |
 | Function App worker | Storage account blob, queue, table, and file endpoints or private endpoints | HTTPS 443 | Function host storage | Required by Azure Functions host storage. |
@@ -816,6 +817,7 @@ Hosted worker guidance:
 
 - Configure `AzureWebJobsStorage` with managed identity, not a shared-key connection string.
 - Grant the worker identity storage data-plane access on the host storage account.
+- Default infrastructure creates a Function App private endpoint, links `privatelink.azurewebsites.net`, and disables Function App public network access so the dashboard Web App reaches the worker privately.
 - Current verified dev baseline uses `CAPACITY_WORKER_SHARED_SECRET` on the web app and `WORKER_SHARED_SECRET` on the Function App for dashboard-to-worker calls.
 - Future hardening should replace or supplement that shared-secret contract with App Service Authentication / Microsoft Entra auth: the dashboard web app should acquire a managed-identity bearer token for the Function App audience, and the worker should accept only the dashboard web app managed identity as caller.
 - The default infrastructure path uses a dedicated App Service plan for the worker instead of Flex Consumption.

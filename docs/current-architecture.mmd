@@ -20,6 +20,8 @@ flowchart TB
         direction LR
         FuncDns[Private DNS\nprivatelink.azurewebsites.net]
         FuncPE[Function Private Endpoint\nsubresource: sites]
+        StorageDns[Private DNS\nprivatelink blob/queue/table/file]
+        StoragePE[Worker Storage Private Endpoints\nblob + queue + table + file]
     end
 
     subgraph Data[Data Platform]
@@ -36,7 +38,7 @@ flowchart TB
 
     subgraph Security[Security and Observability]
         direction LR
-        Entra[Microsoft Entra\nAAD-only SQL auth]
+        Entra[Microsoft Entra\nSQL auth + Easy Auth tokens]
         Kv[Key Vault\nRBAC secrets]
         Appi[Application Insights]
         Log[Log Analytics]
@@ -49,13 +51,15 @@ flowchart TB
     end
 
     User --> Browser --> WebApp --> Api
-    Api -->|Private Link + shared worker secret| FuncPE --> Worker
+    Api -->|Private Link + Easy Auth bearer\nor shared-secret fallback| FuncPE --> Worker
     FuncDns --> FuncPE
+    Worker -->|Identity-based host storage| StoragePE
+    StorageDns --> StoragePE
     Api -->|Managed identity auth| Sql
     Seed --> Sql
     Entra --> Sql
     WebApp -->|Key Vault Secrets User role| Kv
-    Worker -->|Key Vault Secrets User + Storage RBAC| Kv
+    Worker -->|Key Vault Secrets User| Kv
     WebApp --> Appi --> Log
     Worker --> Appi
     WebApp -->|Reader + GroupQuota Request Operator| Mg

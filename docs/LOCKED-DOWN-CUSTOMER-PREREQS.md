@@ -56,7 +56,7 @@ The customer platform team should pre-create or approve the following resources 
 | Private endpoint subnet | Subnet for private endpoints. Network policies and route tables must allow private endpoint use according to customer standards. |
 | Azure SQL server and database | SQL server and database, Microsoft Entra admin configured, and network rules/private endpoint ready. Azure SQL should be reachable from the deployment machine if manual bootstrap is required. |
 | Key Vault | Vault for runtime secrets. Prefer RBAC authorization. Confirm private endpoint, DNS, purge protection/soft-delete policy, and customer ownership model. |
-| Worker storage account | Function App host storage account. Configure private endpoints and data-plane RBAC for the worker identity after it exists. |
+| Worker storage account | Function App host storage account. Configure blob, queue, table, and file private endpoints plus data-plane RBAC for the worker identity. |
 | Application Insights / Log Analytics | Monitoring workspace and Application Insights may be template-created unless the customer requires central logging resources. Confirm retention and data residency requirements. |
 | App Service plan / Web App / Function App | The default deployment creates these. If the customer requires them to be pre-created, confirm the current templates and scripts support that operating model before the deployment window. |
 
@@ -100,7 +100,7 @@ Validate from the deployment machine or jump box:
 
 - SQL server FQDN resolves to a private IP when private SQL is required.
 - Key Vault FQDN resolves to a private IP when public access is disabled.
-- Storage endpoints used by the Function App host resolve privately when storage public access is disabled.
+- Storage blob, queue, table, and file endpoints used by the Function App host resolve to private IPs when storage public access is disabled.
 - The deployment machine can reach Azure SQL on port `1433` if `scripts/initialize-database.ps1` will be run manually.
 - App Service outbound traffic can reach SQL, Key Vault, and storage over the approved private path.
 

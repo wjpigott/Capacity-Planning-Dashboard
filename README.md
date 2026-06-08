@@ -57,6 +57,8 @@ This project is licensed under the terms of the [MIT License](LICENSE).
 
 The current-state diagram reflects what is deployed now: App Service hosting the static UI + Express API, Azure SQL with Entra-only auth, managed identity database access, Key Vault RBAC integration, Function App worker private ingress through Private Link, and App Insights/Log Analytics.
 
+The `feature/function-worker-auth-hardening` branch also validates the next security posture in an isolated app pair: Web App Easy Auth, Function App Easy Auth, bearer-token internal diagnostics, Entra-authenticated dashboard-to-worker calls, and worker storage private endpoint support in Bicep/Terraform. The Easy Auth platform settings were validated manually on the isolated resources and still need to be encoded as first-class Bicep/Terraform resources before this becomes the default deployment path.
+
 The next execution split is now scaffolded in-repo: a dedicated Azure Functions PowerShell 7 worker host under `functions/CapacityWorker/` for live placement and future quota move/apply orchestration.
 
 Use Draw.io for edits when readability/layout precision matters; keep the Mermaid file for quick text-based diffs and automation-friendly rendering.
@@ -75,7 +77,7 @@ Status legend:
 | --- | --- | --- |
 | Platform and infrastructure | `[x]` | App Service, SQL, Key Vault, App Insights, Log Analytics deployed via Bicep |
 | Worker execution host | `[~]` | Azure Functions PowerShell 7 worker runs on a dedicated App Service plan with managed-identity host storage; live placement worker still needs module restore validation |
-| Security and identity | `[x]` | Entra admin + AAD-only SQL auth, managed identity runtime access, no raw subscription IDs stored in snapshots; Entra sign-in, admin group gating via `ADMIN_GROUP_ID`, and report viewer gating via `REPORT_VIEWER_GROUP_IDS` are enabled |
+| Security and identity | `[~]` | Entra admin + AAD-only SQL auth, managed identity runtime access, no raw subscription IDs stored in snapshots; dashboard auth flow is enabled; Easy Auth hardening is validated on the branch but still needs IaC rollout work |
 | Live ingestion pipeline | `[x]` | Internal ingestion endpoint + scheduler; family filtering is optional (omit `INGEST_QUOTA_FAMILY_FILTERS` to ingest all families) + SQL snapshot writes |
 | API and analytics | `[~]` | Capacity API, subscription catalog, family summary, masked subscription summary, and trend APIs complete; quota discovery, plan, simulation, and apply APIs are live |
 | UX and dashboard | `[~]` | Capacity grid, filters (region, resource type, SKU family search, availability, subscription), sidebar report navigation, analytics tables, and chart views complete; export/workflow pages still pending |
@@ -100,6 +102,7 @@ Status legend:
 - [x] Internal ingestion endpoints protected by `INGEST_API_KEY`
 - [x] Subscription identities masked (`subscriptionKey`) in stored analytics rows
 - [x] Entra sign-in, admin group gating, and report viewer group gating enabled via dashboard auth flow, `ADMIN_GROUP_ID`, and `REPORT_VIEWER_GROUP_IDS`
+- [~] Easy Auth hardening branch validated on isolated Web/Function apps: anonymous Web API calls return `401`, `x-ingest-key` alone returns `401`, bearer-authenticated internal diagnostics return `200`, and worker calls run through Function App Easy Auth
 
 Dashboard report access is controlled separately from administrator access. Users must either be in the admin group configured by `ADMIN_GROUP_ID` or in one of the report viewer groups configured by `REPORT_VIEWER_GROUP_IDS`. The current viewer group is named `CapacityReportViewers`; add users to that Entra group before asking them to sign in to the dashboard.
 
@@ -127,7 +130,7 @@ Troubleshooting `Report access is not enabled for your account`:
 - [x] Family filter ingestion — optional; set `INGEST_QUOTA_FAMILY_FILTERS` to a comma-separated list to restrict, or omit entirely to ingest all VM families
 - [x] Ingestion scheduler (DB-backed admin settings with environment fallback)
 - [ ] Move recurring scheduler execution to Function App TimerTrigger jobs (ingestion + live placement)
-- [ ] Harden Function App worker ingress with App Service Authentication / Microsoft Entra auth: update dashboard-to-worker calls to send a managed-identity bearer token accepted by the Function App before enabling Easy Auth enforcement on worker endpoints
+- [~] Harden Function App worker ingress with App Service Authentication / Microsoft Entra auth: app code and isolated smoke tests are complete on the auth-hardening branch; Bicep/Terraform App Service Authentication resources and promotion runbooks remain
 - [ ] Retry/backoff and dead-letter behavior for ingestion failures
 
 #### API and analytics
@@ -205,6 +208,7 @@ Quota move/apply operations require write RBAC in addition to the read access us
 - [ ] Scheduled ingestion monitoring/alerts
 - [ ] Deployment follow-up: investigate why `Compute Recommendations Role` assigned at the management-group scope did not satisfy `Microsoft.Compute/locations/placementScores/generate/action` for the worker managed identity, while the subscription-level assignment did
 - [ ] Deployment hardening follow-up: stop relying on placeholder/default `INGEST_API_KEY` and `SESSION_SECRET` values during Bicep/Terraform deploys; review with the team whether explicit generated secrets remain the right approach or whether there is a safe managed-identity-backed alternative for any of these paths
+- [ ] Deployment hardening follow-up: encode Web App and Function App Easy Auth in Bicep/Terraform, then adjust installer prompts and secret handling so `WORKER_SHARED_SECRET`, `CAPACITY_WORKER_SHARED_SECRET`, `INGEST_API_KEY`, `ENTRA_CLIENT_SECRET`, and `SESSION_SECRET` are requested only when the selected auth mode still uses them
 - [ ] Release verification checklist + rollback playbook
 
 ## Local run
@@ -565,7 +569,7 @@ The dashboard uses Azure Resource Manager, Microsoft identity endpoints, Azure S
 | Web App | `<function-app>.azurewebsites.net` through Function App private endpoint | HTTPS 443 | Worker-backed live placement, PaaS scans, recommendations, and quota apply paths | Default infra creates `privatelink.azurewebsites.net` and disables Function App public ingress. |
 | Web App | `prices.azure.com` | HTTPS 443 | Optional pricing enrichment | Needed only when pricing features are enabled. |
 | Function App worker | `management.azure.com` | HTTPS 443 | Live placement, PaaS scans, and quota worker paths | Uses managed identity. |
-| Function App worker | Storage account blob, queue, table, and file endpoints or private endpoints | HTTPS 443 | Function host storage | Required by Azure Functions host storage. |
+| Function App worker | Storage account blob, queue, table, and file private endpoints | HTTPS 443 | Function host storage | Required by Azure Functions host storage. Branch IaC creates `privatelink.<service>.core.windows.net` zones/endpoints for all four services. |
 | Browser/user | `<web-app>.azurewebsites.net` or App Service private endpoint | HTTPS 443 | Dashboard UI and same-origin API | If App Service private endpoint is used, customer DNS and network routing must resolve privately. |
 
 The browser does not call Azure Resource Manager directly. Browser traffic is same-origin to the dashboard Web App. Azure API calls are made server-side by the Web App or Function App worker using managed identity or configured Azure credentials.
@@ -651,8 +655,8 @@ Existing shared-service reuse:
 - Providing an existing resource name is enough to switch that dependency into reuse mode. `-ExistingSqlDatabaseName` is optional and only applies when `-ExistingSqlServerName` is also set.
 - SQL SKU note: the Azure SQL logical server does not determine DTU vs vCore; the database SKU does. If you pass only `-ExistingSqlServerName`, the deployment creates the dashboard database as the template default `S0` DTU database. If the customer requires vCore, serverless, Hyperscale, an elastic pool, or another governed database SKU, pre-create the database and pass both `-ExistingSqlServerName` and `-ExistingSqlDatabaseName`.
 - Optional resource-group overrides are also available when the reused dependency lives outside the dashboard resource group: `-ExistingSqlServerResourceGroupName`, `-ExistingKeyVaultResourceGroupName`, `-ExistingWorkerStorageResourceGroupName`, and `-ExistingVirtualNetworkResourceGroupName`.
-- When reusing an existing Virtual Network, provide the VNet name plus both subnet names. The App Service integration subnet must already be delegated to `Microsoft.Web/serverFarms`; the private endpoint subnet must already support private endpoints for any newly-created SQL or Key Vault private endpoints.
-- When reusing an existing SQL server or Key Vault, the infra templates assume the customer-managed private endpoint and DNS path already exists and do not create a new SQL or Key Vault private endpoint for that dependency.
+- When reusing an existing Virtual Network, provide the VNet name plus both subnet names. The App Service integration subnet must already be delegated to `Microsoft.Web/serverFarms`; the private endpoint subnet must already support private endpoints for any newly-created SQL, Key Vault, Function App, and worker storage endpoints.
+- When reusing an existing SQL server, Key Vault, or worker storage account, the infra templates assume the customer-managed private endpoint and DNS path already exists or will be managed by the customer platform team.
 
 Use `-DeployWebApp $false` only when you explicitly want an infra-only run.
 
@@ -822,14 +826,16 @@ After the worker is deployed, point the dashboard at it by setting:
 
 - `CAPACITY_WORKER_BASE_URL=https://<function-app-name>.azurewebsites.net`
 - `CAPACITY_WORKER_SHARED_SECRET=<same-value-as-WORKER_SHARED_SECRET>`
+- Or, on the Easy Auth path, set `CAPACITY_WORKER_AUTH_MODE=entra` and `CAPACITY_WORKER_TOKEN_AUDIENCE=<worker-api-audience>` and do not set worker shared secrets after the Function App Easy Auth configuration is verified.
 
 Hosted worker guidance:
 
 - Configure `AzureWebJobsStorage` with managed identity, not a shared-key connection string.
 - Grant the worker identity storage data-plane access on the host storage account.
 - Default infrastructure creates a Function App private endpoint, links `privatelink.azurewebsites.net`, and disables Function App public network access so the dashboard Web App reaches the worker privately.
-- Current verified dev baseline uses `CAPACITY_WORKER_SHARED_SECRET` on the web app and `WORKER_SHARED_SECRET` on the Function App for dashboard-to-worker calls.
-- Future hardening should replace or supplement that shared-secret contract with App Service Authentication / Microsoft Entra auth: the dashboard web app should acquire a managed-identity bearer token for the Function App audience, and the worker should accept only the dashboard web app managed identity as caller.
+- Current stable dev baseline uses `CAPACITY_WORKER_SHARED_SECRET` on the web app and `WORKER_SHARED_SECRET` on the Function App for dashboard-to-worker calls.
+- The auth-hardening branch validates the replacement path: App Service Authentication on the Function App, dashboard-managed-identity bearer tokens, and `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK=true` during smoke tests.
+- Branch infrastructure now tracks Function worker storage private endpoints for blob, queue, table, and file services. Validate private DNS and Function startup before disabling public access on an existing storage account.
 - The default infrastructure path uses a dedicated App Service plan for the worker instead of Flex Consumption.
 - Enable PowerShell managed dependencies in `host.json` so `requirements.psd1` can restore Az modules on the worker.
 - NOTE: when `-WorkerRbacManagementGroupNames` is provided during infra deployment, the worker RBAC roles are assigned at those management group scopes. Use `-WorkerRbacSubscriptionIds` only when you need the small-customer subscription fallback.
@@ -922,6 +928,8 @@ Required for deployed dashboard operation:
 - `AUTH_REDIRECT_URI` (OAuth callback URI; defaults to local dev when omitted)
 - `INGEST_API_KEY` (required only for internal ingestion/bootstrap routes)
 
+Easy Auth hardening mode changes these requirements, but that mode is not yet the default IaC path. In the isolated validation, `INGEST_API_KEY_ENABLED=false` forced internal diagnostics/bootstrap-style traffic to use `Authorization: Bearer` instead of the custom `x-ingest-key` header. Do not remove `INGEST_API_KEY` from existing environments until bootstrap/deployment automation has a verified bearer-token path.
+
 Entra app registration token configuration:
 
 - The app registration referenced by `ENTRA_CLIENT_ID` must include group Object IDs in the ID token: **Token configuration** -> **Add groups claim** -> **Security groups** -> **ID** -> **Group ID**.
@@ -957,14 +965,15 @@ AI rollout gates:
 Optional worker/recommender settings:
 
 - `CAPACITY_WORKER_BASE_URL` (optional Function App base URL for worker-first live placement execution)
-- `CAPACITY_WORKER_SHARED_SECRET` (required when the worker enforces `WORKER_SHARED_SECRET`)
+- `CAPACITY_WORKER_AUTH_MODE` (`shared-secret` by default; set to `entra` only when Function App Easy Auth and the token audience are configured)
+- `CAPACITY_WORKER_TOKEN_AUDIENCE` (required when `CAPACITY_WORKER_AUTH_MODE=entra`; usually the worker API application ID URI)
+- `CAPACITY_WORKER_SHARED_SECRET` (required only when the worker enforces `WORKER_SHARED_SECRET`)
 - `CAPACITY_WORKER_TIMEOUT_MS` (optional timeout for worker calls, default `60000`)
 - `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK` (`true` disables App Service fallback when the worker is configured but unavailable)
 - `GET_AZ_VM_AVAILABILITY_ROOT` (optional path to Get-AzVMAvailability repository; required in production if Capacity Recommender uses the external repository and it is not bundled at the default path)
 
 No longer active app settings:
 
-- `CAPACITY_WORKER_TOKEN_AUDIENCE` is not read by the current runtime worker call path.
 - `LIVE_PLACEMENT_REFRESH_ON_STARTUP`, `LIVE_PLACEMENT_REFRESH_INTERVAL_MINUTES`, and `LIVE_PLACEMENT_REFRESH_REGION_PRESET` are obsolete; Capacity Score live placement is on-demand only and the app does not start a scheduled live placement refresh from App Service settings.
 
 Key Vault secrets used by deployed environments:
@@ -974,6 +983,8 @@ Key Vault secrets used by deployed environments:
 | `capdash-entra-client-secret` | `ENTRA_CLIENT_SECRET` | Microsoft Entra app registration client secret used by the dashboard OAuth sign-in flow. Required when `AUTH_ENABLED=true`. |
 | `capdash-ingest-api-key` | `INGEST_API_KEY` | Shared secret that protects internal ingestion and bootstrap endpoints. Deployment/bootstrap callers send this value as the internal ingest key. |
 | `capdash-session-secret` | `SESSION_SECRET` | Secret used by the web app session middleware to protect signed session cookie state after sign-in. Keep stable across redeploys unless intentionally rotating sessions. |
+
+Worker shared-secret deployments also use `capdash-worker-shared-secret` for `CAPACITY_WORKER_SHARED_SECRET` and `WORKER_SHARED_SECRET`. Easy Auth deployments should not require that worker secret after `CAPACITY_WORKER_AUTH_MODE=entra` is the selected deployment mode and Function App Easy Auth is configured by IaC.
 
 Terraform can generate `capdash-ingest-api-key` and `capdash-session-secret` when `ingest_api_key` and `session_secret` are omitted. Bicep deployments should supply those values through parameters or the wrapper script. The Entra client secret comes from the customer-created app registration client secret and is stored in Key Vault when supplied.
 

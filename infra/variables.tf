@@ -106,9 +106,25 @@ variable "function_public_network_access" {
   }
 }
 
+variable "worker_storage_public_network_access" {
+  type        = string
+  description = "Function worker storage account public network access mode. Keep Disabled when create_worker_storage_private_endpoints is true so the worker host storage path stays private."
+  default     = "Disabled"
+  validation {
+    condition     = contains(["Enabled", "Disabled"], var.worker_storage_public_network_access)
+    error_message = "Must be Enabled or Disabled."
+  }
+}
+
 variable "create_function_private_endpoint" {
   type        = bool
   description = "Create a private endpoint and private DNS zone for the worker Function App. Recommended for production and security-reviewed environments."
+  default     = true
+}
+
+variable "create_worker_storage_private_endpoints" {
+  type        = bool
+  description = "Create private endpoints and private DNS zones for the worker Function App host storage account. Recommended for production and security-reviewed environments."
   default     = true
 }
 

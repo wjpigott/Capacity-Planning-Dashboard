@@ -167,6 +167,7 @@ Use current Azure signed-in user as SQL Entra admin?
 Does the customer already have an Azure SQL server to reuse?
 Does the customer already have a Key Vault to reuse?
 Does the customer already have a worker storage account to reuse?
+Create private endpoints for the worker storage account blob, queue, table, and file services?
 Does the customer already have a Virtual Network to reuse?
 ```
 
@@ -174,6 +175,7 @@ Suggested demo answer:
 
 - Use current signed-in user for SQL admin when appropriate.
 - For a clean demo, answer `N` to existing SQL, Key Vault, worker storage, and VNet.
+- Keep worker storage private endpoints enabled for security-reviewed demos unless the storage account is pre-wired through a customer-managed private path.
 - If you answer `Y` to an existing resource prompt, be ready to provide its exact existing resource name and resource group when asked.
 
 Narration:
@@ -188,6 +190,7 @@ Does the customer already have a Key Vault to reuse? (y/N): n
 Optional Key Vault name override for Terraform soft-delete/name conflicts:
 Allow Terraform runner public network access to Key Vault for secret provisioning? (Y/n): y
 Does the customer already have a worker storage account to reuse? (y/N): n
+Create private endpoints for the worker storage account blob, queue, table, and file services? (Y/n): y
 Does the customer already have a Virtual Network to reuse? (y/N): n
 ```
 
@@ -240,7 +243,7 @@ Run database bootstrap through the deployed web app?
 Suggested demo answers:
 
 - Let deployment resolve or generate `INGEST_API_KEY` and `SESSION_SECRET` unless the customer has a secret-management standard.
-- Worker shared secret: `Generate`.
+- Worker shared secret: `Generate` for the current shared-secret deployment mode; this should change to `Skip` only after Easy Auth is represented in Bicep/Terraform and the target environment has passed bearer-auth smoke tests.
 - Deploy web app: `Y`.
 - Deploy worker app: `Y`.
 - Database bootstrap: `Y` for a clean environment.

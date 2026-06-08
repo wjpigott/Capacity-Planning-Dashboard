@@ -164,6 +164,30 @@ Track these changes together before promoting Easy Auth to test or production:
 | Function worker storage private endpoints | Bicep and Terraform now include default-on worker storage private endpoint support for blob, queue, table, and file services. | Deploy and validate DNS/connectivity in dev/test before disabling or restricting public storage access in existing environments. |
 | Deployment docs | This tracker and infra READMEs identify the auth/storage changes. | Update top-level README, installer prompts, customer prereqs, and deployment examples when the IaC Easy Auth resources are added. |
 
+## Checklist for tomorrow
+
+Completed before stopping:
+
+- [x] Updated the top-level README to explain the branch Easy Auth validation, current secret implications, and worker storage private endpoint security posture.
+- [x] Updated the worker README, install-demo script notes, locked-down customer prereqs, and root Terraform variable shim for worker storage private endpoint awareness.
+- [x] Updated Mermaid architecture source and regenerated `docs/current-architecture.png` with Function Easy Auth and worker storage private endpoints.
+
+Still needed:
+
+- [ ] Decide whether to encode Web App and Function App Easy Auth in this branch now or keep the current branch as an isolated proof and open a follow-up branch for IaC auth resources.
+- [ ] Add Bicep `authsettingsV2` resources for the Web App and Function App if this branch should own the full Easy Auth rollout.
+- [ ] Add matching Terraform `auth_settings_v2` blocks/resources for the Web App and Function App, including allowed audiences and allowed client applications.
+- [ ] Define the production-safe internal automation caller for bearer-authenticated internal endpoints; do not leave the isolated Azure CLI public client ID as the production allow-list.
+- [ ] Update `scripts/deploy-infra.ps1` and `scripts/Start-CapacityDeployment.ps1` with an explicit auth mode selection before changing any secret prompts.
+- [ ] Once an Easy Auth deployment mode exists, make `workerSharedSecret` / `worker_shared_secret` prompts conditional: required for `shared-secret`, skipped for `entra`.
+- [ ] Once bootstrap automation can call internal endpoints with bearer tokens, make `INGEST_API_KEY` optional for Easy Auth deployments and keep it required for shared-secret/internal-key deployments.
+- [ ] Decide whether Web App Easy Auth fully replaces the custom Express auth-code flow. If yes, remove the `ENTRA_CLIENT_SECRET` prompt/secret requirement for that mode and verify browser sign-in plus group claims through Easy Auth principal headers.
+- [ ] Decide whether Express sessions are still required after Easy Auth becomes the browser sign-in path. If no, plan removal of `SESSION_SECRET`; if yes, keep it in Key Vault.
+- [ ] Deploy the worker storage private endpoint IaC to dev and verify Function startup, DNS resolution, PaaS refresh, live placement, recommendations, and no storage public access dependency.
+- [ ] Update `docs/current-architecture.drawio` to match the Mermaid/PNG architecture update, or treat Mermaid as the branch source of truth and regenerate Draw.io later.
+- [ ] Update release notes and deployment examples again after Easy Auth IaC is complete.
+- [ ] Run full validation: `npm test`, Bicep build, Terraform validate, wizard plan-only, isolated Web/Function smoke tests, and Defender-style anonymous/key-only/bearer probes.
+
 ## Branch guardrail
 
 Do not remove `WORKER_SHARED_SECRET`, `CAPACITY_WORKER_SHARED_SECRET`, or the Key Vault worker secret until the Entra worker mode is verified in dev and test. Remove them only in a follow-up cleanup after the auth mode is changed by default.

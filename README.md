@@ -5,9 +5,17 @@ This repository contains the initial platform scaffold for a native Azure capaci
 
 ## Current Release
 
-Current version: `v1.0.1`
+Current version: `v1.0.2`
 
-This version marks the current deployed `main` branch as the initial proof-of-concept baseline. Future compatible feature updates should move to the next minor version, such as `v1.1.0`; patch-only fixes to this baseline should use `v1.0.1`, `v1.0.2`, and so on.
+This version adds the PaaS DB Quota report, scheduler scope consolidation, and Function App private endpoint defaults on top of the original proof-of-concept baseline. Future compatible feature updates should move to the next minor version, such as `v1.1.0`; patch-only fixes to this baseline should use `v1.0.3`, `v1.0.4`, and so on.
+
+Key additions in `v1.0.2`:
+
+- PaaS DB Quota report for database quota usage, regional access, zone access, and optional capability evidence.
+- SQL persistence and cached reloads for PaaS DB Quota report runs.
+- PaaS DB Quota scheduler controls that reuse the shared Capacity Ingest subscription and management group scope.
+- Function App private endpoint and `privatelink.azurewebsites.net` deployment defaults so worker ingress can be private by default.
+- Hidden legacy PaaS Availability navigation entry while retaining backend routes and SQL tables for rollback.
 
 Release history is tracked in `docs/RELEASE-NOTES.md`. Git tags should use the same version string as the release, for example `v1.0.0-poc`, so others can retrieve the exact code behind a deployed version.
 

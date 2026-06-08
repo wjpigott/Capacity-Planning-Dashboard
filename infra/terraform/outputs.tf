@@ -63,6 +63,11 @@ output "key_vault_private_endpoint_name" {
   value       = local.use_existing_key_vault ? null : azurerm_private_endpoint.kv[0].name
 }
 
+output "function_private_endpoint_name" {
+  description = "Function App private endpoint resource name"
+  value       = var.create_function_private_endpoint ? azurerm_private_endpoint.function[0].name : null
+}
+
 output "effective_ingest_api_key" {
   description = "Effective ingestion API key generated or supplied for bootstrap workflows"
   value       = local.effective_ingest_api_key

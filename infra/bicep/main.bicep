@@ -45,6 +45,16 @@ param sqlPublicNetworkAccess string = 'Disabled'
 ])
 param keyVaultPublicNetworkAccess string = 'Disabled'
 
+@description('Function App public network access mode. Keep Disabled when createFunctionPrivateEndpoint is true so worker ingress stays private.')
+@allowed([
+  'Enabled'
+  'Disabled'
+])
+param functionPublicNetworkAccess string = 'Disabled'
+
+@description('Create a private endpoint and private DNS zone for the worker Function App. Recommended for production and security-reviewed environments.')
+param createFunctionPrivateEndpoint bool = true
+
 @secure()
 @description('Optional shared secret used between the dashboard web app and the worker function app')
 param workerSharedSecret string = ''
@@ -162,12 +172,15 @@ var sqlPrivateEndpointName = 'pep-sql-capdash-${environment}-${workloadSuffix}'
 var sqlPrivateDnsZoneName = 'privatelink${az.environment().suffixes.sqlServerHostname}'
 var sqlPrivateDnsZoneVnetLinkName = 'pdz-link-capdash-${environment}-${workloadSuffix}'
 var keyVaultPrivateEndpointName = 'pep-kv-capdash-${environment}-${workloadSuffix}'
+var functionPrivateEndpointName = 'pep-func-capdash-${environment}-${workloadSuffix}'
 var keyVaultDnsSuffixRaw = az.environment().suffixes.keyvaultDns
 var keyVaultDnsSuffix = startsWith(keyVaultDnsSuffixRaw, '.') ? substring(keyVaultDnsSuffixRaw, 1) : keyVaultDnsSuffixRaw
 var keyVaultPrivateDnsZoneName = startsWith(keyVaultDnsSuffix, 'vaultcore.')
   ? 'privatelink.${keyVaultDnsSuffix}'
   : replace(keyVaultDnsSuffix, 'vault.', 'privatelink.vaultcore.')
 var keyVaultPrivateDnsZoneVnetLinkName = 'pdz-link-kv-capdash-${environment}-${workloadSuffix}'
+var functionPrivateDnsZoneName = 'privatelink.azurewebsites.net'
+var functionPrivateDnsZoneVnetLinkName = 'pdz-link-func-capdash-${environment}-${workloadSuffix}'
 var effectiveAuthRedirectUri = empty(authRedirectUri)
   ? 'https://${webAppName}.azurewebsites.net/auth/callback'
   : authRedirectUri
@@ -460,6 +473,7 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
   properties: {
     serverFarmId: workerPlan.id
     httpsOnly: true
+    publicNetworkAccess: functionPublicNetworkAccess
     virtualNetworkSubnetId: effectiveAppServiceIntegrationSubnetId
     siteConfig: {
       ftpsState: 'Disabled'
@@ -522,6 +536,65 @@ resource functionAppVnetIntegration 'Microsoft.Web/sites/networkConfig@2023-12-0
   dependsOn: [
     vnet
   ]
+}
+
+resource functionPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = if (createFunctionPrivateEndpoint) {
+  name: functionPrivateDnsZoneName
+  location: 'global'
+}
+
+resource functionPrivateDnsZoneVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = if (createFunctionPrivateEndpoint) {
+  parent: functionPrivateDnsZone
+  name: functionPrivateDnsZoneVnetLinkName
+  location: 'global'
+  properties: {
+    registrationEnabled: false
+    virtualNetwork: {
+      id: effectiveVirtualNetworkId
+    }
+  }
+  dependsOn: [
+    vnet
+  ]
+}
+
+resource functionPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01' = if (createFunctionPrivateEndpoint) {
+  name: functionPrivateEndpointName
+  location: location
+  properties: {
+    subnet: {
+      id: effectivePrivateEndpointSubnetId
+    }
+    privateLinkServiceConnections: [
+      {
+        name: 'functionAppConnection'
+        properties: {
+          privateLinkServiceId: functionApp.id
+          groupIds: [
+            'sites'
+          ]
+        }
+      }
+    ]
+  }
+  dependsOn: [
+    vnet
+  ]
+}
+
+resource functionPrivateEndpointDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-09-01' = if (createFunctionPrivateEndpoint) {
+  parent: functionPrivateEndpoint
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'function-private-dns'
+        properties: {
+          privateDnsZoneId: functionPrivateDnsZone.id
+        }
+      }
+    ]
+  }
 }
 
 resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = if (!useExistingKeyVault) {
@@ -861,3 +934,4 @@ output keyVaultName string = effectiveKeyVaultName
 output virtualNetworkName string = effectiveVirtualNetworkName
 output sqlPrivateEndpointName string = useExistingSqlServer ? '' : sqlPrivateEndpoint.name
 output keyVaultPrivateEndpointName string = useExistingKeyVault ? '' : keyVaultPrivateEndpoint.name
+output functionPrivateEndpointName string = createFunctionPrivateEndpoint ? functionPrivateEndpoint.name : ''

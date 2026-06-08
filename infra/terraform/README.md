@@ -19,6 +19,7 @@ Terraform equivalent of the Bicep templates in this folder. Provisions the full 
 | Application Insights + Log Analytics | `azurerm_application_insights.ai`, `azurerm_log_analytics_workspace.law` |
 | SQL Private Endpoint + DNS zone + VNet link | `azurerm_private_endpoint.sql`, `azurerm_private_dns_zone.sql`, `azurerm_private_dns_zone_virtual_network_link.sql` |
 | Key Vault Private Endpoint + DNS zone + VNet link | `azurerm_private_endpoint.kv`, `azurerm_private_dns_zone.kv`, `azurerm_private_dns_zone_virtual_network_link.kv` |
+| Function App Private Endpoint + DNS zone + VNet link | `azurerm_private_endpoint.function`, `azurerm_private_dns_zone.function`, `azurerm_private_dns_zone_virtual_network_link.function` |
 | Role Assignments (5) | KV Secrets User (×2), Storage Blob/Queue/Table (×3) |
 | Cross-scope RBAC (modules) | `worker-subscription-rbac`, `worker-management-group-rbac`, `web-subscription-reader`, `web-management-group-reader`, `web-subscription-quota-writer`, `web-management-group-quota-writer` |
 
@@ -237,6 +238,9 @@ All variables have defaults and can be overridden via tfvars or CLI flags.
 | `existing_private_endpoint_subnet_name` | `""` | Existing subnet for SQL and Key Vault private endpoints |
 | `sql_public_network_access` | `Disabled` | SQL Server public access |
 | `key_vault_public_network_access` | `Disabled` | Key Vault public access. The guided Terraform wrapper sets this to `Enabled` by default so a local Terraform runner can provision secrets; use `Disabled` only when Terraform runs from a private-link-connected network path. |
+| `function_public_network_access` | `Disabled` | Function App public access. Keep disabled when `create_function_private_endpoint=true`. |
+| `create_function_private_endpoint` | `true` | Creates the worker Function App private endpoint and `privatelink.azurewebsites.net` DNS. |
+| `function_private_dns_zone_name` | `privatelink.azurewebsites.net` | Private DNS zone for Function App private endpoints. |
 | `existing_key_vault_name` | `""` | Existing Key Vault name to reuse |
 | `existing_key_vault_resource_group_name` | `""` | Optional resource group override for the existing Key Vault |
 | `worker_shared_secret` | `""` | Shared secret between web app and worker (sensitive) |
@@ -328,6 +332,7 @@ With `environment = "dev"` and `workload_suffix = "demo001"`:
 - Sensitive variables marked with `sensitive = true` in Terraform
 - SQL Server uses Entra-only authentication (no SQL auth)
 - SQL and Key Vault default to private network access via private endpoints
+- Function App worker ingress defaults to private network access via a private endpoint and `privatelink.azurewebsites.net`
 - Terraform assigns the deploying principal `Key Vault Secrets Officer` on the dashboard vault before writing initial secrets, then waits briefly for RBAC propagation
 - Web App and Function App use system-assigned managed identities
 - Function App storage uses identity-based access (`shared_access_key_enabled = false`)

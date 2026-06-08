@@ -23,6 +23,8 @@ locals {
   kv_private_endpoint_name                      = "pep-kv-capdash-${var.environment}-${var.workload_suffix}"
   kv_private_dns_zone_name                      = "privatelink.vaultcore.azure.net"
   kv_private_dns_zone_vnet_link                 = "pdz-link-kv-capdash-${var.environment}-${var.workload_suffix}"
+  function_private_endpoint_name                = "pep-func-capdash-${var.environment}-${var.workload_suffix}"
+  function_private_dns_zone_vnet_link           = "pdz-link-func-capdash-${var.environment}-${var.workload_suffix}"
   effective_auth_redirect_uri                   = var.auth_redirect_uri != "" ? var.auth_redirect_uri : "https://${local.web_app_name}.azurewebsites.net/auth/callback"
   effective_sql_server_resource_group_name      = var.existing_sql_server_resource_group_name != "" ? var.existing_sql_server_resource_group_name : azurerm_resource_group.rg.name
   effective_sql_server_name                     = local.use_existing_sql_server ? var.existing_sql_server_name : local.sql_server_name
@@ -294,6 +296,7 @@ resource "azurerm_windows_function_app" "worker" {
   storage_account_name          = local.effective_worker_storage_name
   storage_uses_managed_identity = true
   https_only                    = true
+  public_network_access_enabled = var.function_public_network_access == "Enabled"
   virtual_network_subnet_id     = local.effective_app_service_integration_subnet_id
 
   identity {
@@ -330,6 +333,44 @@ resource "azurerm_windows_function_app" "worker" {
       app_settings["FUNCTIONS_EXTENSION_VERSION"],
       site_config[0].application_insights_connection_string,
     ]
+  }
+}
+
+# ──────────────────────────────────────────────
+# Function App Private Endpoint & DNS
+# ──────────────────────────────────────────────
+resource "azurerm_private_dns_zone" "function" {
+  count               = var.create_function_private_endpoint ? 1 : 0
+  name                = var.function_private_dns_zone_name
+  resource_group_name = azurerm_resource_group.rg.name
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "function" {
+  count                 = var.create_function_private_endpoint ? 1 : 0
+  name                  = local.function_private_dns_zone_vnet_link
+  resource_group_name   = azurerm_resource_group.rg.name
+  private_dns_zone_name = azurerm_private_dns_zone.function[0].name
+  virtual_network_id    = local.effective_virtual_network_id
+  registration_enabled  = false
+}
+
+resource "azurerm_private_endpoint" "function" {
+  count               = var.create_function_private_endpoint ? 1 : 0
+  name                = local.function_private_endpoint_name
+  location            = var.location
+  resource_group_name = azurerm_resource_group.rg.name
+  subnet_id           = local.effective_private_endpoint_subnet_id
+
+  private_service_connection {
+    name                           = "functionAppConnection"
+    private_connection_resource_id = azurerm_windows_function_app.worker.id
+    subresource_names              = ["sites"]
+    is_manual_connection           = false
+  }
+
+  private_dns_zone_group {
+    name                 = "default"
+    private_dns_zone_ids = [azurerm_private_dns_zone.function[0].id]
   }
 }
 

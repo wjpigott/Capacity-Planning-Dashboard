@@ -15,6 +15,8 @@ param(
     [Parameter(Mandatory = $false)][string]$QuotaManagementGroupId,
     [Parameter(Mandatory = $false)][string]$KeyVaultNameOverride,
     [Parameter(Mandatory = $false)][ValidateSet('Enabled','Disabled')][string]$KeyVaultPublicNetworkAccess = 'Enabled',
+    [Parameter(Mandatory = $false)][ValidateSet('Enabled','Disabled')][string]$FunctionPublicNetworkAccess = 'Disabled',
+    [Parameter(Mandatory = $false)][bool]$CreateFunctionPrivateEndpoint = $true,
     [Parameter(Mandatory = $false)][string]$ExistingSqlServerName,
     [Parameter(Mandatory = $false)][string]$ExistingSqlServerResourceGroupName,
     [Parameter(Mandatory = $false)][string]$ExistingSqlDatabaseName,
@@ -898,6 +900,8 @@ function Deploy-Terraform {
         if (-not [string]::IsNullOrWhiteSpace($WorkerSharedSecret))  { $tfVariables['worker_shared_secret'] = $WorkerSharedSecret }
         if (-not [string]::IsNullOrWhiteSpace($KeyVaultNameOverride)){ $tfVariables['key_vault_name_override'] = $KeyVaultNameOverride }
         Set-TerraformVariableValue -Variables $tfVariables -Name 'key_vault_public_network_access' -Value $KeyVaultPublicNetworkAccess
+        Set-TerraformVariableValue -Variables $tfVariables -Name 'function_public_network_access' -Value $FunctionPublicNetworkAccess
+        Set-TerraformVariableValue -Variables $tfVariables -Name 'create_function_private_endpoint' -Value ([bool]$CreateFunctionPrivateEndpoint)
         if (-not [string]::IsNullOrWhiteSpace($QuotaManagementGroupId)){ $tfVariables['quota_management_group_id'] = $QuotaManagementGroupId }
         if (-not [string]::IsNullOrWhiteSpace($ExistingSqlServerName))                { $tfVariables['existing_sql_server_name'] = $ExistingSqlServerName }
         if (-not [string]::IsNullOrWhiteSpace($ExistingSqlServerResourceGroupName))   { $tfVariables['existing_sql_server_resource_group_name'] = $ExistingSqlServerResourceGroupName }
@@ -1008,6 +1012,9 @@ if (-not [string]::IsNullOrWhiteSpace($WorkerSharedSecret)) {
 if (-not [string]::IsNullOrWhiteSpace($QuotaManagementGroupId)) {
     $deploymentArgs += @('--parameters', "quotaManagementGroupId=$QuotaManagementGroupId")
 }
+
+$deploymentArgs += @('--parameters', "functionPublicNetworkAccess=$FunctionPublicNetworkAccess")
+$deploymentArgs += @('--parameters', "createFunctionPrivateEndpoint=$($CreateFunctionPrivateEndpoint.ToString().ToLowerInvariant())")
 
 $deploymentArgs += @('--parameters', "existingSqlServerName=$ExistingSqlServerName")
 $deploymentArgs += @('--parameters', "existingSqlServerResourceGroupName=$ExistingSqlServerResourceGroupName")

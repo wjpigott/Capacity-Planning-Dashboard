@@ -96,6 +96,28 @@ variable "key_vault_public_network_access" {
   }
 }
 
+variable "function_public_network_access" {
+  type        = string
+  description = "Function App public network access mode. Keep Disabled when create_function_private_endpoint is true so worker ingress stays private."
+  default     = "Disabled"
+  validation {
+    condition     = contains(["Enabled", "Disabled"], var.function_public_network_access)
+    error_message = "Must be Enabled or Disabled."
+  }
+}
+
+variable "create_function_private_endpoint" {
+  type        = bool
+  description = "Create a private endpoint and private DNS zone for the worker Function App. Recommended for production and security-reviewed environments."
+  default     = true
+}
+
+variable "function_private_dns_zone_name" {
+  type        = string
+  description = "Private DNS zone name for Function App private endpoints"
+  default     = "privatelink.azurewebsites.net"
+}
+
 variable "worker_shared_secret" {
   type        = string
   description = "Optional shared secret between dashboard web app and worker function app"

@@ -16,6 +16,7 @@ Highlights:
 - Persisted PaaS DB Quota runs in SQL for cached reloads and client CSV export.
 - Added scheduler controls for cached PaaS DB Quota refreshes on a separate cadence from Capacity Ingest.
 - Reused the shared Capacity Ingest subscription/management group scope for scheduled PaaS DB Quota refreshes instead of maintaining a separate PaaS DB subscription list.
+- Added Function App private endpoint and private DNS deployment defaults so worker ingress can be locked down instead of exposed publicly.
 - Hid the older PaaS Availability report from navigation while keeping its backend and SQL table available for rollback.
 - Added deployment package verification for the PaaS DB Quota wrapper script.
 

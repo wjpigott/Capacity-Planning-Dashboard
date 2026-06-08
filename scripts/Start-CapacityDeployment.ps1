@@ -870,6 +870,8 @@ $existingKeyVaultName = ''
 $existingKeyVaultResourceGroupName = ''
 $keyVaultNameOverride = ''
 $keyVaultPublicNetworkAccess = 'Disabled'
+$functionPublicNetworkAccess = 'Disabled'
+$createFunctionPrivateEndpoint = $true
 if (Prompt-YesNo -Name 'UseExistingKeyVault' -Question 'Does the customer already have a Key Vault to reuse?' -DefaultValue $false) {
     $existingKeyVaultName = Prompt-String -Name 'ExistingKeyVaultName' -Question 'Existing Key Vault name' -Required
     $existingKeyVaultResourceGroupName = Prompt-String -Name 'ExistingKeyVaultResourceGroupName' -Question 'Existing Key Vault resource group' -DefaultValue $resourceGroupName
@@ -982,6 +984,8 @@ Add-DeployArgument -Arguments $deployArguments -Name '-WebQuotaWriterManagementG
 Add-DeployArgument -Arguments $deployArguments -Name '-QuotaManagementGroupId' -Value $quotaManagementGroupId
 Add-DeployArgument -Arguments $deployArguments -Name '-KeyVaultNameOverride' -Value $keyVaultNameOverride
 Add-DeployArgument -Arguments $deployArguments -Name '-KeyVaultPublicNetworkAccess' -Value $keyVaultPublicNetworkAccess
+Add-DeployArgument -Arguments $deployArguments -Name '-FunctionPublicNetworkAccess' -Value $functionPublicNetworkAccess
+Add-DeployArgument -Arguments $deployArguments -Name '-CreateFunctionPrivateEndpoint' -Value $createFunctionPrivateEndpoint
 Add-DeployArgument -Arguments $deployArguments -Name '-ExistingSqlServerName' -Value $existingSqlServerName
 Add-DeployArgument -Arguments $deployArguments -Name '-ExistingSqlServerResourceGroupName' -Value $existingSqlServerResourceGroupName
 Add-DeployArgument -Arguments $deployArguments -Name '-ExistingSqlDatabaseName' -Value $existingSqlDatabaseName

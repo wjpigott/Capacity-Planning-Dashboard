@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.42.1.51946",
-      "templateHash": "15375412253899381692"
+      "templateHash": "4004759933545698646"
     }
   },
   "parameters": {
@@ -90,6 +90,24 @@
       ],
       "metadata": {
         "description": "Key Vault public network access mode"
+      }
+    },
+    "functionPublicNetworkAccess": {
+      "type": "string",
+      "defaultValue": "Disabled",
+      "allowedValues": [
+        "Enabled",
+        "Disabled"
+      ],
+      "metadata": {
+        "description": "Function App public network access mode. Keep Disabled when createFunctionPrivateEndpoint is true so worker ingress stays private."
+      }
+    },
+    "createFunctionPrivateEndpoint": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Create a private endpoint and private DNS zone for the worker Function App. Recommended for production and security-reviewed environments."
       }
     },
     "workerSharedSecret": {
@@ -333,10 +351,13 @@
     "sqlPrivateDnsZoneName": "[format('privatelink{0}', environment().suffixes.sqlServerHostname)]",
     "sqlPrivateDnsZoneVnetLinkName": "[format('pdz-link-capdash-{0}-{1}', parameters('environment'), parameters('workloadSuffix'))]",
     "keyVaultPrivateEndpointName": "[format('pep-kv-capdash-{0}-{1}', parameters('environment'), parameters('workloadSuffix'))]",
+    "functionPrivateEndpointName": "[format('pep-func-capdash-{0}-{1}', parameters('environment'), parameters('workloadSuffix'))]",
     "keyVaultDnsSuffixRaw": "[environment().suffixes.keyvaultDns]",
     "keyVaultDnsSuffix": "[if(startsWith(variables('keyVaultDnsSuffixRaw'), '.'), substring(variables('keyVaultDnsSuffixRaw'), 1), variables('keyVaultDnsSuffixRaw'))]",
     "keyVaultPrivateDnsZoneName": "[if(startsWith(variables('keyVaultDnsSuffix'), 'vaultcore.'), format('privatelink.{0}', variables('keyVaultDnsSuffix')), replace(variables('keyVaultDnsSuffix'), 'vault.', 'privatelink.vaultcore.'))]",
     "keyVaultPrivateDnsZoneVnetLinkName": "[format('pdz-link-kv-capdash-{0}-{1}', parameters('environment'), parameters('workloadSuffix'))]",
+    "functionPrivateDnsZoneName": "privatelink.azurewebsites.net",
+    "functionPrivateDnsZoneVnetLinkName": "[format('pdz-link-func-capdash-{0}-{1}', parameters('environment'), parameters('workloadSuffix'))]",
     "effectiveAuthRedirectUri": "[if(empty(parameters('authRedirectUri')), format('https://{0}.azurewebsites.net/auth/callback', variables('webAppName')), parameters('authRedirectUri'))]",
     "useExistingSqlServer": "[not(empty(parameters('existingSqlServerName')))]",
     "useExistingSqlDatabase": "[not(empty(parameters('existingSqlDatabaseName')))]",
@@ -640,6 +661,7 @@
       "properties": {
         "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('workerPlanName'))]",
         "httpsOnly": true,
+        "publicNetworkAccess": "[parameters('functionPublicNetworkAccess')]",
         "virtualNetworkSubnetId": "[variables('effectiveAppServiceIntegrationSubnetId')]",
         "siteConfig": {
           "ftpsState": "Disabled",
@@ -704,6 +726,77 @@
       "dependsOn": [
         "functionApp",
         "vnet"
+      ]
+    },
+    "functionPrivateDnsZone": {
+      "condition": "[parameters('createFunctionPrivateEndpoint')]",
+      "type": "Microsoft.Network/privateDnsZones",
+      "apiVersion": "2020-06-01",
+      "name": "[variables('functionPrivateDnsZoneName')]",
+      "location": "global"
+    },
+    "functionPrivateDnsZoneVnetLink": {
+      "condition": "[parameters('createFunctionPrivateEndpoint')]",
+      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+      "apiVersion": "2020-06-01",
+      "name": "[format('{0}/{1}', variables('functionPrivateDnsZoneName'), variables('functionPrivateDnsZoneVnetLinkName'))]",
+      "location": "global",
+      "properties": {
+        "registrationEnabled": false,
+        "virtualNetwork": {
+          "id": "[variables('effectiveVirtualNetworkId')]"
+        }
+      },
+      "dependsOn": [
+        "functionPrivateDnsZone",
+        "vnet"
+      ]
+    },
+    "functionPrivateEndpoint": {
+      "condition": "[parameters('createFunctionPrivateEndpoint')]",
+      "type": "Microsoft.Network/privateEndpoints",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('functionPrivateEndpointName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "subnet": {
+          "id": "[variables('effectivePrivateEndpointSubnetId')]"
+        },
+        "privateLinkServiceConnections": [
+          {
+            "name": "functionAppConnection",
+            "properties": {
+              "privateLinkServiceId": "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]",
+              "groupIds": [
+                "sites"
+              ]
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "functionApp",
+        "vnet"
+      ]
+    },
+    "functionPrivateEndpointDnsZoneGroup": {
+      "condition": "[parameters('createFunctionPrivateEndpoint')]",
+      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+      "apiVersion": "2023-09-01",
+      "name": "[format('{0}/{1}', variables('functionPrivateEndpointName'), 'default')]",
+      "properties": {
+        "privateDnsZoneConfigs": [
+          {
+            "name": "function-private-dns",
+            "properties": {
+              "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', variables('functionPrivateDnsZoneName'))]"
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "functionPrivateDnsZone",
+        "functionPrivateEndpoint"
       ]
     },
     "kv": {
@@ -2130,6 +2223,10 @@
     "keyVaultPrivateEndpointName": {
       "type": "string",
       "value": "[if(variables('useExistingKeyVault'), '', variables('keyVaultPrivateEndpointName'))]"
+    },
+    "functionPrivateEndpointName": {
+      "type": "string",
+      "value": "[if(parameters('createFunctionPrivateEndpoint'), variables('functionPrivateEndpointName'), '')]"
     }
   }
 }

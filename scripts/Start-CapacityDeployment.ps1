@@ -630,6 +630,8 @@ function ConvertTo-DeployParameterMap([System.Collections.ArrayList]$Arguments, 
         'ExistingVirtualNetworkResourceGroupName',
         'ExistingAppServiceIntegrationSubnetName',
         'ExistingPrivateEndpointSubnetName',
+        'WorkerStoragePublicNetworkAccess',
+        'CreateWorkerStoragePrivateEndpoints',
         'ManageEntraWebRedirectUri',
         'ReportViewerGroupIds',
         'CreateMissingEntraAccessGroups'
@@ -872,6 +874,8 @@ $keyVaultNameOverride = ''
 $keyVaultPublicNetworkAccess = 'Disabled'
 $functionPublicNetworkAccess = 'Disabled'
 $createFunctionPrivateEndpoint = $true
+$workerStoragePublicNetworkAccess = 'Disabled'
+$createWorkerStoragePrivateEndpoints = $true
 if (Prompt-YesNo -Name 'UseExistingKeyVault' -Question 'Does the customer already have a Key Vault to reuse?' -DefaultValue $false) {
     $existingKeyVaultName = Prompt-String -Name 'ExistingKeyVaultName' -Question 'Existing Key Vault name' -Required
     $existingKeyVaultResourceGroupName = Prompt-String -Name 'ExistingKeyVaultResourceGroupName' -Question 'Existing Key Vault resource group' -DefaultValue $resourceGroupName
@@ -890,6 +894,11 @@ $existingWorkerStorageResourceGroupName = ''
 if (Prompt-YesNo -Name 'UseExistingWorkerStorage' -Question 'Does the customer already have a worker storage account to reuse?' -DefaultValue $false) {
     $existingWorkerStorageAccountName = Prompt-String -Name 'ExistingWorkerStorageAccountName' -Question 'Existing worker storage account name' -Required
     $existingWorkerStorageResourceGroupName = Prompt-String -Name 'ExistingWorkerStorageResourceGroupName' -Question 'Existing worker storage account resource group' -DefaultValue $resourceGroupName
+}
+
+$createWorkerStoragePrivateEndpoints = Prompt-YesNo -Name 'CreateWorkerStoragePrivateEndpoints' -Question 'Create private endpoints for the worker storage account blob, queue, table, and file services?' -DefaultValue $true
+if (-not $createWorkerStoragePrivateEndpoints) {
+    $workerStoragePublicNetworkAccess = if (Prompt-YesNo -Name 'EnableWorkerStoragePublicNetworkAccess' -Question 'Allow public network access to the worker storage account?' -DefaultValue $false) { 'Enabled' } else { 'Disabled' }
 }
 
 $existingVirtualNetworkName = ''
@@ -986,6 +995,8 @@ Add-DeployArgument -Arguments $deployArguments -Name '-KeyVaultNameOverride' -Va
 Add-DeployArgument -Arguments $deployArguments -Name '-KeyVaultPublicNetworkAccess' -Value $keyVaultPublicNetworkAccess
 Add-DeployArgument -Arguments $deployArguments -Name '-FunctionPublicNetworkAccess' -Value $functionPublicNetworkAccess
 Add-DeployArgument -Arguments $deployArguments -Name '-CreateFunctionPrivateEndpoint' -Value $createFunctionPrivateEndpoint
+Add-DeployArgument -Arguments $deployArguments -Name '-WorkerStoragePublicNetworkAccess' -Value $workerStoragePublicNetworkAccess
+Add-DeployArgument -Arguments $deployArguments -Name '-CreateWorkerStoragePrivateEndpoints' -Value $createWorkerStoragePrivateEndpoints
 Add-DeployArgument -Arguments $deployArguments -Name '-ExistingSqlServerName' -Value $existingSqlServerName
 Add-DeployArgument -Arguments $deployArguments -Name '-ExistingSqlServerResourceGroupName' -Value $existingSqlServerResourceGroupName
 Add-DeployArgument -Arguments $deployArguments -Name '-ExistingSqlDatabaseName' -Value $existingSqlDatabaseName
@@ -1039,6 +1050,8 @@ $plan = [ordered]@{
     ExistingKeyVault = if ([string]::IsNullOrWhiteSpace($existingKeyVaultName)) { 'No' } else { $existingKeyVaultName }
     KeyVaultPublicNetworkAccess = if ($provider -eq 'Terraform') { $keyVaultPublicNetworkAccess } else { 'Template default' }
     ExistingWorkerStorage = if ([string]::IsNullOrWhiteSpace($existingWorkerStorageAccountName)) { 'No' } else { $existingWorkerStorageAccountName }
+    WorkerStoragePublicNetworkAccess = $workerStoragePublicNetworkAccess
+    CreateWorkerStoragePrivateEndpoints = $createWorkerStoragePrivateEndpoints
     ExistingVirtualNetwork = if ([string]::IsNullOrWhiteSpace($existingVirtualNetworkName)) { 'No' } else { $existingVirtualNetworkName }
     RbacMode = $rbacMode
     DeployWebApp = $deployWebApp

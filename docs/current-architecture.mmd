@@ -1,4 +1,4 @@
-flowchart LR
+flowchart TB
     classDef group fill:#FFF7CC,stroke:#C9A227,stroke-width:1.5px,color:#332B00;
     classDef azure fill:#EAF4FF,stroke:#2B6CB0,stroke-width:1.5px,color:#0F2A43;
     classDef app fill:#E8FFF4,stroke:#1F7A4D,stroke-width:1.5px,color:#103222;
@@ -7,45 +7,45 @@ flowchart LR
     classDef scope fill:#EEF8FF,stroke:#2563EB,stroke-width:1.5px,color:#102A43;
 
     User[Platform and Capacity Team]
-    Browser[Browser UI\nCapacity Explorer + Admin controls\nQuota Workbench + feature-gated AI views]
+    Browser[Browser UI\nReports + Admin + Quota Workbench]
 
     subgraph Experience[Experience Layer]
-        direction TB
-        WebApp[Azure App Service\nStatic UI + Express API\nSystem-assigned managed identity]
-        Api[Node / Express endpoints\nhealthz\napi/capacity\napi/quota/* + api/ai/*\nApp Service flags gate AI ingest]
-        Worker[Azure Function App worker\nPowerShell 7.4\nSystem-assigned managed identity]
+        direction LR
+        WebApp[Azure App Service\nReact UI + Express API]
+        Api[Node API\nCapacity + Quota + AI endpoints]
+        Worker[Function App Worker\nPowerShell 7.4]
     end
 
     subgraph PrivateIngress[Private Ingress]
-        direction TB
-        FuncPE[Function App private endpoint\nsubresource: sites]
-        FuncDns[Private DNS zone\nprivatelink.azurewebsites.net]
+        direction LR
+        FuncDns[Private DNS\nprivatelink.azurewebsites.net]
+        FuncPE[Function Private Endpoint\nsubresource: sites]
     end
 
     subgraph Data[Data Platform]
-        direction TB
-        Sql[(Azure SQL Database\nCapacitySnapshot + AIModelAvailability\nCapacityLatest + AIModelAvailabilityLatest\nDashboardSetting AI cadence defaults)]
-        Seed[Seed / schema scripts\nEntra-auth sqlcmd]
+        direction LR
+        Sql[(Azure SQL Database\nSnapshots + settings + history)]
+        Seed[Schema + migration scripts]
     end
 
     subgraph Access[RBAC Scope Hierarchy]
-        direction TB
-        Mg[Management Groups\nPreferred RBAC scope]
-        Subs[Descendant subscriptions\nFallback explicit subscription lists]
+        direction LR
+        Mg[Management Groups\nPreferred scope]
+        Subs[Descendant subscriptions\nFallback lists]
     end
 
     subgraph Security[Security and Observability]
-        direction TB
-        Entra[Microsoft Entra admin\nAAD-only SQL authentication]
-        Kv[Azure Key Vault\nRBAC enabled]
+        direction LR
+        Entra[Microsoft Entra\nAAD-only SQL auth]
+        Kv[Key Vault\nRBAC secrets]
         Appi[Application Insights]
-        Log[Log Analytics Workspace]
+        Log[Log Analytics]
     end
 
     subgraph Delivery[Deployment Flow]
-        direction TB
-        Local[Local repo + scripts\nBicep or Terraform\nPowerShell + zip deploy]
-        Infra[Infra deployment\nApp Service Plans\nWeb App + Worker\nSQL Server / DB or reuse\nKey Vault or reuse\nWorker storage or reuse\nInsights]
+        direction LR
+        Local[Repo + scripts\nBicep or Terraform]
+        Infra[Infra deployment\nWeb + Worker + Data]
     end
 
     User --> Browser --> WebApp --> Api

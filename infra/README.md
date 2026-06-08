@@ -19,6 +19,7 @@ Both implementations provision the same set of resources by default:
 - SQL Private Endpoint + Private DNS zone
 - Key Vault (RBAC authorization) + Private Endpoint + Private DNS zone
 - Function App Private Endpoint + Private DNS zone
+- Function worker Storage Account private endpoints + Private DNS zones for blob, queue, table, and file services
 - Application Insights + Log Analytics
 - Role Assignments (Key Vault Secrets User, Storage Blob/Queue/Table)
 - Cross-scope RBAC modules (worker RBAC, web Reader, web GroupQuota Request Operator at management-group or subscription scope)
@@ -39,6 +40,7 @@ Use this table during customer reviews to explain why each Azure service exists 
 | Key Vault | Yes, unless reusing existing vault | Stores deployment/runtime secrets such as app secrets and internal shared secrets. | No | Uses RBAC authorization and managed identity access. |
 | Key Vault Private Endpoint + Private DNS | Yes when creating Key Vault and private vault access is enabled | Private connectivity from the app hosts to Key Vault. | No | Skipped when reusing a Key Vault that already has customer-managed private connectivity. |
 | Function App Private Endpoint + Private DNS | Yes by default | Private connectivity from the dashboard Web App to the worker Function App. | No | Set `createFunctionPrivateEndpoint` / `create_function_private_endpoint` to false only when using another approved ingress path. |
+| Worker Storage Private Endpoints + Private DNS | Yes by default | Private connectivity from the Function App to its Azure Functions host storage account. | No | Creates blob, queue, table, and file private endpoints. Existing storage reuse assumes the customer-approved private connectivity path is valid. |
 | Application Insights + Log Analytics | Yes | Application telemetry, diagnostics, and operational troubleshooting. | No | Does not replace Azure SQL for dashboard report data. |
 | Role assignments | Yes, based on parameters | Grants least-required access for Key Vault, worker host storage, cross-subscription reads, live placement, billing/pricing, and quota apply. | No | Scope depends on management-group or subscription parameters. |
 
@@ -63,9 +65,10 @@ Both implementations can also reuse existing shared platform dependencies instea
 - SQL defaults to private-access mode (`sqlPublicNetworkAccess = 'Disabled'`) and is reachable from App Service/Function App via VNet integration and private endpoint.
 - Key Vault defaults to private-access mode (`keyVaultPublicNetworkAccess = 'Disabled'`) and is reachable from App Service/Function App via VNet integration and private endpoint.
 - Function App worker ingress defaults to private-access mode (`functionPublicNetworkAccess = 'Disabled'`) and is reachable from the dashboard Web App through `privatelink.azurewebsites.net` when the Function private endpoint is created.
+- Function worker storage defaults to private-access mode (`workerStoragePublicNetworkAccess` / `worker_storage_public_network_access = 'Disabled'`) and is reachable from the Function App through private endpoints when worker storage private endpoints are created.
 - Customer-managed shared services can now be attached instead of created by passing the existing-resource parameters through `scripts/deploy-infra.ps1` or the raw Bicep/Terraform inputs.
 - Customer-managed virtual networks can now be attached by passing existing VNet/subnet names. In this mode the templates do not create or modify the VNet or its subnets, which is intended for customer or separate-tenant testing where network ownership is centralized.
-- Existing-network mode requires one subnet delegated to `Microsoft.Web/serverFarms` for Web App and Function App VNet integration, plus one subnet that allows private endpoints for SQL, Key Vault, and the Function App worker when those private endpoints are created by the dashboard deployment.
+- Existing-network mode requires one subnet delegated to `Microsoft.Web/serverFarms` for Web App and Function App VNet integration, plus one subnet that allows private endpoints for SQL, Key Vault, the Function App worker, and the worker storage account when those private endpoints are created by the dashboard deployment.
 - When an existing SQL server or Key Vault is reused, the dashboard templates stop creating a new private endpoint and DNS zone for that dependency and assume the customer-managed private connectivity path already exists.
 - Live placement and pricing RBAC can now be assigned automatically during infra deployment by passing `workerRbacManagementGroupNames` for larger estates, with `workerSubscriptionRbacSubscriptionIds` kept as the fallback for customers without management groups.
 - Dashboard subscription discovery RBAC can now be assigned automatically during infra deployment by passing `webReaderManagementGroupNames` for larger estates, with `webReaderSubscriptionIds` kept as the fallback for customers without management groups.

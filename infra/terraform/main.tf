@@ -25,6 +25,9 @@ locals {
   kv_private_dns_zone_vnet_link                 = "pdz-link-kv-capdash-${var.environment}-${var.workload_suffix}"
   function_private_endpoint_name                = "pep-func-capdash-${var.environment}-${var.workload_suffix}"
   function_private_dns_zone_vnet_link           = "pdz-link-func-capdash-${var.environment}-${var.workload_suffix}"
+  worker_storage_private_endpoint_name_prefix   = "pep-stfunc-capdash-${var.environment}-${var.workload_suffix}"
+  worker_storage_private_dns_zone_vnet_link     = "pdz-link-stfunc-capdash-${var.environment}-${var.workload_suffix}"
+  worker_storage_private_endpoint_services      = toset(["blob", "queue", "table", "file"])
   effective_auth_redirect_uri                   = var.auth_redirect_uri != "" ? var.auth_redirect_uri : "https://${local.web_app_name}.azurewebsites.net/auth/callback"
   effective_sql_server_resource_group_name      = var.existing_sql_server_resource_group_name != "" ? var.existing_sql_server_resource_group_name : azurerm_resource_group.rg.name
   effective_sql_server_name                     = local.use_existing_sql_server ? var.existing_sql_server_name : local.sql_server_name
@@ -181,6 +184,7 @@ resource "azurerm_storage_account" "function_storage" {
   https_traffic_only_enabled      = true
   allow_nested_items_to_be_public = false
   shared_access_key_enabled       = false
+  public_network_access_enabled   = var.worker_storage_public_network_access == "Enabled"
   access_tier                     = "Hot"
 }
 
@@ -188,6 +192,41 @@ data "azurerm_storage_account" "function_storage" {
   count               = local.use_existing_worker_storage_account ? 1 : 0
   name                = local.effective_worker_storage_name
   resource_group_name = local.effective_worker_storage_resource_group_name
+}
+
+resource "azurerm_private_dns_zone" "worker_storage" {
+  for_each            = var.create_worker_storage_private_endpoints ? local.worker_storage_private_endpoint_services : toset([])
+  name                = "privatelink.${each.key}.core.windows.net"
+  resource_group_name = azurerm_resource_group.rg.name
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "worker_storage" {
+  for_each              = var.create_worker_storage_private_endpoints ? local.worker_storage_private_endpoint_services : toset([])
+  name                  = "${local.worker_storage_private_dns_zone_vnet_link}-${each.key}"
+  resource_group_name   = azurerm_resource_group.rg.name
+  private_dns_zone_name = azurerm_private_dns_zone.worker_storage[each.key].name
+  virtual_network_id    = local.effective_virtual_network_id
+  registration_enabled  = false
+}
+
+resource "azurerm_private_endpoint" "worker_storage" {
+  for_each            = var.create_worker_storage_private_endpoints ? local.worker_storage_private_endpoint_services : toset([])
+  name                = "${local.worker_storage_private_endpoint_name_prefix}-${each.key}"
+  location            = var.location
+  resource_group_name = azurerm_resource_group.rg.name
+  subnet_id           = local.effective_private_endpoint_subnet_id
+
+  private_service_connection {
+    name                           = "workerStorage${each.key}Connection"
+    private_connection_resource_id = local.use_existing_worker_storage_account ? data.azurerm_storage_account.function_storage[0].id : azurerm_storage_account.function_storage[0].id
+    subresource_names              = [each.key]
+    is_manual_connection           = false
+  }
+
+  private_dns_zone_group {
+    name                 = "default"
+    private_dns_zone_ids = [azurerm_private_dns_zone.worker_storage[each.key].id]
+  }
 }
 
 # ──────────────────────────────────────────────

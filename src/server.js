@@ -1780,6 +1780,20 @@ app.use(express.static(path.resolve(__dirname, '..'), {
 }));
 
 function requireIngestKey(req, res, next) {
+  const easyAuthBearerEnabled = String(process.env.INGEST_EASY_AUTH_BEARER_ENABLED || '').toLowerCase() === 'true';
+  const ingestKeyEnabled = String(process.env.INGEST_API_KEY_ENABLED || 'true').toLowerCase() !== 'false';
+  const hasBearerToken = String(req.header('authorization') || '').toLowerCase().startsWith('bearer ');
+  const hasEasyAuthPrincipal = Boolean(req.header('x-ms-client-principal'));
+
+  if (easyAuthBearerEnabled && hasBearerToken && hasEasyAuthPrincipal) {
+    return next();
+  }
+
+  if (!ingestKeyEnabled) {
+    res.status(401).json({ error: 'Bearer authentication required.' });
+    return;
+  }
+
   const expected = process.env.INGEST_API_KEY;
   if (!expected) {
     res.status(503).json({ error: 'Ingestion API key is not configured.' });
@@ -3353,6 +3367,7 @@ app.get('/internal/diagnostics/capacity-read', requireIngestKey, async (req, res
   try {
     const filters = getCapacityFiltersFromQuery(req.query);
     const target = String(req.query.target || 'all').trim().toLowerCase();
+    const diagnosticTimeoutMs = Math.max(1000, Math.min(Number(req.query.timeoutMs || 8000), 600000));
     const getAIModelAvailabilityDiagnostics = async () => {
       const pool = await getSqlPool();
       if (!pool) {
@@ -3397,6 +3412,28 @@ app.get('/internal/diagnostics/capacity-read', requireIngestKey, async (req, res
       capacityscores: { name: 'capacityScores', run: () => getCapacityScoreSummaryPaginated({ ...filters, desiredCount: req.query.desiredCount || '1' }, 1, 10) },
       trendrows: { name: 'trendRows', run: () => getCapacityTrends({ ...filters, days: 7 }) },
       familyrows: { name: 'familyRows', run: () => getFamilySummary(filters) },
+      liveplacement: {
+        name: 'livePlacement',
+        run: () => getLivePlacementScoreRows({
+          ...filters,
+          subscriptionIds: req.query.subscriptionIds,
+          family: req.query.family,
+          desiredCount: req.query.desiredCount || 1,
+          extraSkus: req.query.extraSkus
+        })
+      },
+      recommendations: {
+        name: 'recommendations',
+        run: () => getCapacityRecommendations({
+          targetSku: req.query.targetSku,
+          regions: req.query.regions,
+          regionPreset: req.query.regionPreset,
+          topN: req.query.topN || 5,
+          minScore: req.query.minScore || 0,
+          showPricing: normalizeBoolean(req.query.showPricing, false),
+          showSpot: normalizeBoolean(req.query.showSpot, false)
+        })
+      },
       paasavailability: { name: 'paasAvailability', run: () => getPaaSAvailabilitySnapshot({ service: req.query.service || 'All' }) },
       paasdbquota: { name: 'paasDbQuota', run: () => getPaaSDatabaseQuotaSnapshot() },
       aimodels: { name: 'aiModels', run: getAIModelAvailabilityDiagnostics },
@@ -3409,10 +3446,10 @@ app.get('/internal/diagnostics/capacity-read', requireIngestKey, async (req, res
       : (targetChecks[target] ? [targetChecks[target]] : null);
 
     if (!requestedChecks) {
-      return res.status(400).json({ ok: false, error: 'Unsupported target. Use all, capacityRows, capacityPaged, capacityAnalytics, capacityScores, trendRows, familyRows, paasAvailability, paasDbQuota, aiModels, quotaScope, or subscriptions.' });
+      return res.status(400).json({ ok: false, error: 'Unsupported target. Use all, capacityRows, capacityPaged, capacityAnalytics, capacityScores, trendRows, familyRows, livePlacement, recommendations, paasAvailability, paasDbQuota, aiModels, quotaScope, or subscriptions.' });
     }
 
-    const checks = await Promise.all(requestedChecks.map((check) => runDiagnosticCheck(check.name, check.run, { timeoutMs: 8000 })));
+    const checks = await Promise.all(requestedChecks.map((check) => runDiagnosticCheck(check.name, check.run, { timeoutMs: diagnosticTimeoutMs })));
 
     const byName = Object.fromEntries(checks.map((check) => [check.name, check]));
 
@@ -3432,6 +3469,10 @@ app.get('/internal/diagnostics/capacity-read', requireIngestKey, async (req, res
       scoreSubscriptionSummaryRows: Array.isArray(byName.capacityScores?.value?.subscriptionSummary) ? byName.capacityScores.value.subscriptionSummary.length : 0,
       trendRows: Array.isArray(byName.trendRows?.value) ? byName.trendRows.value.length : 0,
       familyRows: Array.isArray(byName.familyRows?.value) ? byName.familyRows.value.length : 0,
+      livePlacementRows: Array.isArray(byName.livePlacement?.value?.rows) ? byName.livePlacement.value.rows.length : 0,
+      livePlacementDiagnostics: byName.livePlacement?.value?.diagnostics || null,
+      recommendationRows: Array.isArray(byName.recommendations?.value?.recommendations) ? byName.recommendations.value.recommendations.length : 0,
+      recommendationDiagnostics: byName.recommendations?.value?.diagnostics || null,
       paasRows: Array.isArray(byName.paasAvailability?.value?.rows) ? byName.paasAvailability.value.rows.length : 0,
       paasServiceSummaryRows: Array.isArray(byName.paasAvailability?.value?.summary?.serviceSummary) ? byName.paasAvailability.value.summary.serviceSummary.length : 0,
       aiModelRows: Number(byName.aiModels?.value?.rows || 0),
@@ -3534,6 +3575,7 @@ app.post('/internal/db/bootstrap-admin', requireIngestKey, async (req, res) => {
   const runtimeRoles = normalizeDatabaseRoles(req.body?.runtimeRoles, {
     includeBootstrapRole: normalizeBoolean(req.body?.grantBootstrapRole, false)
   });
+  const skipBootstrap = normalizeBoolean(req.body?.skipBootstrap, false);
 
   if (!sqlAccessToken) {
     return res.status(400).json({ ok: false, error: 'sqlAccessToken is required.' });
@@ -3546,7 +3588,7 @@ app.post('/internal/db/bootstrap-admin', requireIngestKey, async (req, res) => {
   let adminPool;
   try {
     adminPool = await createSqlPoolWithAccessToken(sqlAccessToken);
-    const bootstrapResult = await runDatabaseBootstrapWithPool(adminPool);
+    const bootstrapResult = skipBootstrap ? { ok: true, skippedDatabaseBootstrap: true } : await runDatabaseBootstrapWithPool(adminPool);
     const grantedRoles = await ensureDatabasePrincipalAccess(adminPool, appIdentityName, runtimeRoles);
 
     res.json({

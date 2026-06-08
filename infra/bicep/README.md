@@ -13,6 +13,7 @@ This template provisions a native Azure baseline for the dashboard solution and 
 - SQL Private Endpoint + Private DNS zone link (`privatelink.database.windows.net`)
 - Key Vault Private Endpoint + Private DNS zone link (`privatelink.vaultcore.azure.net`)
 - Function App Private Endpoint + Private DNS zone link (`privatelink.azurewebsites.net`)
+- Function worker Storage Account private endpoints + Private DNS zone links for blob, queue, table, and file services
 - Azure Key Vault (RBAC authorization)
 - Application Insights + Log Analytics
 
@@ -39,6 +40,7 @@ Use this table during customer reviews to explain why each Azure service exists 
 | Key Vault | Yes, unless reusing existing vault | Stores deployment/runtime secrets such as app secrets and internal shared secrets. | No | Uses RBAC authorization and managed identity access. |
 | Key Vault Private Endpoint + Private DNS | Yes when creating Key Vault and private vault access is enabled | Private connectivity from the app hosts to Key Vault. | No | Skipped when reusing a Key Vault that already has customer-managed private connectivity. |
 | Function App Private Endpoint + Private DNS | Yes by default | Private connectivity from the dashboard Web App to the worker Function App. | No | Set `createFunctionPrivateEndpoint` to false only when using another approved ingress path. |
+| Worker Storage Private Endpoints + Private DNS | Yes by default | Private connectivity from the Function App to its Azure Functions host storage account. | No | Creates blob, queue, table, and file private endpoints. Existing storage reuse assumes the customer-approved private connectivity path is valid. |
 | Application Insights + Log Analytics | Yes | Application telemetry, diagnostics, and operational troubleshooting. | No | Does not replace Azure SQL for dashboard report data. |
 | Role assignments | Yes, based on parameters | Grants least-required access for Key Vault, worker host storage, cross-subscription reads, live placement, billing/pricing, and quota apply. | No | Scope depends on management-group or subscription parameters. |
 
@@ -55,6 +57,7 @@ Use this table during customer reviews to explain why each Azure service exists 
 - SQL defaults to private-access mode (`sqlPublicNetworkAccess = 'Disabled'`) and is reachable from App Service/Function App via VNet integration and private endpoint.
 - Key Vault defaults to private-access mode (`keyVaultPublicNetworkAccess = 'Disabled'`) and is reachable from App Service/Function App via VNet integration and private endpoint.
 - Function App worker ingress defaults to private-access mode (`functionPublicNetworkAccess = 'Disabled'`) and is reachable from the dashboard Web App through `privatelink.azurewebsites.net` when the Function private endpoint is created.
+- Function worker storage defaults to private-access mode (`workerStoragePublicNetworkAccess = 'Disabled'`) and is reachable from the Function App through blob, queue, table, and file private endpoints when `createWorkerStoragePrivateEndpoints = true`.
 - Existing SQL, Key Vault, and worker storage can now be reused by passing the matching `existing*Name` parameters.
 - Existing customer-managed VNets can now be reused by passing the matching `existingVirtualNetwork*` and existing subnet name parameters. In this mode Bicep does not create or modify the VNet or subnets.
 - When `existingSqlServerName` or `existingKeyVaultName` is set, the template assumes customer-managed private connectivity already exists for that dependency and does not create a new private endpoint or private DNS zone for it.
@@ -73,6 +76,8 @@ Use this table during customer reviews to explain why each Azure service exists 
 - `keyVaultPublicNetworkAccess` (`Disabled` by default; set `Enabled` only for temporary break-glass access)
 - `functionPublicNetworkAccess` (`Disabled` by default; keep disabled when using the Function private endpoint)
 - `createFunctionPrivateEndpoint` (`true` by default; creates `privatelink.azurewebsites.net` DNS and private endpoint for the worker)
+- `workerStoragePublicNetworkAccess` (`Disabled` by default; keep disabled when using worker storage private endpoints)
+- `createWorkerStoragePrivateEndpoints` (`true` by default; creates `privatelink.<service>.core.windows.net` DNS and private endpoints for blob, queue, table, and file)
 
 Existing-network mode is intended for customer or separate-tenant testing where the network team owns VNet creation. Supply these names together:
 
@@ -84,8 +89,8 @@ Existing-network mode is intended for customer or separate-tenant testing where 
 Required customer-managed subnet configuration:
 
 - The App Service integration subnet must be delegated to `Microsoft.Web/serverFarms` and have enough free IPs for the Web App and Function App integrations.
-- The private endpoint subnet must allow private endpoints for SQL and Key Vault when those dependencies are created by this template.
-- DNS resolution from the App Service/Function App integration subnet must resolve the SQL and Key Vault private DNS zones used by the customer's network path.
+- The private endpoint subnet must allow private endpoints for SQL, Key Vault, Function App, and worker storage when those dependencies are created by this template.
+- DNS resolution from the App Service/Function App integration subnet must resolve the SQL, Key Vault, Function App, and worker storage private DNS zones used by the customer's network path.
 
 ## Existing resource parameters
 

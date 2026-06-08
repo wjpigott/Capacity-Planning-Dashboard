@@ -12,6 +12,8 @@ The current verified contract is:
 
 This means network access is private, but application authentication is still a shared-secret contract.
 
+The Defender for Cloud API authentication recommendation also evaluates successful HTTP traffic for common authentication evidence such as `Authorization` headers. Custom headers such as `x-ingest-key` may protect a route in app code but can still appear non-compliant to that recommendation if successful calls do not include a bearer token.
+
 ## Security finding options
 
 ### Option 1: Function keys
@@ -104,6 +106,63 @@ Before merging this branch, validate all of the following:
 - A request without a bearer token is rejected before function code executes in Entra mode.
 - A request with the wrong audience or caller is rejected.
 - Existing shared-secret deployments continue to work when `CAPACITY_WORKER_AUTH_MODE=shared-secret`.
+
+## Isolated validation results
+
+The isolated auth-hardening deployment uses separate app instances so the stable dev baseline is not affected:
+
+- Web App: `app-capdash-auth-dev-cap001`
+- Function App: `func-capdash-auth-dev-cap001-appsvc`
+- Worker audience: `api://95a70edd-af8d-4343-9929-414050e778c0`
+- Web App API audience: `api://003c43d4-57fa-4781-9c64-d58f34ccdd82`
+
+Validated Web App settings:
+
+- App Service Authentication enabled on the isolated Web App.
+- Unauthenticated action is `Return401`.
+- Microsoft Entra provider uses dashboard app registration `003c43d4-57fa-4781-9c64-d58f34ccdd82`.
+- `INGEST_EASY_AUTH_BEARER_ENABLED=true` allows internal routes to trust Easy Auth bearer-authenticated requests.
+- `INGEST_API_KEY_ENABLED=false` disables `x-ingest-key` fallback on the isolated Web App so successful internal calls require `Authorization: Bearer`.
+
+Validated Function App settings:
+
+- App Service Authentication enabled on the isolated Function App.
+- Unauthenticated action is `Return401`.
+- Microsoft Entra provider uses worker app registration `95a70edd-af8d-4343-9929-414050e778c0`.
+- Public network access is blocked by the Function private endpoint posture; direct public function calls returned `403`.
+
+Validated traffic behavior:
+
+- Anonymous Web App requests to `/`, `/api/auth/me`, `/api/capacity`, and `/internal/diagnostics/capacity-read?target=subscriptions` returned `401`.
+- `x-ingest-key` alone returned `401` against isolated internal diagnostics.
+- `Authorization: Bearer` requests returned `200` for `/api/auth/me` and `/internal/diagnostics/capacity-read?target=subscriptions`.
+- Bearer-authenticated PaaS refresh succeeded with `source: function-worker`, `executionMode: function-app`, `rowCount: 149`, and `persistedRowCount: 149`.
+- Bearer-authenticated live placement succeeded with `executionMode: function-app`, `transport: arm-rest`, and 5 rows.
+- Bearer-authenticated recommendations succeeded with `executionMode: function-app` and 3 rows.
+
+The dashboard app registration was exposed as an API for isolated bearer-token validation by adding `api://003c43d4-57fa-4781-9c64-d58f34ccdd82` and a `user_impersonation` delegated scope. The isolated Web App Easy Auth policy temporarily allows the Azure CLI public client application ID `04b07795-8ddb-461a-bbee-02f9e1bf7b46` for command-line smoke tests; replace that with the intended calling clients before production rollout.
+
+## Rollout notes
+
+Keep `INGEST_API_KEY_ENABLED` defaulting to `true` so existing dev/test/prod deployments are not broken by this branch. Set it to `false` only after the target environment has Web App Easy Auth enabled and bearer-token automation paths are verified.
+
+For production hardening, prefer a dedicated internal automation client or managed identity caller rather than allowing broad public clients for internal diagnostics. The isolated validation used Azure CLI only to prove Defender-style `Authorization: Bearer` traffic can reach the app without relying on `x-ingest-key`.
+
+## IaC and documentation tracker
+
+Track these changes together before promoting Easy Auth to test or production:
+
+| Area | Current branch status | Follow-up before production default |
+|---|---|---|
+| Web App Easy Auth | Validated manually on isolated Web App. App code can consume Easy Auth principal headers. | Add Bicep and Terraform App Service Authentication resources/settings for Web App, including allowed audiences and intended internal automation clients. |
+| Function App Easy Auth | Validated manually on isolated Function App. Web App can call worker with managed-identity bearer token. | Add Bicep and Terraform App Service Authentication resources/settings for Function App and document the worker audience app registration. |
+| Worker shared secret | Shared-secret mode remains default and backward compatible. | Make `CAPACITY_WORKER_AUTH_MODE=entra` the environment default only after dev/test validation, then stop prompting for `workerSharedSecret` / `worker_shared_secret` in Easy Auth mode. |
+| Internal ingest key | `INGEST_API_KEY_ENABLED=false` was validated on isolated Web App with bearer-authenticated internal diagnostics. | Update deployment/bootstrap automation to use bearer tokens before removing or making `INGEST_API_KEY` optional in Easy Auth environments. |
+| Entra client secret | Still required by the current custom Express auth-code flow. | If Web App Easy Auth becomes the only browser sign-in path, remove the custom Express secret requirement and update prompts/docs accordingly. |
+| Session secret | Still required while Express sessions are used. | Re-evaluate after browser auth is fully delegated to Easy Auth and any remaining session-backed features are removed or redesigned. |
+| Key Vault secrets | Still used for `ENTRA_CLIENT_SECRET`, `INGEST_API_KEY`, `SESSION_SECRET`, and shared-secret fallback. | Remove only the secrets no longer referenced by app settings in the target auth mode; keep Key Vault for any remaining runtime secrets. |
+| Function worker storage private endpoints | Bicep and Terraform now include default-on worker storage private endpoint support for blob, queue, table, and file services. | Deploy and validate DNS/connectivity in dev/test before disabling or restricting public storage access in existing environments. |
+| Deployment docs | This tracker and infra READMEs identify the auth/storage changes. | Update top-level README, installer prompts, customer prereqs, and deployment examples when the IaC Easy Auth resources are added. |
 
 ## Branch guardrail
 

@@ -68,6 +68,11 @@ output "function_private_endpoint_name" {
   value       = var.create_function_private_endpoint ? azurerm_private_endpoint.function[0].name : null
 }
 
+output "worker_storage_private_endpoint_names" {
+  description = "Function worker storage private endpoint resource names"
+  value       = var.create_worker_storage_private_endpoints ? [for endpoint in azurerm_private_endpoint.worker_storage : endpoint.name] : []
+}
+
 output "effective_ingest_api_key" {
   description = "Effective ingestion API key generated or supplied for bootstrap workflows"
   value       = local.effective_ingest_api_key

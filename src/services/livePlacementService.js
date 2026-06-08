@@ -7,6 +7,7 @@ const { DefaultAzureCredential } = require('@azure/identity');
 const { getCapacityScoreSummary } = require('./capacityService');
 const { getRegionsForPreset } = require('../config/regionPresets');
 const { saveLivePlacementSnapshots } = require('../store/sql');
+const { getWorkerAuthHeaders } = require('./workerAuthService');
 
 // The ARM placement score API supports up to five SKUs per request. The worker and
 // web fallback use direct REST before falling back to the Az.Compute cmdlet, which
@@ -228,10 +229,6 @@ function resolveRecommendationWrapperPath() {
 
 function resolveWorkerBaseUrl() {
   return (process.env.CAPACITY_WORKER_BASE_URL || '').trim().replace(/\/$/, '');
-}
-
-function resolveWorkerSharedSecret() {
-  return (process.env.CAPACITY_WORKER_SHARED_SECRET || '').trim();
 }
 
 function resolveRecommendationWorkerTimeoutMs(regionCount = 1) {
@@ -588,7 +585,7 @@ async function runRemotePlacementLookup({ skus, regions, desiredCount }) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(resolveWorkerSharedSecret() ? { 'x-capacity-worker-key': resolveWorkerSharedSecret() } : {})
+        ...(await getWorkerAuthHeaders())
       },
       body: JSON.stringify({
         skus,
@@ -635,7 +632,7 @@ async function runRemoteRecommendationLookup({ targetSku, regions, topN, minScor
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(resolveWorkerSharedSecret() ? { 'x-capacity-worker-key': resolveWorkerSharedSecret() } : {})
+        ...(await getWorkerAuthHeaders())
       },
       body: JSON.stringify({
         targetSku,

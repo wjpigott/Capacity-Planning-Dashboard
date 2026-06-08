@@ -5,6 +5,7 @@ const {
   ensureAzPlacementModules,
   resolveProjectRoot
 } = require('./livePlacementService');
+const { getWorkerAuthHeaders } = require('./workerAuthService');
 const {
   savePaaSAvailabilitySnapshots,
   getLatestPaaSAvailabilitySnapshots,
@@ -77,10 +78,6 @@ function normalizeEditionList(value) {
 
 function resolveWorkerBaseUrl() {
   return (process.env.CAPACITY_WORKER_BASE_URL || '').trim().replace(/\/$/, '');
-}
-
-function resolveWorkerSharedSecret() {
-  return (process.env.CAPACITY_WORKER_SHARED_SECRET || '').trim();
 }
 
 function shouldDisableLocalFallback() {
@@ -255,7 +252,7 @@ async function runRemotePaaSAvailabilityScan(options = {}) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(resolveWorkerSharedSecret() ? { 'x-capacity-worker-key': resolveWorkerSharedSecret() } : {})
+        ...(await getWorkerAuthHeaders())
       },
       body: JSON.stringify(options),
       signal: controller.signal

@@ -17,6 +17,8 @@ param(
     [Parameter(Mandatory = $false)][ValidateSet('Enabled','Disabled')][string]$KeyVaultPublicNetworkAccess = 'Enabled',
     [Parameter(Mandatory = $false)][ValidateSet('Enabled','Disabled')][string]$FunctionPublicNetworkAccess = 'Disabled',
     [Parameter(Mandatory = $false)][bool]$CreateFunctionPrivateEndpoint = $true,
+    [Parameter(Mandatory = $false)][ValidateSet('Enabled','Disabled')][string]$WorkerStoragePublicNetworkAccess = 'Disabled',
+    [Parameter(Mandatory = $false)][bool]$CreateWorkerStoragePrivateEndpoints = $true,
     [Parameter(Mandatory = $false)][string]$ExistingSqlServerName,
     [Parameter(Mandatory = $false)][string]$ExistingSqlServerResourceGroupName,
     [Parameter(Mandatory = $false)][string]$ExistingSqlDatabaseName,
@@ -902,6 +904,8 @@ function Deploy-Terraform {
         Set-TerraformVariableValue -Variables $tfVariables -Name 'key_vault_public_network_access' -Value $KeyVaultPublicNetworkAccess
         Set-TerraformVariableValue -Variables $tfVariables -Name 'function_public_network_access' -Value $FunctionPublicNetworkAccess
         Set-TerraformVariableValue -Variables $tfVariables -Name 'create_function_private_endpoint' -Value ([bool]$CreateFunctionPrivateEndpoint)
+        Set-TerraformVariableValue -Variables $tfVariables -Name 'worker_storage_public_network_access' -Value $WorkerStoragePublicNetworkAccess
+        Set-TerraformVariableValue -Variables $tfVariables -Name 'create_worker_storage_private_endpoints' -Value ([bool]$CreateWorkerStoragePrivateEndpoints)
         if (-not [string]::IsNullOrWhiteSpace($QuotaManagementGroupId)){ $tfVariables['quota_management_group_id'] = $QuotaManagementGroupId }
         if (-not [string]::IsNullOrWhiteSpace($ExistingSqlServerName))                { $tfVariables['existing_sql_server_name'] = $ExistingSqlServerName }
         if (-not [string]::IsNullOrWhiteSpace($ExistingSqlServerResourceGroupName))   { $tfVariables['existing_sql_server_resource_group_name'] = $ExistingSqlServerResourceGroupName }
@@ -1015,6 +1019,8 @@ if (-not [string]::IsNullOrWhiteSpace($QuotaManagementGroupId)) {
 
 $deploymentArgs += @('--parameters', "functionPublicNetworkAccess=$FunctionPublicNetworkAccess")
 $deploymentArgs += @('--parameters', "createFunctionPrivateEndpoint=$($CreateFunctionPrivateEndpoint.ToString().ToLowerInvariant())")
+$deploymentArgs += @('--parameters', "workerStoragePublicNetworkAccess=$WorkerStoragePublicNetworkAccess")
+$deploymentArgs += @('--parameters', "createWorkerStoragePrivateEndpoints=$($CreateWorkerStoragePrivateEndpoints.ToString().ToLowerInvariant())")
 
 $deploymentArgs += @('--parameters', "existingSqlServerName=$ExistingSqlServerName")
 $deploymentArgs += @('--parameters', "existingSqlServerResourceGroupName=$ExistingSqlServerResourceGroupName")

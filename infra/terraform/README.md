@@ -20,6 +20,7 @@ Terraform equivalent of the Bicep templates in this folder. Provisions the full 
 | SQL Private Endpoint + DNS zone + VNet link | `azurerm_private_endpoint.sql`, `azurerm_private_dns_zone.sql`, `azurerm_private_dns_zone_virtual_network_link.sql` |
 | Key Vault Private Endpoint + DNS zone + VNet link | `azurerm_private_endpoint.kv`, `azurerm_private_dns_zone.kv`, `azurerm_private_dns_zone_virtual_network_link.kv` |
 | Function App Private Endpoint + DNS zone + VNet link | `azurerm_private_endpoint.function`, `azurerm_private_dns_zone.function`, `azurerm_private_dns_zone_virtual_network_link.function` |
+| Worker Storage Private Endpoints + DNS zones + VNet links | `azurerm_private_endpoint.worker_storage`, `azurerm_private_dns_zone.worker_storage`, `azurerm_private_dns_zone_virtual_network_link.worker_storage` for blob, queue, table, and file |
 | Role Assignments (5) | KV Secrets User (×2), Storage Blob/Queue/Table (×3) |
 | Cross-scope RBAC (modules) | `worker-subscription-rbac`, `worker-management-group-rbac`, `web-subscription-reader`, `web-management-group-reader`, `web-subscription-quota-writer`, `web-management-group-quota-writer` |
 
@@ -88,6 +89,15 @@ Required app registration inputs when `auth_enabled = true`:
 - optional `admin_group_id`
 - optional `report_viewer_group_ids`
 - optional `auth_redirect_uri`
+
+Security-sensitive networking defaults:
+
+- `function_public_network_access = "Disabled"`
+- `create_function_private_endpoint = true`
+- `worker_storage_public_network_access = "Disabled"`
+- `create_worker_storage_private_endpoints = true`
+
+When `create_worker_storage_private_endpoints = true`, Terraform creates blob, queue, table, and file private endpoints and private DNS zones for the Function worker host storage account. Existing storage reuse assumes the customer-approved private connectivity path is valid.
 
 Optional app registration management:
 

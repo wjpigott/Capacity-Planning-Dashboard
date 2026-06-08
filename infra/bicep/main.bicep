@@ -52,8 +52,18 @@ param keyVaultPublicNetworkAccess string = 'Disabled'
 ])
 param functionPublicNetworkAccess string = 'Disabled'
 
+@description('Function worker storage account public network access mode. Keep Disabled when createWorkerStoragePrivateEndpoints is true so the worker host storage path stays private.')
+@allowed([
+  'Enabled'
+  'Disabled'
+])
+param workerStoragePublicNetworkAccess string = 'Disabled'
+
 @description('Create a private endpoint and private DNS zone for the worker Function App. Recommended for production and security-reviewed environments.')
 param createFunctionPrivateEndpoint bool = true
+
+@description('Create private endpoints and private DNS zones for the worker Function App host storage account. Recommended for production and security-reviewed environments.')
+param createWorkerStoragePrivateEndpoints bool = true
 
 @secure()
 @description('Optional shared secret used between the dashboard web app and the worker function app')
@@ -173,6 +183,7 @@ var sqlPrivateDnsZoneName = 'privatelink${az.environment().suffixes.sqlServerHos
 var sqlPrivateDnsZoneVnetLinkName = 'pdz-link-capdash-${environment}-${workloadSuffix}'
 var keyVaultPrivateEndpointName = 'pep-kv-capdash-${environment}-${workloadSuffix}'
 var functionPrivateEndpointName = 'pep-func-capdash-${environment}-${workloadSuffix}'
+var workerStoragePrivateEndpointNamePrefix = 'pep-stfunc-capdash-${environment}-${workloadSuffix}'
 var keyVaultDnsSuffixRaw = az.environment().suffixes.keyvaultDns
 var keyVaultDnsSuffix = startsWith(keyVaultDnsSuffixRaw, '.') ? substring(keyVaultDnsSuffixRaw, 1) : keyVaultDnsSuffixRaw
 var keyVaultPrivateDnsZoneName = startsWith(keyVaultDnsSuffix, 'vaultcore.')
@@ -181,6 +192,14 @@ var keyVaultPrivateDnsZoneName = startsWith(keyVaultDnsSuffix, 'vaultcore.')
 var keyVaultPrivateDnsZoneVnetLinkName = 'pdz-link-kv-capdash-${environment}-${workloadSuffix}'
 var functionPrivateDnsZoneName = 'privatelink.azurewebsites.net'
 var functionPrivateDnsZoneVnetLinkName = 'pdz-link-func-capdash-${environment}-${workloadSuffix}'
+var workerStoragePrivateEndpointServices = [
+  'blob'
+  'queue'
+  'table'
+  'file'
+]
+var workerStoragePrivateDnsZoneVnetLinkNamePrefix = 'pdz-link-stfunc-capdash-${environment}-${workloadSuffix}'
+var workerStoragePrivateEndpointNames = [for (service, index) in workerStoragePrivateEndpointServices: workerStoragePrivateEndpoints[index].name]
 var effectiveAuthRedirectUri = empty(authRedirectUri)
   ? 'https://${webAppName}.azurewebsites.net/auth/callback'
   : authRedirectUri
@@ -288,9 +307,70 @@ resource functionStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = if (!u
     supportsHttpsTrafficOnly: true
     allowBlobPublicAccess: false
     allowSharedKeyAccess: false
+    publicNetworkAccess: workerStoragePublicNetworkAccess
     accessTier: 'Hot'
   }
 }
+
+resource workerStoragePrivateDnsZones 'Microsoft.Network/privateDnsZones@2020-06-01' = [for service in workerStoragePrivateEndpointServices: if (createWorkerStoragePrivateEndpoints) {
+  name: 'privatelink.${service}.core.windows.net'
+  location: 'global'
+}]
+
+resource workerStoragePrivateDnsZoneVnetLinks 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = [for (service, index) in workerStoragePrivateEndpointServices: if (createWorkerStoragePrivateEndpoints) {
+  parent: workerStoragePrivateDnsZones[index]
+  name: '${workerStoragePrivateDnsZoneVnetLinkNamePrefix}-${service}'
+  location: 'global'
+  properties: {
+    registrationEnabled: false
+    virtualNetwork: {
+      id: effectiveVirtualNetworkId
+    }
+  }
+  dependsOn: [
+    vnet
+  ]
+}]
+
+resource workerStoragePrivateEndpoints 'Microsoft.Network/privateEndpoints@2023-09-01' = [for service in workerStoragePrivateEndpointServices: if (createWorkerStoragePrivateEndpoints) {
+  name: '${workerStoragePrivateEndpointNamePrefix}-${service}'
+  location: location
+  properties: {
+    subnet: {
+      id: effectivePrivateEndpointSubnetId
+    }
+    privateLinkServiceConnections: [
+      {
+        name: 'workerStorage${service}Connection'
+        properties: {
+          privateLinkServiceId: resourceId(effectiveWorkerStorageAccountResourceGroupName, 'Microsoft.Storage/storageAccounts', effectiveWorkerStorageAccountName)
+          groupIds: [
+            service
+          ]
+        }
+      }
+    ]
+  }
+  dependsOn: [
+    functionStorage
+    vnet
+  ]
+}]
+
+resource workerStoragePrivateEndpointDnsZoneGroups 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-09-01' = [for (service, index) in workerStoragePrivateEndpointServices: if (createWorkerStoragePrivateEndpoints) {
+  parent: workerStoragePrivateEndpoints[index]
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'worker-storage-${service}-private-dns'
+        properties: {
+          privateDnsZoneId: workerStoragePrivateDnsZones[index].id
+        }
+      }
+    ]
+  }
+}]
 
 resource plan 'Microsoft.Web/serverfarms@2023-12-01' = {
   name: appServicePlanName
@@ -935,3 +1015,4 @@ output virtualNetworkName string = effectiveVirtualNetworkName
 output sqlPrivateEndpointName string = useExistingSqlServer ? '' : sqlPrivateEndpoint.name
 output keyVaultPrivateEndpointName string = useExistingKeyVault ? '' : keyVaultPrivateEndpoint.name
 output functionPrivateEndpointName string = createFunctionPrivateEndpoint ? functionPrivateEndpoint.name : ''
+output workerStoragePrivateEndpointNames array = createWorkerStoragePrivateEndpoints ? workerStoragePrivateEndpointNames : []

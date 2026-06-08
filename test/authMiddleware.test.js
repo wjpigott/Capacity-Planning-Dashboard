@@ -72,3 +72,29 @@ test('auth diagnostics report safe group claim status without exposing group ids
     groupOverageClaimPresent: true
   });
 });
+
+test('getAccountFromSession falls back to Easy Auth principal headers', () => {
+  const auth = loadAuthWithEnv({ AUTH_ENABLED: 'true', ADMIN_GROUP_ID: 'admin-group' });
+  const principal = Buffer.from(JSON.stringify({
+    userDetails: 'user@example.com',
+    userId: 'user-id',
+    claims: [
+      { typ: 'name', val: 'Example User' },
+      { typ: 'preferred_username', val: 'user@example.com' },
+      { typ: 'oid', val: 'object-id' },
+      { typ: 'tid', val: 'tenant-id' },
+      { typ: 'groups', val: 'admin-group' }
+    ]
+  })).toString('base64');
+
+  const account = auth.getAccountFromSession({
+    session: {},
+    headers: { 'x-ms-client-principal': principal }
+  });
+
+  assert.equal(account.name, 'Example User');
+  assert.equal(account.username, 'user@example.com');
+  assert.equal(account.userId, 'object-id');
+  assert.equal(account.tenantId, 'tenant-id');
+  assert.equal(auth.canAccessAdmin(account), true);
+});

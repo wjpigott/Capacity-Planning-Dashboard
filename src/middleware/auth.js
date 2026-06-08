@@ -60,6 +60,48 @@ function hasGroupOverageClaim(claims) {
   );
 }
 
+function getClaimValue(claims, ...types) {
+  const normalizedTypes = types.map((type) => String(type || '').toLowerCase());
+  const match = (claims || []).find((claim) => normalizedTypes.includes(String(claim?.typ || '').toLowerCase()));
+  return match?.val || '';
+}
+
+function getClaimValues(claims, ...types) {
+  const normalizedTypes = types.map((type) => String(type || '').toLowerCase());
+  return (claims || [])
+    .filter((claim) => normalizedTypes.includes(String(claim?.typ || '').toLowerCase()))
+    .map((claim) => claim?.val)
+    .filter(Boolean);
+}
+
+function getAccountFromEasyAuth(req) {
+  const encodedPrincipal = req.headers?.['x-ms-client-principal'];
+  if (!encodedPrincipal) return null;
+
+  try {
+    const principal = JSON.parse(Buffer.from(String(encodedPrincipal), 'base64').toString('utf8'));
+    const claims = Array.isArray(principal.claims) ? principal.claims : [];
+    const groups = getClaimValues(
+      claims,
+      'groups',
+      'http://schemas.microsoft.com/ws/2008/06/identity/claims/groups'
+    ).map(normalizeGroupId).filter(Boolean);
+
+    return {
+      name: getClaimValue(claims, 'name') || principal.userDetails || 'User',
+      username: getClaimValue(claims, 'preferred_username', 'upn') || principal.userDetails || '',
+      userId: getClaimValue(claims, 'oid', 'sub') || principal.userId || '',
+      tenantId: getClaimValue(claims, 'tid') || '',
+      groups,
+      groupClaimPresent: groups.length > 0,
+      groupOverageClaimPresent: hasGroupOverageClaim(Object.fromEntries(claims.map((claim) => [claim?.typ, claim?.val])))
+    };
+  } catch (err) {
+    console.warn('[auth] failed to parse Easy Auth principal header:', err.message);
+    return null;
+  }
+}
+
 function buildAuthDiagnostics(account) {
   const groups = getAccountGroups(account);
   return {
@@ -205,7 +247,7 @@ function writeOAuthStateList(res, states) {
 
 /** Returns the session account object or null if not signed in. */
 function getAccountFromSession(req) {
-  return req.session?.account || null;
+  return req.session?.account || getAccountFromEasyAuth(req) || null;
 }
 
 /** Returns true when the account's groups claim contains ADMIN_GROUP_ID. */

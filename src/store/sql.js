@@ -1221,6 +1221,55 @@ async function ensurePaaSAvailabilitySnapshotSchema(pool) {
   await pool.request().query(createIndexScript);
 }
 
+async function ensurePaaSDatabaseQuotaSnapshotSchema(pool) {
+  const createScript = `
+    IF OBJECT_ID('dbo.PaaSDatabaseQuotaSnapshot', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.PaaSDatabaseQuotaSnapshot (
+        paasDatabaseQuotaSnapshotId BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        runId UNIQUEIDENTIFIER NOT NULL,
+        capturedAtUtc DATETIME2 NOT NULL,
+        requestedServicesJson NVARCHAR(MAX) NULL,
+        requestedRegionsJson NVARCHAR(MAX) NULL,
+        requestedSubscriptionsJson NVARCHAR(MAX) NULL,
+        includeCapabilities BIT NOT NULL DEFAULT 0,
+        metadataJson NVARCHAR(MAX) NULL,
+        dataset NVARCHAR(32) NOT NULL,
+        subscriptionId NVARCHAR(64) NULL,
+        subscriptionName NVARCHAR(256) NULL,
+        service NVARCHAR(64) NOT NULL,
+        region NVARCHAR(64) NOT NULL,
+        metric NVARCHAR(256) NOT NULL,
+        currentUsage FLOAT NULL,
+        quotaLimit FLOAT NULL,
+        available FLOAT NULL,
+        percentUsed FLOAT NULL,
+        unit NVARCHAR(64) NULL,
+        accessAllowedForRegion BIT NULL,
+        accessAllowedForAZ NVARCHAR(32) NULL,
+        notes NVARCHAR(MAX) NULL,
+        detailsJson NVARCHAR(MAX) NULL
+      );
+    END;
+  `;
+
+  const createIndexScript = `
+    IF NOT EXISTS (
+      SELECT 1
+      FROM sys.indexes
+      WHERE name = 'IX_PaaSDatabaseQuotaSnapshot_RunDataset'
+        AND object_id = OBJECT_ID('dbo.PaaSDatabaseQuotaSnapshot')
+    )
+    BEGIN
+      CREATE INDEX IX_PaaSDatabaseQuotaSnapshot_RunDataset
+        ON dbo.PaaSDatabaseQuotaSnapshot (capturedAtUtc DESC, runId, dataset, service, region);
+    END;
+  `;
+
+  await pool.request().query(createScript);
+  await pool.request().query(createIndexScript);
+}
+
 async function saveLivePlacementSnapshots(rows = []) {
   if (!Array.isArray(rows) || rows.length === 0) {
     return 0;
@@ -1446,6 +1495,178 @@ async function getLatestPaaSAvailabilitySnapshots(options = {}) {
           return null;
         }
       })()
+    }))
+  };
+}
+
+async function savePaaSDatabaseQuotaSnapshots(rows = [], options = {}) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return { runId: null, rowCount: 0, failedRowCount: 0, durationMs: 0 };
+  }
+
+  const pool = await getSqlPool();
+  if (!pool) {
+    return { runId: null, rowCount: 0, failedRowCount: 0, durationMs: 0 };
+  }
+
+  const startedAt = Date.now();
+  await ensurePaaSDatabaseQuotaSnapshotSchema(pool);
+
+  const effectiveRunId = options.runId || randomUUID();
+  const capturedAtUtc = new Date();
+  const requestedServicesJson = Array.isArray(options.requestedServices) ? JSON.stringify(options.requestedServices) : null;
+  const requestedRegionsJson = Array.isArray(options.requestedRegions) ? JSON.stringify(options.requestedRegions) : null;
+  const requestedSubscriptionsJson = Array.isArray(options.requestedSubscriptions) ? JSON.stringify(options.requestedSubscriptions) : null;
+  const includeCapabilities = Boolean(options.includeCapabilities);
+  const metadataJson = options.metadata ? JSON.stringify(options.metadata) : null;
+
+  let savedRows = 0;
+  const failedRows = [];
+
+  for (const row of rows) {
+    try {
+      const request = pool.request();
+      request.input('runId', sql.UniqueIdentifier, effectiveRunId);
+      request.input('capturedAtUtc', sql.DateTime2, row.capturedAtUtc || capturedAtUtc);
+      request.input('requestedServicesJson', sql.NVarChar(sql.MAX), requestedServicesJson);
+      request.input('requestedRegionsJson', sql.NVarChar(sql.MAX), requestedRegionsJson);
+      request.input('requestedSubscriptionsJson', sql.NVarChar(sql.MAX), requestedSubscriptionsJson);
+      request.input('includeCapabilities', sql.Bit, includeCapabilities);
+      request.input('metadataJson', sql.NVarChar(sql.MAX), metadataJson);
+      request.input('dataset', sql.NVarChar(32), String(row.dataset || 'unknown'));
+      request.input('subscriptionId', sql.NVarChar(64), row.subscriptionId || null);
+      request.input('subscriptionName', sql.NVarChar(256), row.subscriptionName || null);
+      request.input('service', sql.NVarChar(64), String(row.service || 'Unknown'));
+      request.input('region', sql.NVarChar(64), String(row.region || 'global').toLowerCase());
+      request.input('metric', sql.NVarChar(256), String(row.metric || 'Unknown'));
+      request.input('currentUsage', sql.Float, Number.isFinite(Number(row.currentUsage)) ? Number(row.currentUsage) : null);
+      request.input('quotaLimit', sql.Float, Number.isFinite(Number(row.limit)) ? Number(row.limit) : null);
+      request.input('available', sql.Float, Number.isFinite(Number(row.available)) ? Number(row.available) : null);
+      request.input('percentUsed', sql.Float, Number.isFinite(Number(row.percentUsed)) ? Number(row.percentUsed) : null);
+      request.input('unit', sql.NVarChar(64), row.unit == null ? null : String(row.unit));
+      request.input('accessAllowedForRegion', sql.Bit, typeof row.accessAllowedForRegion === 'boolean' ? row.accessAllowedForRegion : null);
+      request.input('accessAllowedForAZ', sql.NVarChar(32), row.accessAllowedForAZ == null ? null : String(row.accessAllowedForAZ));
+      request.input('notes', sql.NVarChar(sql.MAX), row.notes == null ? null : String(row.notes));
+      request.input('detailsJson', sql.NVarChar(sql.MAX), row.details ? JSON.stringify(row.details) : null);
+
+      await request.query(`
+        INSERT INTO dbo.PaaSDatabaseQuotaSnapshot
+        (runId, capturedAtUtc, requestedServicesJson, requestedRegionsJson, requestedSubscriptionsJson, includeCapabilities, metadataJson, dataset, subscriptionId, subscriptionName, service, region, metric, currentUsage, quotaLimit, available, percentUsed, unit, accessAllowedForRegion, accessAllowedForAZ, notes, detailsJson)
+        VALUES
+        (@runId, @capturedAtUtc, @requestedServicesJson, @requestedRegionsJson, @requestedSubscriptionsJson, @includeCapabilities, @metadataJson, @dataset, @subscriptionId, @subscriptionName, @service, @region, @metric, @currentUsage, @quotaLimit, @available, @percentUsed, @unit, @accessAllowedForRegion, @accessAllowedForAZ, @notes, @detailsJson)
+      `);
+      savedRows += 1;
+    } catch (err) {
+      failedRows.push({
+        dataset: row?.dataset || 'unknown',
+        service: row?.service || 'Unknown',
+        region: row?.region || 'global',
+        metric: row?.metric || 'Unknown',
+        message: err.message
+      });
+      console.error('Failed to save PaaS database quota snapshot row:', err.message);
+    }
+  }
+
+  return {
+    runId: savedRows > 0 ? effectiveRunId : null,
+    rowCount: savedRows,
+    failedRowCount: failedRows.length,
+    failedRows: failedRows.slice(0, 10),
+    durationMs: Date.now() - startedAt
+  };
+}
+
+async function getLatestPaaSDatabaseQuotaSnapshots(options = {}) {
+  const pool = await getSqlPool();
+  if (!pool) {
+    return { rows: [] };
+  }
+
+  await ensurePaaSDatabaseQuotaSnapshotSchema(pool);
+
+  const normalizedMaxAge = Math.max(1, Math.min(Number(options.maxAgeHours || 168), 24 * 365));
+  const runRequest = pool.request();
+  runRequest.input('maxAgeHours', sql.Int, normalizedMaxAge);
+  const runResult = await runRequest.query(`
+    SELECT TOP (1)
+      runId,
+      capturedAtUtc,
+      requestedServicesJson,
+      requestedRegionsJson,
+      requestedSubscriptionsJson,
+      includeCapabilities,
+      metadataJson
+    FROM dbo.PaaSDatabaseQuotaSnapshot
+    WHERE capturedAtUtc >= DATEADD(hour, -@maxAgeHours, SYSUTCDATETIME())
+    ORDER BY capturedAtUtc DESC, paasDatabaseQuotaSnapshotId DESC
+  `);
+
+  const runRow = runResult.recordset && runResult.recordset[0];
+  if (!runRow) {
+    return { rows: [] };
+  }
+
+  const rowRequest = pool.request();
+  rowRequest.input('runId', sql.UniqueIdentifier, runRow.runId);
+  const rowResult = await rowRequest.query(`
+    SELECT
+      runId,
+      capturedAtUtc,
+      dataset,
+      subscriptionId,
+      subscriptionName,
+      service,
+      region,
+      metric,
+      currentUsage,
+      quotaLimit,
+      available,
+      percentUsed,
+      unit,
+      accessAllowedForRegion,
+      accessAllowedForAZ,
+      notes,
+      detailsJson
+    FROM dbo.PaaSDatabaseQuotaSnapshot
+    WHERE runId = @runId
+    ORDER BY dataset ASC, service ASC, region ASC, metric ASC
+  `);
+
+  const parseJson = (value, fallback) => {
+    try {
+      return JSON.parse(value || 'null') ?? fallback;
+    } catch {
+      return fallback;
+    }
+  };
+
+  return {
+    runId: runRow.runId,
+    capturedAtUtc: runRow.capturedAtUtc,
+    requestedServices: parseJson(runRow.requestedServicesJson, []),
+    requestedRegions: parseJson(runRow.requestedRegionsJson, []),
+    requestedSubscriptions: parseJson(runRow.requestedSubscriptionsJson, []),
+    includeCapabilities: typeof runRow.includeCapabilities === 'boolean' ? runRow.includeCapabilities : Boolean(runRow.includeCapabilities),
+    metadata: parseJson(runRow.metadataJson, null),
+    rows: (rowResult.recordset || []).map((row) => ({
+      runId: row.runId,
+      capturedAtUtc: row.capturedAtUtc,
+      dataset: row.dataset,
+      subscriptionId: row.subscriptionId,
+      subscriptionName: row.subscriptionName,
+      service: row.service,
+      region: row.region,
+      metric: row.metric,
+      currentUsage: row.currentUsage,
+      limit: row.quotaLimit,
+      available: row.available,
+      percentUsed: row.percentUsed,
+      unit: row.unit,
+      accessAllowedForRegion: typeof row.accessAllowedForRegion === 'boolean' ? row.accessAllowedForRegion : null,
+      accessAllowedForAZ: row.accessAllowedForAZ,
+      notes: row.notes,
+      details: parseJson(row.detailsJson, null)
     }))
   };
 }
@@ -1893,6 +2114,7 @@ async function ensurePhase3SchemaForPool(pool) {
   await ensureCapacityScoreSnapshotSchema(pool);
   await ensureLivePlacementSnapshotSchema(pool);
   await ensurePaaSAvailabilitySnapshotSchema(pool);
+  await ensurePaaSDatabaseQuotaSnapshotSchema(pool);
   await ensureDashboardErrorLogSchema(pool);
   await ensureDashboardOperationLogSchema(pool);
   await ensureVmSkuCatalogSchema(pool);
@@ -1930,6 +2152,9 @@ module.exports = {
   ensurePaaSAvailabilitySnapshotSchema,
   savePaaSAvailabilitySnapshots,
   getLatestPaaSAvailabilitySnapshots,
+  ensurePaaSDatabaseQuotaSnapshotSchema,
+  savePaaSDatabaseQuotaSnapshots,
+  getLatestPaaSDatabaseQuotaSnapshots,
   ensureDashboardErrorLogSchema,
   insertDashboardErrorLog,
   listDashboardErrorLogs,

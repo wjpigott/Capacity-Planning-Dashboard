@@ -117,6 +117,7 @@ Troubleshooting `Report access is not enabled for your account`:
 - [x] Family filter ingestion — optional; set `INGEST_QUOTA_FAMILY_FILTERS` to a comma-separated list to restrict, or omit entirely to ingest all VM families
 - [x] Ingestion scheduler (DB-backed admin settings with environment fallback)
 - [ ] Move recurring scheduler execution to Function App TimerTrigger jobs (ingestion + live placement)
+- [ ] Harden Function App worker ingress with App Service Authentication / Microsoft Entra auth: update dashboard-to-worker calls to send a managed-identity bearer token accepted by the Function App before enabling Easy Auth enforcement on worker endpoints
 - [ ] Retry/backoff and dead-letter behavior for ingestion failures
 
 #### API and analytics
@@ -815,8 +816,8 @@ Hosted worker guidance:
 
 - Configure `AzureWebJobsStorage` with managed identity, not a shared-key connection string.
 - Grant the worker identity storage data-plane access on the host storage account.
-- Dashboard-to-worker calls now use the dashboard web app managed identity and a bearer token for the Resource Manager audience.
-- The worker validates the caller token against the dashboard web app managed identity object ID that infra deployment stamps into the Function App settings.
+- Current verified dev baseline uses `CAPACITY_WORKER_SHARED_SECRET` on the web app and `WORKER_SHARED_SECRET` on the Function App for dashboard-to-worker calls.
+- Future hardening should replace or supplement that shared-secret contract with App Service Authentication / Microsoft Entra auth: the dashboard web app should acquire a managed-identity bearer token for the Function App audience, and the worker should accept only the dashboard web app managed identity as caller.
 - The default infrastructure path uses a dedicated App Service plan for the worker instead of Flex Consumption.
 - Enable PowerShell managed dependencies in `host.json` so `requirements.psd1` can restore Az modules on the worker.
 - NOTE: when `-WorkerRbacManagementGroupNames` is provided during infra deployment, the worker RBAC roles are assigned at those management group scopes. Use `-WorkerRbacSubscriptionIds` only when you need the small-customer subscription fallback.

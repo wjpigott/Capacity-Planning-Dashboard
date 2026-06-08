@@ -799,6 +799,12 @@ async function inspectCapacityIngestionScope(options = {}) {
   };
 }
 
+async function resolveIngestionScopeSubscriptions(options = {}) {
+  const credential = getCredential();
+  const token = (await credential.getToken(ARM_SCOPE)).token;
+  return listSubscriptions(token, options.subscriptionIds, options.managementGroupNames);
+}
+
 async function refreshModelCatalog(options = {}) {
   const credential = getCredential();
   const token = (await credential.getToken(ARM_SCOPE)).token;
@@ -835,5 +841,6 @@ module.exports = {
   startIngestionScheduler,
   updateIngestionScheduler,
   getIngestionSchedulerConfig,
-  inspectCapacityIngestionScope
+  inspectCapacityIngestionScope,
+  resolveIngestionScopeSubscriptions
 };

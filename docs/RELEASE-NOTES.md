@@ -4,6 +4,28 @@
 
 No unreleased changes.
 
+## v1.0.2 - 2026-06-08
+
+This patch release adds a database-focused PaaS quota report alongside the existing PaaS availability matrix.
+
+Highlights:
+
+- Added the PaaS DB Quota report for quota/usage and region/AZ access review across selected sidebar subscriptions.
+- Added collection coverage for SQL Database, SQL Managed Instance, Cosmos DB, PostgreSQL Flexible Server, and MySQL Flexible Server.
+- Added optional capability detail capture for services that expose regional capability data.
+- Persisted PaaS DB Quota runs in SQL for cached reloads and client CSV export.
+- Added scheduler controls for cached PaaS DB Quota refreshes on a separate cadence from Capacity Ingest.
+- Reused the shared Capacity Ingest subscription/management group scope for scheduled PaaS DB Quota refreshes instead of maintaining a separate PaaS DB subscription list.
+- Hid the older PaaS Availability report from navigation while keeping its backend and SQL table available for rollback.
+- Added deployment package verification for the PaaS DB Quota wrapper script.
+
+Operational notes:
+
+- PaaS DB Quota is the database-specific report for quota utilization, quota warning, and allowlisting/access-block evidence.
+- The legacy PaaS Availability route, worker/tooling, and `dbo.PaaSAvailabilitySnapshot` table are retained in this release for rollback and historical data.
+- Cleanup checklist for a later release: remove the hidden PaaS Availability React state/render/export branch; remove `/api/paas-availability*` routes; remove the PaaS Function worker route if unused; remove `tools/Get-PaaSAvailabilityReport.ps1` and vendored `tools/Get-AzPaaSAvailability` after confirming no runtime dependency remains; then decide whether to archive or drop `dbo.PaaSAvailabilitySnapshot` with an explicit migration.
+- Use a Git tag named `v1.0.2` on this release commit.
+
 ## v1.0.1 - 2026-05-15
 
 This patch release stabilizes the initial POC baseline with report correctness, PaaS availability, deployment, runtime, and licensing updates.

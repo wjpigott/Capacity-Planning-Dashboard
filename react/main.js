@@ -41,11 +41,20 @@ const PAAS_SERVICE_OPTIONS = [
   { value: 'Storage', label: 'Storage' }
 ];
 
+const PAAS_DB_QUOTA_SERVICE_OPTIONS = [
+  { value: 'All', label: 'All database services' },
+  { value: 'SqlDB', label: 'SQL Database' },
+  { value: 'SqlMI', label: 'SQL Managed Instance' },
+  { value: 'CosmosDB', label: 'Cosmos DB' },
+  { value: 'PostgreSQL', label: 'PostgreSQL Flexible Server' },
+  { value: 'MySQL', label: 'MySQL Flexible Server' }
+];
+
 const REPORT_VIEWS = [
   { key: 'capacity-grid', label: 'Capacity Grid', adminOnly: false },
   { key: 'region-health', label: 'Region Health', adminOnly: false },
   { key: 'recommender', label: 'Capacity Recommender', adminOnly: false },
-  { key: 'paas-availability', label: 'PaaS Availability', adminOnly: false },
+  { key: 'paas-db-quota', label: 'PaaS DB Quota', adminOnly: false },
   { key: 'shareable-quota-report', label: 'Shareable Quota Report', adminOnly: false },
   { key: 'sku-chart', label: 'Top SKUs', adminOnly: false },
   { key: 'capacity-score', label: 'Capacity Spot Score', adminOnly: false },
@@ -1327,6 +1336,84 @@ function getPaaSSubscriptionScope(metadata) {
   return 'not recorded';
 }
 
+function matchesPaaSDatabaseServiceScope(row, selectedService) {
+  const service = String((row && row.service) || '').trim().toLowerCase();
+  const scope = String(selectedService || 'All').trim();
+  if (!scope || scope === 'All') return true;
+  if (scope === 'SqlDB') return service === 'sql db';
+  if (scope === 'SqlMI') return service === 'sql mi';
+  if (scope === 'CosmosDB') return service === 'cosmos db';
+  if (scope === 'PostgreSQL') return service === 'postgresql flex' || service === 'postgresql';
+  if (scope === 'MySQL') return service === 'mysql flex' || service === 'mysql';
+  return true;
+}
+
+function filterPaaSDatabaseQuotaRowsByScope(rows, regionPreset, selectedRegion, selectedService) {
+  const normalizedRows = Array.isArray(rows) ? rows : [];
+  const serviceRows = normalizedRows.filter((row) => matchesPaaSDatabaseServiceScope(row, selectedService));
+  const normalizedSelectedRegion = String(selectedRegion || '').trim().toLowerCase();
+  if (normalizedSelectedRegion && normalizedSelectedRegion !== 'all') {
+    return serviceRows.filter((row) => {
+      const region = String((row && row.region) || '').trim().toLowerCase();
+      return region === normalizedSelectedRegion || region === 'subscription';
+    });
+  }
+
+  const presetRegions = Array.isArray(regionPresets[regionPreset])
+    ? regionPresets[regionPreset].map((region) => String(region || '').trim().toLowerCase()).filter(Boolean)
+    : [];
+  if (presetRegions.length === 0) {
+    return serviceRows;
+  }
+
+  const allowedRegions = new Set(presetRegions);
+  return serviceRows.filter((row) => {
+    const region = String((row && row.region) || '').trim().toLowerCase();
+    return allowedRegions.has(region) || region === 'subscription';
+  });
+}
+
+function summarizePaaSDatabaseQuotaRows(rows) {
+  const normalizedRows = Array.isArray(rows) ? rows : [];
+  const usageRows = normalizedRows.filter((row) => row.dataset === 'usage');
+  const accessRows = normalizedRows.filter((row) => row.dataset === 'access');
+  const isBlockedAccess = (row) => row.accessAllowedForRegion === false
+    || row.accessAllowedForRegion === 'False'
+    || row.accessAllowedForRegion === 'false'
+    || row.accessAllowedForAZ === false
+    || row.accessAllowedForAZ === 'False'
+    || row.accessAllowedForAZ === 'false';
+  return {
+    rowCount: normalizedRows.length,
+    usageRowCount: usageRows.length,
+    accessRowCount: accessRows.length,
+    capabilityRowCount: normalizedRows.filter((row) => row.dataset === 'capability').length,
+    warningCount: usageRows.filter((row) => Number(row.percentUsed) >= 80).length,
+    blockedAccessCount: accessRows.filter(isBlockedAccess).length,
+    facets: {
+      services: [...new Set(normalizedRows.map((row) => String((row && row.service) || '').trim()).filter(Boolean))].sort(),
+      regions: [...new Set(normalizedRows.map((row) => String((row && row.region) || '').trim().toLowerCase()).filter((region) => region && region !== 'subscription'))].sort(),
+      subscriptions: [...new Set(normalizedRows.map((row) => String((row && (row.subscriptionName || row.subscriptionId)) || '').trim()).filter(Boolean))].sort()
+    }
+  };
+}
+
+function formatPaaSDatabaseAccess(value) {
+  if (value === true || value === 'True' || value === 'true') return 'Allowed';
+  if (value === false || value === 'False' || value === 'false') return 'Blocked';
+  return value == null || value === '' ? 'n/a' : String(value);
+}
+
+function formatPaaSDatabasePercent(value) {
+  return value == null || value === '' || Number.isNaN(Number(value)) ? 'n/a' : `${Number(value).toFixed(1)}%`;
+}
+
+function getPaaSDatabaseQuotaRowClassName(row) {
+  if (row.dataset === 'usage' && Number(row.percentUsed) >= 80) return 'rx-matrix-row rx-matrix-row--caution';
+  if (row.dataset === 'access' && (row.accessAllowedForRegion === false || row.accessAllowedForRegion === 'False' || row.accessAllowedForRegion === 'false' || row.accessAllowedForAZ === false || row.accessAllowedForAZ === 'False' || row.accessAllowedForAZ === 'false')) return 'rx-matrix-row rx-matrix-row--blocked';
+  return undefined;
+}
+
 function compareSortValues(a, b) {
   if (a === b) return 0;
   if (a === null || a === undefined || a === '') return 1;
@@ -1375,9 +1462,11 @@ function getStatusSortValue(value, count = 0) {
   return (rank * 1000) + Math.max(0, Number(count) || 0);
 }
 
-function DataTable({ title, subtitle, columns, rows, emptyMessage, tableClassName, sectionClassName, pageSize = 0, getRowClassName }) {
+function DataTable({ title, subtitle, columns, rows, emptyMessage, tableClassName, sectionClassName, pageSize = 0, getRowClassName, collapsible = false, defaultCollapsed = false }) {
   const [sort, setSort] = useState({ key: null, direction: 'asc' });
   const [currentPage, setCurrentPage] = useState(1);
+  const [collapsed, setCollapsed] = useState(Boolean(defaultCollapsed));
+  const isCollapsed = Boolean(collapsible && collapsed);
 
   const sortableColumns = columns || [];
   const normalizedPageSize = Number(pageSize) > 0 ? Number(pageSize) : 0;
@@ -1434,56 +1523,59 @@ function DataTable({ title, subtitle, columns, rows, emptyMessage, tableClassNam
 
   return (
     <section className={classNames('rx-panel', 'rx-panel--table', sectionClassName)}>
-      <div className="rx-panel__header">
+      <div className={classNames('rx-panel__header', collapsible ? 'rx-panel__header--collapsible' : null)}>
+        {collapsible ? <button className="rx-disclosure-toggle" type="button" aria-expanded={!collapsed} aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${title}`} onClick={() => setCollapsed((value) => !value)}><span className="rx-disclosure-caret" aria-hidden="true"></span><span className="rx-sr-only">{collapsed ? 'Expand' : 'Collapse'} {title}</span></button> : null}
         <div>
           <h2>{title}</h2>
           {subtitle ? <p>{subtitle}</p> : null}
         </div>
       </div>
-      {showCapacityStatusLegend ? <div className="rx-table-legend"><CapacityStatusLegend /></div> : null}
-      <div className="rx-table-wrap">
-        <table className={classNames('rx-table', tableClassName)}>
-          <thead>
-            <tr>{columns.map((column) => {
-              const isSortable = column.sortable !== false;
-              const isActive = sort.key === column.key;
-              const indicator = isActive ? (sort.direction === 'asc' ? ' ▲' : ' ▼') : '';
-              return (
-                <th
-                  key={column.key}
-                  className={classNames(column.headerClassName, isSortable ? 'rx-th--sortable' : null, isActive ? 'rx-th--sorted' : null)}
-                  onClick={isSortable ? () => handleSort(column) : undefined}
-                  role={isSortable ? 'button' : undefined}
-                  aria-sort={isActive ? (sort.direction === 'asc' ? 'ascending' : 'descending') : 'none'}
-                  title={isSortable ? 'Click to sort' : undefined}
-                >{column.label}{indicator}</th>
-              );
-            })}</tr>
-          </thead>
-          <tbody>
-            {pagedRows.length === 0 ? (
-              <tr><td className="rx-empty" colSpan={columns.length}>{emptyMessage}</td></tr>
-            ) : pagedRows.map((row, index) => (
-              <tr className={getRowClassName ? getRowClassName(row) : undefined} key={[
-                row.id,
-                row.analysisRunId,
-                row.groupQuotaName,
-                row.subscriptionId,
-                row.region,
-                row.family,
-                row.quotaName,
-                row.sku,
-                row.subscriptionName,
-                currentPage,
-                index
-              ].filter((value) => value !== undefined && value !== null && value !== '').join('|')}>
-                {columns.map((column) => <td key={column.key} className={column.cellClassName}>{column.render ? column.render(row) : (row[column.key] == null ? 'n/a' : row[column.key])}</td>)}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {normalizedPageSize && sortedRows.length > 0 ? <div className="rx-table-footer"><span className="rx-selected-count">Showing {formatNumber(pageStart)}-{formatNumber(pageEnd)} of {formatNumber(sortedRows.length)}</span><div className="rx-pagination"><button className="rx-button rx-button--secondary" type="button" disabled={currentPage <= 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}>Previous</button><span className="rx-selected-count">Page {formatNumber(currentPage)} of {formatNumber(pageCount)}</span><button className="rx-button rx-button--secondary" type="button" disabled={currentPage >= pageCount} onClick={() => setCurrentPage((page) => Math.min(pageCount, page + 1))}>Next</button></div></div> : null}
+      {!isCollapsed ? <>
+        {showCapacityStatusLegend ? <div className="rx-table-legend"><CapacityStatusLegend /></div> : null}
+        <div className="rx-table-wrap">
+          <table className={classNames('rx-table', tableClassName)}>
+            <thead>
+              <tr>{columns.map((column) => {
+                const isSortable = column.sortable !== false;
+                const isActive = sort.key === column.key;
+                const indicator = isActive ? (sort.direction === 'asc' ? ' ▲' : ' ▼') : '';
+                return (
+                  <th
+                    key={column.key}
+                    className={classNames(column.headerClassName, isSortable ? 'rx-th--sortable' : null, isActive ? 'rx-th--sorted' : null)}
+                    onClick={isSortable ? () => handleSort(column) : undefined}
+                    role={isSortable ? 'button' : undefined}
+                    aria-sort={isActive ? (sort.direction === 'asc' ? 'ascending' : 'descending') : 'none'}
+                    title={isSortable ? 'Click to sort' : undefined}
+                  >{column.label}{indicator}</th>
+                );
+              })}</tr>
+            </thead>
+            <tbody>
+              {pagedRows.length === 0 ? (
+                <tr><td className="rx-empty" colSpan={columns.length}>{emptyMessage}</td></tr>
+              ) : pagedRows.map((row, index) => (
+                <tr className={getRowClassName ? getRowClassName(row) : undefined} key={[
+                  row.id,
+                  row.analysisRunId,
+                  row.groupQuotaName,
+                  row.subscriptionId,
+                  row.region,
+                  row.family,
+                  row.quotaName,
+                  row.sku,
+                  row.subscriptionName,
+                  currentPage,
+                  index
+                ].filter((value) => value !== undefined && value !== null && value !== '').join('|')}>
+                  {columns.map((column) => <td key={column.key} className={column.cellClassName}>{column.render ? column.render(row) : (row[column.key] == null ? 'n/a' : row[column.key])}</td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {normalizedPageSize && sortedRows.length > 0 ? <div className="rx-table-footer"><span className="rx-selected-count">Showing {formatNumber(pageStart)}-{formatNumber(pageEnd)} of {formatNumber(sortedRows.length)}</span><div className="rx-pagination"><button className="rx-button rx-button--secondary" type="button" disabled={currentPage <= 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}>Previous</button><span className="rx-selected-count">Page {formatNumber(currentPage)} of {formatNumber(pageCount)}</span><button className="rx-button rx-button--secondary" type="button" disabled={currentPage >= pageCount} onClick={() => setCurrentPage((page) => Math.min(pageCount, page + 1))}>Next</button></div></div> : null}
+      </> : <div className="rx-selected-count">{formatNumber(Array.isArray(rows) ? rows.length : 0)} row(s) hidden.</div>}
     </section>
   );
 }
@@ -2053,6 +2145,9 @@ function AdminIngestionView(props) {
   const schedulerMessage = persistence?.message || 'Scheduler settings are persisted in SQL and applied to the runtime scheduler when saved.';
   const jobRunning = jobState === 'queued' || jobState === 'running' || status?.inProgress;
   const ingestScope = scope?.ingest || {};
+  const paasDbQuotaScope = scope?.paasDbQuota || {};
+  const paasDbQuotaRuntime = runtime?.paasDbQuota || {};
+  const paasDbQuotaStatus = paasDbQuotaRuntime.status || {};
 
   return (
     <div className="rx-view-stack">
@@ -2091,6 +2186,19 @@ function AdminIngestionView(props) {
               <dt>Capacity snapshots</dt><dd>Not changed by live placement</dd>
             </dl>
           </article>
+          <article className="rx-scope-card">
+            <h3>PaaS DB Quota</h3>
+            <p>Refreshes database-service quota, usage, region access, and capability snapshot rows using the shared Capacity Ingest subscription scope.</p>
+            <dl>
+              <dt>Scheduling</dt><dd>{paasDbQuotaRuntime.intervalMinutes ? `Every ${formatNumber(paasDbQuotaRuntime.intervalMinutes)} min` : 'Not scheduled'}</dd>
+              <dt>Subscription source</dt><dd>{paasDbQuotaScope.subscriptionSource || ingestScope.subscriptionSource || 'managed identity visible subscriptions'}</dd>
+              <dt>Subscriptions</dt><dd>{formatScopeList(paasDbQuotaScope.subscriptionIds, paasDbQuotaScope.managementGroupNames?.length ? 'Management group scoped' : 'Visible to managed identity', 3)}</dd>
+              <dt>Management groups</dt><dd>{formatScopeList(paasDbQuotaScope.managementGroupNames, 'None configured', 3)}</dd>
+              <dt>Regions</dt><dd>{paasDbQuotaScope.regionPreset || 'USMajor'} ({formatScopeList(paasDbQuotaScope.regions, 'No regions resolved')})</dd>
+              <dt>Services</dt><dd>{formatScopeList(paasDbQuotaScope.services, 'All', 6)}</dd>
+              <dt>Capabilities</dt><dd>{paasDbQuotaScope.includeCapabilities ? 'Included' : 'Skipped'}</dd>
+            </dl>
+          </article>
         </div>
       </section>
       <section className="rx-panel rx-panel--compact rx-panel--muted">
@@ -2105,6 +2213,8 @@ function AdminIngestionView(props) {
           <article className="rx-metric-card"><span>Score Rows</span><strong>{formatNumber(summary.insertedScoreRows || 0)}</strong></article>
           <article className="rx-metric-card"><span>AI Model Rows</span><strong>{formatNumber(summary.insertedAIModelRows || 0)}</strong></article>
           <article className="rx-metric-card"><span>Subscriptions</span><strong>{formatNumber(summary.subscriptionCount || 0)}</strong></article>
+          <article className="rx-metric-card rx-metric-card--detail"><span>PaaS DB Last Success</span><strong>{formatTimestamp(paasDbQuotaStatus.lastSuccessUtc)}</strong></article>
+          <article className="rx-metric-card"><span>PaaS DB Duration</span><strong>{formatDuration(paasDbQuotaStatus.lastDurationMs)}</strong></article>
           <article className="rx-metric-card rx-metric-card--detail"><span>Regions</span><strong>{regions}</strong></article>
           <article className="rx-metric-card rx-metric-card--detail"><span>Families</span><strong>{families}</strong></article>
           <article className="rx-metric-card rx-metric-card--detail"><span>Last Error</span><strong>{status?.lastError || 'None'}</strong></article>
@@ -2122,9 +2232,17 @@ function AdminIngestionView(props) {
           <label className="rx-field rx-field--wide"><span>Management Groups</span><textarea className="rx-input" rows="3" value={schedule.ingest.managementGroupNames || ''} placeholder="Comma-separated management group names; optional" onChange={(event) => onScheduleChange('ingest', 'managementGroupNames', event.target.value)} disabled={!schedulerPersistenceAvailable}></textarea></label>
           <label className="rx-field rx-field--wide"><span>Family Filters</span><textarea className="rx-input" rows="3" value={schedule.ingest.familyFilters || ''} placeholder="Comma-separated family filters; leave blank for all families" onChange={(event) => onScheduleChange('ingest', 'familyFilters', event.target.value)} disabled={!schedulerPersistenceAvailable}></textarea></label>
         </div>
+        <div className="rx-panel__header"><div><h2>PaaS DB Quota Schedule</h2><p>Runs the cached PaaS DB Quota refresh on a separate cadence using the shared subscription and management group scope above.</p></div></div>
+        <div className="rx-field-grid rx-field-grid--filters">
+          <label className="rx-field"><span>PaaS DB Quota Interval (hours)</span><input className="rx-input" type="number" min="0" step="1" value={minutesToHours(schedule.paasDbQuota?.intervalMinutes, 0)} onChange={(event) => onScheduleChange('paasDbQuota', 'intervalMinutes', hoursToMinutes(event.target.value, 0))} disabled={!schedulerPersistenceAvailable} /></label>
+          <label className="rx-field"><span>PaaS DB Region Preset</span><select value={schedule.paasDbQuota?.regionPreset || 'USMajor'} onChange={(event) => onScheduleChange('paasDbQuota', 'regionPreset', event.target.value)} disabled={!schedulerPersistenceAvailable}>{REGION_PRESET_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+          <label className="rx-field"><span>PaaS DB Services</span><select value={schedule.paasDbQuota?.services || 'All'} onChange={(event) => onScheduleChange('paasDbQuota', 'services', event.target.value)} disabled={!schedulerPersistenceAvailable}>{PAAS_DB_QUOTA_SERVICE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+          <label className="rx-check"><input type="checkbox" checked={schedule.paasDbQuota?.includeCapabilities !== false} onChange={(event) => onScheduleChange('paasDbQuota', 'includeCapabilities', event.target.checked)} disabled={!schedulerPersistenceAvailable} />Include capabilities</label>
+        </div>
         <div className="rx-inline-actions">
           <span className="rx-selected-count">Runtime ingest interval: {formatNumber(runtime.ingest.intervalMinutes)} min</span>
           <span className="rx-selected-count">Runtime AI model catalog interval: {minutesToHours(runtime.aiModelCatalog.intervalMinutes, 1440)} hr</span>
+          <span className="rx-selected-count">Runtime PaaS DB quota interval: {minutesToHours(runtime.paasDbQuota?.intervalMinutes, 0)} hr</span>
           <button className="rx-button" type="button" onClick={actions.saveSchedule} disabled={!schedulerPersistenceAvailable || busy.saveSchedule}>{busy.saveSchedule ? 'Saving...' : 'Save Scheduler Settings'}</button>
         </div>
       </section>
@@ -3114,10 +3232,11 @@ function App() {
   const [capacityScores, setCapacityScores] = useState({ rows: [], pagination: { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false }, subscriptionSummary: [], desiredCount: '1', status: { tone: 'info', message: 'Load or refresh live placement to populate saved capacity spot score snapshots.', detail: '' }, busy: false });
   const [aiModelState, setAiModelState] = useState({ rows: [], regions: [], loading: false, status: { tone: 'info', message: 'AI model availability report ready.', detail: 'Open the sidebar report to review Azure AI model and provider coverage.' } });
   const [paasState, setPaaSState] = useState({ rows: [], summary: { rowCount: 0, serviceSummary: [], requestedService: 'All', requestedRegionPreset: 'USMajor', requestedRegions: [] }, facets: { services: [], regions: [], categories: [] }, filters: { service: 'All', regionPreset: 'USMajor' }, status: { tone: 'info', message: 'Load cached PaaS availability or refresh to run a live scan.' }, busy: { load: false, refresh: false }, capturedAtUtc: null, metadata: null });
+  const [paasDbQuotaState, setPaaSDbQuotaState] = useState({ rows: [], summary: { rowCount: 0, usageRowCount: 0, accessRowCount: 0, capabilityRowCount: 0, warningCount: 0, blockedAccessCount: 0 }, facets: { services: [], regions: [], subscriptions: [] }, filters: { service: 'All', includeCapabilities: true }, status: { tone: 'info', message: 'Load cached PaaS database quota or refresh to scan selected subscriptions.' }, busy: { load: false, refresh: false }, capturedAtUtc: null, metadata: null });
   const [exportBusyFormat, setExportBusyFormat] = useState('');
   const [recommendState, setRecommendState] = useState({ targetSku: '', autoTargetSku: '', regions: '', autoRegions: '', topN: 10, minScore: 50, showPricing: true, showSpot: false, result: null, status: { tone: 'info', message: 'Run the recommender to populate alternatives.' }, busy: false });
   const [aiModelFilters, setAiModelFilters] = useState({ modelName: '', provider: 'all', deploymentType: 'all', fineTuning: 'all', defaultOnly: false });
-  const [adminState, setAdminState] = useState({ job: null, status: null, schedule: { ingest: { intervalMinutes: 0, runOnStartup: false, regionPreset: 'USMajor', subscriptionIds: '', managementGroupNames: '', familyFilters: '' }, aiModelCatalog: { intervalMinutes: 1440 } }, runtime: { ingest: { intervalMinutes: 0, runOnStartup: false, regionPreset: 'USMajor', subscriptionIds: '', managementGroupNames: '', familyFilters: '' }, aiModelCatalog: { intervalMinutes: 1440 } }, scope: { ingest: {} }, smokeTest: null, persistence: { available: true, source: 'sql', message: 'SQL scheduler settings are available.' }, statusMessage: { tone: 'info', message: 'Data ingestion tools ready.' }, busy: { refreshStatus: false, trigger: false, smokeTest: false, refreshModelCatalog: false, refreshSchedule: false, saveSchedule: false } });
+  const [adminState, setAdminState] = useState({ job: null, status: null, schedule: { ingest: { intervalMinutes: 0, runOnStartup: false, regionPreset: 'USMajor', subscriptionIds: '', managementGroupNames: '', familyFilters: '' }, aiModelCatalog: { intervalMinutes: 1440 }, paasDbQuota: { intervalMinutes: 0, regionPreset: 'USMajor', subscriptionIds: '', services: 'All', includeCapabilities: true } }, runtime: { ingest: { intervalMinutes: 0, runOnStartup: false, regionPreset: 'USMajor', subscriptionIds: '', managementGroupNames: '', familyFilters: '' }, aiModelCatalog: { intervalMinutes: 1440 }, paasDbQuota: { intervalMinutes: 0, regionPreset: 'USMajor', subscriptionIds: '', services: 'All', includeCapabilities: true, status: {} } }, scope: { ingest: {}, paasDbQuota: {} }, smokeTest: null, persistence: { available: true, source: 'sql', message: 'SQL scheduler settings are available.' }, statusMessage: { tone: 'info', message: 'Data ingestion tools ready.' }, busy: { refreshStatus: false, trigger: false, smokeTest: false, refreshModelCatalog: false, refreshSchedule: false, saveSchedule: false } });
   const [quotaState, setQuotaState] = useState({ managementGroups: [], selectedManagementGroup: '', quotaGroups: [], selectedQuotaGroup: 'all', shareableReport: { rows: [], summary: { rowCount: 0, subscriptionCount: 0, regionCount: 0, skuCount: 0, totalShareableQuota: 0 }, generatedAtUtc: null }, candidates: [], quotaRuns: [], selectedAnalysisRunId: '', selectedDonorSubscriptionId: '', selectedMoveCandidate: null, requestedTransferAmount: 0, planRows: [], impactRows: [], applyResults: [], planSummary: {}, candidateFilters: { subscriptionId: 'all', region: 'all', family: '', intent: 'all' }, status: { tone: 'info', message: 'Quota tools ready.' }, busy: { discover: false, shareableReport: false, generate: false, capture: false, refresh: false, refreshRuns: false, plan: false, simulate: false, apply: false } });
   const [showSqlPreview, setShowSqlPreview] = useState(false);
   const [sqlPreviewState, setSqlPreviewState] = useState({ loading: false, error: '', rows: [] });
@@ -3390,6 +3509,18 @@ function App() {
   const paasSubscriptionNote = selectedSubscriptionIds.length > 0
     ? `Sidebar subscription selections (${formatNumber(selectedSubscriptionIds.length)}) do not filter PaaS yet. This snapshot reflects the worker subscription scope shown here.`
     : 'PaaS rows are not filtered by the sidebar subscription picker yet. This snapshot reflects the worker subscription scope shown here.';
+  const filteredPaaSDbQuotaRows = useMemo(() => filterPaaSDatabaseQuotaRowsByScope(paasDbQuotaState.rows, filters.regionPreset, filters.region, paasDbQuotaState.filters.service), [paasDbQuotaState.rows, filters.regionPreset, filters.region, paasDbQuotaState.filters.service]);
+  const filteredPaaSDbQuotaData = useMemo(() => summarizePaaSDatabaseQuotaRows(filteredPaaSDbQuotaRows), [filteredPaaSDbQuotaRows]);
+  const paasDbQuotaUsageRows = useMemo(() => filteredPaaSDbQuotaRows.filter((row) => row.dataset === 'usage'), [filteredPaaSDbQuotaRows]);
+  const paasDbQuotaAccessRows = useMemo(() => filteredPaaSDbQuotaRows.filter((row) => row.dataset === 'access'), [filteredPaaSDbQuotaRows]);
+  const paasDbQuotaCapabilityRows = useMemo(() => filteredPaaSDbQuotaRows.filter((row) => row.dataset === 'capability'), [filteredPaaSDbQuotaRows]);
+  const paasDbQuotaSubscriptionNote = selectedSubscriptionIds.length > 0
+    ? `Refresh scans the ${formatNumber(selectedSubscriptionIds.length)} selected sidebar subscription(s).`
+    : 'Refresh uses the current Azure context subscription when no sidebar subscriptions are selected.';
+  const paasDbQuotaTimingNote = paasDbQuotaState.summary?.timings
+    ? `Last run timing: scan ${formatNumber(Math.round(Number(paasDbQuotaState.summary.timings.scanDurationMs || 0) / 1000))}s; persistence ${formatNumber(Math.round(Number(paasDbQuotaState.summary.timings.persistenceDurationMs || 0) / 1000))}s. Persisted rows: ${formatNumber(paasDbQuotaState.summary.persistedRowCount || 0)}${paasDbQuotaState.summary.failedPersistedRowCount ? `; skipped rows: ${formatNumber(paasDbQuotaState.summary.failedPersistedRowCount)}` : ''}.`
+    : '';
+  const paasDbQuotaStatusDetail = [paasDbQuotaSubscriptionNote, paasDbQuotaTimingNote].filter(Boolean).join(' ');
   const isAdminView = Boolean(auth?.canAccessAdmin && activeView === 'admin');
   const filteredQuotaCandidateRows = useMemo(() => {
     const familyTerm = normalizeSearchText(quotaState.candidateFilters.family || '');
@@ -3492,6 +3623,24 @@ function App() {
         { label: 'Quota Used', value: (row) => row.quotaCurrent },
         { label: 'Quota Limit', value: (row) => row.quotaLimit },
         { label: 'Metric', value: (row) => formatPaaSMetric(row) }
+      ] }];
+    }
+
+    if (activeView === 'paas-db-quota') {
+      return [{ value: 'client:paas-db-quota', label: 'CSV Export', type: 'client', filenameBase: 'paas-db-quota', rows: filteredPaaSDbQuotaRows, columns: [
+        { label: 'Dataset', value: (row) => row.dataset },
+        { label: 'Subscription', value: (row) => row.subscriptionName || '' },
+        { label: 'Subscription Id', value: (row) => row.subscriptionId || '' },
+        { label: 'Service', value: (row) => row.service },
+        { label: 'Region', value: (row) => row.region },
+        { label: 'Metric', value: (row) => row.metric },
+        { label: 'Current Usage', value: (row) => row.currentUsage },
+        { label: 'Limit', value: (row) => row.limit },
+        { label: 'Available', value: (row) => row.available },
+        { label: 'Percent Used', value: (row) => row.percentUsed },
+        { label: 'Region Access', value: (row) => formatPaaSDatabaseAccess(row.accessAllowedForRegion) },
+        { label: 'AZ Access', value: (row) => formatPaaSDatabaseAccess(row.accessAllowedForAZ) },
+        { label: 'Notes', value: (row) => row.notes || '' }
       ] }];
     }
 
@@ -3680,7 +3829,7 @@ function App() {
     }
 
     return [];
-  }, [activeView, adminExportRows, aiModelRows, aiSummaryMatrixExport.regionOrder, aiSummaryMatrixExport.rows, capacityScores.rows, capacityScores.subscriptionSummary, filteredPaaSRows, filteredQuotaCandidateRows, familySummaryRows, matrix.regions, matrix.resolveCellStatus, matrix.rows, quotaState.applyResults, quotaState.impactRows, quotaState.planRows, quotaState.quotaRuns, quotaState.shareableReport.rows, recommendationRows, regionHealth, scopedRegionOptions, topSkus, trendRows]);
+  }, [activeView, adminExportRows, aiModelRows, aiSummaryMatrixExport.regionOrder, aiSummaryMatrixExport.rows, capacityScores.rows, capacityScores.subscriptionSummary, filteredPaaSDbQuotaRows, filteredPaaSRows, filteredQuotaCandidateRows, familySummaryRows, matrix.regions, matrix.resolveCellStatus, matrix.rows, quotaState.applyResults, quotaState.impactRows, quotaState.planRows, quotaState.quotaRuns, quotaState.shareableReport.rows, recommendationRows, regionHealth, scopedRegionOptions, topSkus, trendRows]);
 
   useEffect(() => {
     if (!Array.isArray(subscriptionOptions) || subscriptionOptions.length === 0) {
@@ -3899,6 +4048,52 @@ function App() {
 
     loadPaaSSnapshot();
   }, [activeView, authResolved, canUseReportApis, paasState.filters.service]);
+
+  useEffect(() => {
+    if (!authResolved || !canUseReportApis || activeView !== 'paas-db-quota') {
+      return;
+    }
+
+    async function loadPaaSDbQuotaSnapshot() {
+      setPaaSDbQuotaState((current) => ({
+        ...current,
+        busy: { ...current.busy, load: true },
+        status: current.rows.length > 0
+          ? current.status
+          : { tone: 'info', message: 'Loading cached PaaS database quota snapshot...' }
+      }));
+
+      try {
+        const payload = await fetchJson('/api/paas-db-quota');
+        const rows = Array.isArray(payload.rows) ? payload.rows : [];
+        setPaaSDbQuotaState((current) => ({
+          ...current,
+          rows,
+          summary: payload.summary || summarizePaaSDatabaseQuotaRows(rows),
+          facets: payload.facets || { services: [], regions: [], subscriptions: [] },
+          capturedAtUtc: payload.capturedAtUtc || null,
+          metadata: payload.metadata || null,
+          busy: { ...current.busy, load: false },
+          status: rows.length > 0
+            ? { tone: 'success', message: `Showing cached PaaS database quota snapshot from ${formatTimestamp(payload.capturedAtUtc)}.` }
+            : { tone: 'warn', message: 'No cached PaaS database quota snapshot found yet. Run Refresh to capture one.' }
+        }));
+      } catch (error) {
+        setPaaSDbQuotaState((current) => ({
+          ...current,
+          rows: [],
+          summary: { rowCount: 0, usageRowCount: 0, accessRowCount: 0, capabilityRowCount: 0, warningCount: 0, blockedAccessCount: 0 },
+          facets: { services: [], regions: [], subscriptions: [] },
+          capturedAtUtc: null,
+          metadata: null,
+          busy: { ...current.busy, load: false },
+          status: { tone: 'error', message: error.message || 'Failed to load cached PaaS database quota.' }
+        }));
+      }
+    }
+
+    loadPaaSDbQuotaSnapshot();
+  }, [activeView, authResolved, canUseReportApis]);
 
   useEffect(() => {
     if (filters.region === 'all') {
@@ -4521,6 +4716,49 @@ function App() {
     }
   }
 
+  async function refreshPaaSDatabaseQuota() {
+    const requestService = paasDbQuotaState.filters.service || 'All';
+    const requestRegion = filters.region && filters.region !== 'all' ? filters.region : null;
+    const requestRegions = requestRegion ? [requestRegion] : (regionPresets[filters.regionPreset] || regionPresets.USMajor || []);
+    const requestSubscriptions = selectedSubscriptionIds.length > 0 ? selectedSubscriptionIds : [];
+
+    setPaaSDbQuotaState((current) => ({
+      ...current,
+      busy: { ...current.busy, refresh: true },
+      status: { tone: 'info', message: `Refreshing PaaS database quota for ${requestService}${requestRegion ? ` in ${requestRegion}` : ''}...` }
+    }));
+
+    try {
+      const payload = await fetchJson('/api/paas-db-quota/refresh', {
+        method: 'POST',
+        body: JSON.stringify({
+          subscriptionIds: requestSubscriptions,
+          regions: requestRegions,
+          services: [requestService],
+          includeCapabilities: paasDbQuotaState.filters.includeCapabilities
+        })
+      });
+
+      const rows = Array.isArray(payload.rows) ? payload.rows : [];
+      setPaaSDbQuotaState((current) => ({
+        ...current,
+        rows,
+        summary: payload.summary || summarizePaaSDatabaseQuotaRows(rows),
+        facets: payload.facets || { services: [], regions: [], subscriptions: [] },
+        capturedAtUtc: payload.capturedAtUtc || null,
+        metadata: payload.metadata || null,
+        busy: { ...current.busy, refresh: false },
+        status: { tone: 'success', message: `PaaS database quota refreshed and saved at ${formatTimestamp(payload.capturedAtUtc)}.` }
+      }));
+    } catch (error) {
+      setPaaSDbQuotaState((current) => ({
+        ...current,
+        busy: { ...current.busy, refresh: false },
+        status: { tone: 'error', message: error.message || 'Failed to refresh PaaS database quota.' }
+      }));
+    }
+  }
+
   async function refreshLivePlacement() {
     if (!canRefreshLivePlacement) {
       setCapacityScores((current) => ({
@@ -4658,6 +4896,7 @@ function App() {
           ...current,
           job: payload.activeJob || null,
           status: payload.status || null,
+          runtime: { ...current.runtime, paasDbQuota: payload.paasDbQuota || current.runtime.paasDbQuota },
           busy: { ...current.busy, refreshStatus: false },
           statusMessage: { tone: 'success', message: payload.activeJob?.status === 'queued' ? 'Capacity ingestion is queued.' : (payload.status?.inProgress ? 'Capacity ingestion is running.' : 'Ingestion status refreshed.') }
         }));
@@ -4952,6 +5191,43 @@ function App() {
     }
     if (activeView === 'paas-availability') {
       return <div className="rx-view-stack"><section className="rx-panel rx-panel--compact"><div className="rx-panel__header"><div><h2>PaaS Availability</h2><p>Runs the vendored Get-AzPaaSAvailability scanner, then serves the latest saved snapshot from SQL for fast reloads.</p></div></div><div className="rx-field-grid rx-field-grid--filters"><label className="rx-field"><span>Service Scope</span><select value={paasState.filters.service} onChange={(event) => setPaaSState((current) => ({ ...current, filters: { ...current.filters, service: event.target.value } }))}>{PAAS_SERVICE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label></div><div className="rx-inline-actions"><span className="rx-selected-count">Regional scope: {filters.region && filters.region !== 'all' ? filters.region : (filters.regionPreset || 'all preset')}</span><span className="rx-selected-count">Subscription scope: {paasSubscriptionScope}</span><span className="rx-selected-count">Latest run: {paasState.capturedAtUtc ? formatTimestamp(paasState.capturedAtUtc) : 'none yet'}</span><button className="rx-button" type="button" disabled={paasState.busy.refresh} onClick={refreshPaaSAvailability}>{paasState.busy.refresh ? 'Refreshing...' : 'Refresh PaaS Availability'}</button></div><Banner tone={paasState.status.tone} message={paasState.status.message} detail={paasSubscriptionNote} /></section><section className="rx-panel rx-panel--compact rx-panel--muted"><div className="rx-panel__header"><div><h2>Snapshot Summary</h2><p>Displayed counts honor the sidebar regional scope. Refresh uses the same scope, but subscription selection does not apply to PaaS yet.</p></div></div><div className="rx-summary-grid"><article className="rx-metric-card"><span>Entries</span><strong>{formatNumber(filteredPaaSData.rowCount)}</strong></article><article className="rx-metric-card"><span>Services</span><strong>{formatNumber(filteredPaaSData.facets.services.length)}</strong></article><article className="rx-metric-card"><span>Regions</span><strong>{formatNumber(filteredPaaSData.facets.regions.length)}</strong></article><article className="rx-metric-card"><span>Categories</span><strong>{formatNumber(filteredPaaSData.facets.categories.length)}</strong></article></div><p className="rx-selected-count">Snapshot subscription scope: {paasSubscriptionScope}. {paasSubscriptionNote}</p></section><SortableMatrixTable title="PaaS Region Matrix" subtitle="Service-by-region readiness across the current sidebar scope using the latest saved PaaS scan rows." tableClassName="rx-matrix-table rx-matrix-table--paas" primaryColumn={{ key: 'service', label: 'Service', render: (row) => formatPaaSMatrixServiceLabel(row.service) }} statusColumn={{ key: 'rowStatus', label: 'Key', render: (row) => <StatusPill value={row.rowStatus === 'CAUTION' ? 'PARTIAL' : row.rowStatus} />, sortValue: (row) => getStatusSortValue(row.rowStatus) }} readyColumn={{ key: 'readyRegionCount', label: 'Ready', render: (row) => formatNumber(row.readyRegionCount) }} dynamicColumns={transposedPaaSMatrix.regions.map((region) => ({ key: region, label: region }))} rows={transposedPaaSMatrix.rows} emptyMessage="No PaaS matrix rows available for the current scope." rowKey={(row) => row.service} getRowClassName={(row) => `rx-matrix-row rx-matrix-row--${String(row.rowStatus || 'blocked').toLowerCase()}`} getDynamicSortValue={(row, region) => { const cell = row.regionMap[region]; return getStatusSortValue(transposedPaaSMatrix.resolveCellStatus(cell), cell && cell.availableCount); }} renderDynamicCell={(row, region) => { const cell = row.regionMap[region]; const status = transposedPaaSMatrix.resolveCellStatus(cell); return <div className="rx-matrix-cell">{status === 'EMPTY' ? <span className="rx-matrix-cell__empty">-</span> : <><StatusPill value={status} />{cell && cell.availableCount > 1 ? <span className="rx-matrix-cell__count">{formatNumber(cell.availableCount)}</span> : null}</>}</div>; }} /><DataTable title="PaaS Snapshot Rows" subtitle="Latest persisted scan rows served from SQL, filtered by the sidebar regional scope. Subscription scope is shown above." tableClassName="rx-table--dense" sectionClassName="rx-panel--compact" columns={[{ key: 'service', label: 'Service' }, { key: 'region', label: 'Region' }, { key: 'category', label: 'Category' }, { key: 'name', label: 'Name', render: (row) => row.displayName || row.name || 'n/a' }, { key: 'edition', label: 'Edition', render: (row) => row.edition || 'n/a' }, { key: 'tier', label: 'Tier', render: (row) => row.tier || 'n/a' }, { key: 'status', label: 'Status', render: (row) => <StatusPill value={row.status || (row.available ? 'Available' : 'Unknown')} /> }, { key: 'quotaCurrent', label: 'Quota Used', render: (row) => formatNullableNumber(row.quotaCurrent) }, { key: 'quotaLimit', label: 'Quota Limit', render: (row) => formatNullableNumber(row.quotaLimit) }, { key: 'metric', label: 'Metric', render: (row) => formatPaaSMetric(row), sortValue: (row) => `${row.metricPrimary || ''}|${row.metricSecondary || ''}` }]} rows={filteredPaaSRows} pageSize={25} emptyMessage="No PaaS snapshot rows available for the current sidebar scope." /></div>;
+    }
+    if (activeView === 'paas-db-quota') {
+      return (
+        <div className="rx-view-stack">
+          <section className="rx-panel rx-panel--compact rx-panel--muted">
+            <details>
+              <summary><strong>Report Key: Include capabilities</strong></summary>
+              <div className="rx-matrix-key rx-matrix-key--compact rx-matrix-key--stacked">
+                <div className="rx-matrix-key__group"><h3>Unchecked</h3><div className="rx-matrix-key__item"><div><strong>Quota &amp; Usage</strong><p>Current usage, limits, available capacity, and utilization warnings.</p></div></div><div className="rx-matrix-key__item"><div><strong>Region &amp; Zone Access</strong><p>Whether the selected subscription can deploy standard and zone-redundant database resources in each region.</p></div></div></div>
+                <div className="rx-matrix-key__group"><h3>Checked</h3><div className="rx-matrix-key__item"><div><strong>Capability Details</strong><p>Adds capability rows where Azure APIs expose them:</p><ul><li>SQL MI hardware families and zone redundancy</li><li>PostgreSQL Flexible Server restrictions and HA/geo-backup signals</li><li>MySQL Flexible Server per-zone HA mode support</li></ul></div></div></div>
+              </div>
+            </details>
+          </section>
+          <section className="rx-panel rx-panel--compact">
+            <div className="rx-panel__header">
+              <div>
+                <h2>PaaS DB Quota</h2>
+                <p>Scans database-service quota, usage, region access, and zone access across the selected subscriptions and regions.</p>
+              </div>
+            </div>
+            <div className="rx-field-grid rx-field-grid--filters">
+              <label className="rx-field"><span>Service Scope</span><select value={paasDbQuotaState.filters.service} onChange={(event) => setPaaSDbQuotaState((current) => ({ ...current, filters: { ...current.filters, service: event.target.value } }))}>{PAAS_DB_QUOTA_SERVICE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+              <label className="rx-check"><input type="checkbox" checked={paasDbQuotaState.filters.includeCapabilities} onChange={(event) => setPaaSDbQuotaState((current) => ({ ...current, filters: { ...current.filters, includeCapabilities: event.target.checked } }))} />Include capabilities</label>
+            </div>
+            <div className="rx-inline-actions">
+              <span className="rx-selected-count">Regional scope: {filters.region && filters.region !== 'all' ? filters.region : (filters.regionPreset || 'all preset')}</span>
+              <span className="rx-selected-count">Subscription scope: {selectedSubscriptionIds.length > 0 ? `${formatNumber(selectedSubscriptionIds.length)} selected` : 'current Azure context'}</span>
+              <span className="rx-selected-count">Latest run: {paasDbQuotaState.capturedAtUtc ? formatTimestamp(paasDbQuotaState.capturedAtUtc) : 'none yet'}</span>
+              <button className="rx-button" type="button" disabled={paasDbQuotaState.busy.refresh} onClick={refreshPaaSDatabaseQuota}>{paasDbQuotaState.busy.refresh ? 'Refreshing...' : 'Refresh PaaS DB Quota'}</button>
+            </div>
+            <Banner tone={paasDbQuotaState.status.tone} message={paasDbQuotaState.status.message} detail={paasDbQuotaStatusDetail} />
+          </section>
+          <DataTable title="Quota & Usage" subtitle="Rows at or above 80% utilization are highlighted. MySQL Flexible Server does not expose a quota usage endpoint through ARM." tableClassName="rx-table--dense" sectionClassName="rx-panel--compact" columns={[{ key: 'subscriptionName', label: 'Subscription', render: (row) => row.subscriptionName || row.subscriptionId || 'n/a' }, { key: 'service', label: 'Service' }, { key: 'region', label: 'Region' }, { key: 'metric', label: 'Metric' }, { key: 'currentUsage', label: 'Current', render: (row) => formatNullableNumber(row.currentUsage) }, { key: 'limit', label: 'Limit', render: (row) => formatNullableNumber(row.limit) }, { key: 'available', label: 'Available', render: (row) => formatNullableNumber(row.available) }, { key: 'percentUsed', label: 'Used', render: (row) => formatPaaSDatabasePercent(row.percentUsed), sortValue: (row) => Number(row.percentUsed || -1) }, { key: 'unit', label: 'Unit', render: (row) => row.unit || 'n/a' }]} rows={paasDbQuotaUsageRows} pageSize={25} emptyMessage="No quota usage rows available for the current scope." getRowClassName={getPaaSDatabaseQuotaRowClassName} collapsible />
+          <DataTable title="Region & Zone Access" subtitle="Blocked rows usually indicate an allowlisting or support-request path before deployment." tableClassName="rx-table--dense" sectionClassName="rx-panel--compact" columns={[{ key: 'subscriptionName', label: 'Subscription', render: (row) => row.subscriptionName || row.subscriptionId || 'n/a' }, { key: 'service', label: 'Service' }, { key: 'region', label: 'Region' }, { key: 'accessAllowedForRegion', label: 'Region Access', render: (row) => <StatusPill value={formatPaaSDatabaseAccess(row.accessAllowedForRegion)} />, sortValue: (row) => formatPaaSDatabaseAccess(row.accessAllowedForRegion) }, { key: 'accessAllowedForAZ', label: 'AZ Access', render: (row) => <StatusPill value={formatPaaSDatabaseAccess(row.accessAllowedForAZ)} />, sortValue: (row) => formatPaaSDatabaseAccess(row.accessAllowedForAZ) }, { key: 'notes', label: 'Notes', render: (row) => row.notes || 'n/a' }]} rows={paasDbQuotaAccessRows} pageSize={25} emptyMessage="No region access rows available for the current scope." getRowClassName={getPaaSDatabaseQuotaRowClassName} collapsible />
+          <DataTable title="Capability Details" subtitle="Optional capability rows for SQL MI, PostgreSQL Flexible Server, and MySQL Flexible Server." tableClassName="rx-table--dense" sectionClassName="rx-panel--compact" columns={[{ key: 'subscriptionName', label: 'Subscription', render: (row) => row.subscriptionName || row.subscriptionId || 'n/a' }, { key: 'service', label: 'Service' }, { key: 'region', label: 'Region' }, { key: 'metric', label: 'Capability' }, { key: 'notes', label: 'Status / Notes', render: (row) => row.notes || 'n/a' }]} rows={paasDbQuotaCapabilityRows} pageSize={25} emptyMessage={paasDbQuotaState.filters.includeCapabilities ? 'No capability rows available for the current scope.' : 'Enable capabilities and refresh to collect capability rows.'} collapsible />
+        </div>
+      );
     }
     if (activeView === 'sku-chart') {
       return <DataTable key="sku-chart" title="Top SKUs" subtitle="Ranked by total available quota across the current filter scope." columns={[{ key: 'sku', label: 'SKU' }, { key: 'available', label: 'Available Quota', render: (row) => formatNumber(row.available) }]} rows={topSkus} emptyMessage="No SKU rollup data available." />;

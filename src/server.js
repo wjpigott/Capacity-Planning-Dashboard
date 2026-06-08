@@ -50,6 +50,10 @@ const {
   getPaaSAvailabilitySnapshot,
   getPaaSPowerShellProbe
 } = require('./services/paasAvailabilityService');
+const {
+  runPaaSDatabaseQuotaScan,
+  getPaaSDatabaseQuotaSnapshot
+} = require('./services/paasDatabaseQuotaService');
 const { getQuotaCandidates, captureQuotaCandidateSnapshots } = require('./services/quotaCandidateService');
 const { buildQuotaMovePlan, getQuotaCandidateRunHistory, simulateQuotaMovePlan } = require('./services/quotaPlanService');
 const { applyQuotaMovePlan } = require('./services/quotaApplyService');
@@ -60,7 +64,8 @@ const {
   startIngestionScheduler,
   updateIngestionScheduler,
   getIngestionSchedulerConfig,
-  inspectCapacityIngestionScope
+  inspectCapacityIngestionScope,
+  resolveIngestionScopeSubscriptions
 } = require('./services/azureIngestionService');
 const { listManagementGroups, listQuotaGroups, listQuotaGroupShareableQuota } = require('./services/quotaDiscoveryService');
 const {
@@ -97,6 +102,11 @@ const DASHBOARD_SETTING_KEYS = {
   ingestManagementGroupNames: 'schedule.ingest.managementGroupNames',
   ingestFamilyFilters: 'schedule.ingest.familyFilters',
   aiModelCatalogIntervalMinutes: 'schedule.aiModelCatalog.intervalMinutes',
+  paasDbQuotaIntervalMinutes: 'schedule.paasDbQuota.intervalMinutes',
+  paasDbQuotaRegionPreset: 'schedule.paasDbQuota.regionPreset',
+  paasDbQuotaSubscriptionIds: 'schedule.paasDbQuota.subscriptionIds',
+  paasDbQuotaServices: 'schedule.paasDbQuota.services',
+  paasDbQuotaIncludeCapabilities: 'schedule.paasDbQuota.includeCapabilities',
   showSqlPreview: 'ui.showSqlPreview'
 };
 
@@ -1213,6 +1223,13 @@ function getDefaultSchedulerSettings() {
         process.env.INGEST_AI_MODEL_CATALOG_INTERVAL_MINUTES || process.env.INGEST_OPENAI_MODEL_CATALOG_INTERVAL_MINUTES,
         1440
       )
+    },
+    paasDbQuota: {
+      intervalMinutes: normalizeIntervalMinutes(process.env.PAAS_DB_QUOTA_INTERVAL_MINUTES, 0),
+      regionPreset: process.env.PAAS_DB_QUOTA_REGION_PRESET || process.env.INGEST_REGION_PRESET || 'USMajor',
+      subscriptionIds: process.env.PAAS_DB_QUOTA_SUBSCRIPTION_IDS || '',
+      services: process.env.PAAS_DB_QUOTA_SERVICES || 'All',
+      includeCapabilities: normalizeBoolean(process.env.PAAS_DB_QUOTA_INCLUDE_CAPABILITIES, true)
     }
   };
 }
@@ -1256,10 +1273,15 @@ function resolvePresetRegions(regionPreset) {
 
 function getSchedulerScopeSummary(settings = getDefaultSchedulerSettings()) {
   const ingestSettings = settings?.ingest || getDefaultSchedulerSettings().ingest;
+  const paasDbQuotaSettings = settings?.paasDbQuota || getDefaultSchedulerSettings().paasDbQuota;
   const ingestSubscriptionIds = parseConfigList(ingestSettings.subscriptionIds);
   const ingestManagementGroups = parseConfigList(ingestSettings.managementGroupNames);
   const ingestFamilyFilters = parseConfigList(ingestSettings.familyFilters);
   const ingestRegionPreset = normalizeSettingText(ingestSettings.regionPreset, 'USMajor') || 'USMajor';
+  const paasDbQuotaSubscriptionIds = parseConfigList(paasDbQuotaSettings.subscriptionIds);
+  const paasDbQuotaEffectiveSubscriptionIds = paasDbQuotaSubscriptionIds.length > 0 ? paasDbQuotaSubscriptionIds : ingestSubscriptionIds;
+  const paasDbQuotaServices = parseConfigList(paasDbQuotaSettings.services || 'All');
+  const paasDbQuotaRegionPreset = normalizeSettingText(paasDbQuotaSettings.regionPreset, ingestRegionPreset) || ingestRegionPreset;
 
   return {
     ingest: {
@@ -1272,6 +1294,20 @@ function getSchedulerScopeSummary(settings = getDefaultSchedulerSettings()) {
       regions: resolvePresetRegions(ingestRegionPreset),
       familyFilters: ingestFamilyFilters,
       updates: ['Saved capacity snapshot data', 'Capacity Grid', 'Region Health', 'Family Summary']
+    },
+    paasDbQuota: {
+      subscriptionIds: paasDbQuotaEffectiveSubscriptionIds,
+      managementGroupNames: ingestManagementGroups,
+      subscriptionSource: paasDbQuotaSubscriptionIds.length > 0
+        ? 'PAAS_DB_QUOTA_SUBSCRIPTION_IDS'
+        : (ingestSubscriptionIds.length > 0
+          ? 'Shared Capacity Ingest subscription IDs'
+          : (ingestManagementGroups.length > 0 ? 'Shared Capacity Ingest management groups' : 'managed identity visible subscriptions')),
+      regionPreset: paasDbQuotaRegionPreset,
+      regions: resolvePresetRegions(paasDbQuotaRegionPreset),
+      services: paasDbQuotaServices.length > 0 ? paasDbQuotaServices : ['All'],
+      includeCapabilities: normalizeBoolean(paasDbQuotaSettings.includeCapabilities, true),
+      updates: ['PaaS DB Quota cached report']
     }
   };
 }
@@ -1294,6 +1330,13 @@ function parseSchedulerSettingsFromDb(dbMap = {}) {
         readValue(DASHBOARD_SETTING_KEYS.aiModelCatalogIntervalMinutes),
         defaults.aiModelCatalog.intervalMinutes
       )
+    },
+    paasDbQuota: {
+      intervalMinutes: normalizeIntervalMinutes(readValue(DASHBOARD_SETTING_KEYS.paasDbQuotaIntervalMinutes), defaults.paasDbQuota.intervalMinutes),
+      regionPreset: normalizeSettingText(readValue(DASHBOARD_SETTING_KEYS.paasDbQuotaRegionPreset), defaults.paasDbQuota.regionPreset),
+      subscriptionIds: '',
+      services: normalizeSettingText(readValue(DASHBOARD_SETTING_KEYS.paasDbQuotaServices), defaults.paasDbQuota.services),
+      includeCapabilities: normalizeBoolean(readValue(DASHBOARD_SETTING_KEYS.paasDbQuotaIncludeCapabilities), defaults.paasDbQuota.includeCapabilities)
     }
   };
 }
@@ -1319,11 +1362,23 @@ function applyRuntimeSchedulerSettings(settings = {}) {
     },
     aiModelCatalog: {
       intervalMinutes: normalizeIntervalMinutes(settings?.aiModelCatalog?.intervalMinutes, 1440)
+    },
+    paasDbQuota: {
+      intervalMinutes: normalizeIntervalMinutes(settings?.paasDbQuota?.intervalMinutes, 0),
+      regionPreset: normalizeSettingText(settings?.paasDbQuota?.regionPreset, settings?.ingest?.regionPreset || 'USMajor') || 'USMajor',
+      subscriptionIds: normalizeSettingText(settings?.ingest?.subscriptionIds, ''),
+      managementGroupNames: normalizeSettingText(settings?.ingest?.managementGroupNames, ''),
+      services: normalizeSettingText(settings?.paasDbQuota?.services, 'All') || 'All',
+      includeCapabilities: normalizeBoolean(settings?.paasDbQuota?.includeCapabilities, true)
     }
   };
 
   updateIngestionScheduler(normalized.ingest);
-  return normalized;
+  updatePaaSDatabaseQuotaScheduler(normalized.paasDbQuota);
+  return {
+    ...normalized,
+    paasDbQuota: getPaaSDatabaseQuotaSchedulerRuntime()
+  };
 }
 
 async function saveSchedulerSettings(settings = {}) {
@@ -1339,6 +1394,13 @@ async function saveSchedulerSettings(settings = {}) {
     },
     aiModelCatalog: {
       intervalMinutes: normalizeIntervalMinutes(settings?.aiModelCatalog?.intervalMinutes, 1440)
+    },
+    paasDbQuota: {
+      intervalMinutes: normalizeIntervalMinutes(settings?.paasDbQuota?.intervalMinutes, 0),
+      regionPreset: normalizeSettingText(settings?.paasDbQuota?.regionPreset, defaults.paasDbQuota.regionPreset) || 'USMajor',
+      subscriptionIds: '',
+      services: normalizeSettingText(settings?.paasDbQuota?.services, defaults.paasDbQuota.services) || 'All',
+      includeCapabilities: normalizeBoolean(settings?.paasDbQuota?.includeCapabilities, defaults.paasDbQuota.includeCapabilities)
     }
   };
 
@@ -1349,14 +1411,111 @@ async function saveSchedulerSettings(settings = {}) {
     [DASHBOARD_SETTING_KEYS.ingestSubscriptionIds]: normalized.ingest.subscriptionIds,
     [DASHBOARD_SETTING_KEYS.ingestManagementGroupNames]: normalized.ingest.managementGroupNames,
     [DASHBOARD_SETTING_KEYS.ingestFamilyFilters]: normalized.ingest.familyFilters,
-    [DASHBOARD_SETTING_KEYS.aiModelCatalogIntervalMinutes]: String(normalized.aiModelCatalog.intervalMinutes)
+    [DASHBOARD_SETTING_KEYS.aiModelCatalogIntervalMinutes]: String(normalized.aiModelCatalog.intervalMinutes),
+    [DASHBOARD_SETTING_KEYS.paasDbQuotaIntervalMinutes]: String(normalized.paasDbQuota.intervalMinutes),
+    [DASHBOARD_SETTING_KEYS.paasDbQuotaRegionPreset]: normalized.paasDbQuota.regionPreset,
+    [DASHBOARD_SETTING_KEYS.paasDbQuotaSubscriptionIds]: normalized.paasDbQuota.subscriptionIds,
+    [DASHBOARD_SETTING_KEYS.paasDbQuotaServices]: normalized.paasDbQuota.services,
+    [DASHBOARD_SETTING_KEYS.paasDbQuotaIncludeCapabilities]: normalized.paasDbQuota.includeCapabilities ? 'true' : 'false'
   });
 
-  if (savedCount < 7) {
+  if (savedCount < 12) {
     throw new Error('SQL scheduler settings could not be saved. Verify SQL connectivity and permissions.');
   }
 
   return normalized;
+}
+
+let paasDbQuotaSchedulerHandle = null;
+let paasDbQuotaSchedulerConfig = {
+  intervalMinutes: 0,
+  regionPreset: 'USMajor',
+  subscriptionIds: '',
+  managementGroupNames: '',
+  services: 'All',
+  includeCapabilities: true
+};
+const paasDbQuotaSchedulerStatus = {
+  inProgress: false,
+  lastRunUtc: null,
+  lastSuccessUtc: null,
+  lastError: null,
+  lastDurationMs: 0,
+  lastSummary: null
+};
+
+function normalizePaaSDatabaseQuotaSchedulerConfig(config = {}) {
+  return {
+    intervalMinutes: normalizeIntervalMinutes(config.intervalMinutes, 0),
+    regionPreset: normalizeSettingText(config.regionPreset, 'USMajor') || 'USMajor',
+    subscriptionIds: normalizeSettingText(config.subscriptionIds, ''),
+    managementGroupNames: normalizeSettingText(config.managementGroupNames, ''),
+    services: normalizeSettingText(config.services, 'All') || 'All',
+    includeCapabilities: normalizeBoolean(config.includeCapabilities, true)
+  };
+}
+
+async function runScheduledPaaSDatabaseQuotaScan(trigger = 'scheduler') {
+  if (paasDbQuotaSchedulerStatus.inProgress) {
+    console.log(`[paas-db-quota:${trigger}] scan already running; skipping.`);
+    return null;
+  }
+
+  const startedAt = Date.now();
+  paasDbQuotaSchedulerStatus.inProgress = true;
+  paasDbQuotaSchedulerStatus.lastRunUtc = new Date().toISOString();
+  paasDbQuotaSchedulerStatus.lastError = null;
+
+  try {
+    const scopedSubscriptions = await resolveIngestionScopeSubscriptions({
+      subscriptionIds: paasDbQuotaSchedulerConfig.subscriptionIds,
+      managementGroupNames: paasDbQuotaSchedulerConfig.managementGroupNames
+    });
+    const options = {
+      subscriptionIds: scopedSubscriptions.map((subscription) => subscription.subscriptionId).filter(Boolean),
+      regions: resolvePresetRegions(paasDbQuotaSchedulerConfig.regionPreset),
+      services: parseConfigList(paasDbQuotaSchedulerConfig.services || 'All'),
+      includeCapabilities: paasDbQuotaSchedulerConfig.includeCapabilities
+    };
+    const result = await runPaaSDatabaseQuotaScan(options);
+    paasDbQuotaSchedulerStatus.lastSuccessUtc = new Date().toISOString();
+    paasDbQuotaSchedulerStatus.lastDurationMs = Date.now() - startedAt;
+    paasDbQuotaSchedulerStatus.lastSummary = result.summary || null;
+    console.log(`[paas-db-quota:${trigger}] refreshed ${result.summary?.rowCount || 0} rows in ${paasDbQuotaSchedulerStatus.lastDurationMs}ms.`);
+    return result;
+  } catch (err) {
+    paasDbQuotaSchedulerStatus.lastDurationMs = Date.now() - startedAt;
+    paasDbQuotaSchedulerStatus.lastError = err.message || 'PaaS DB quota scheduler failed.';
+    console.warn(`[paas-db-quota:${trigger}] failed: ${paasDbQuotaSchedulerStatus.lastError}`);
+    return null;
+  } finally {
+    paasDbQuotaSchedulerStatus.inProgress = false;
+  }
+}
+
+function getPaaSDatabaseQuotaSchedulerRuntime() {
+  return {
+    ...paasDbQuotaSchedulerConfig,
+    status: { ...paasDbQuotaSchedulerStatus }
+  };
+}
+
+function updatePaaSDatabaseQuotaScheduler(config = {}) {
+  if (paasDbQuotaSchedulerHandle) {
+    clearInterval(paasDbQuotaSchedulerHandle);
+    paasDbQuotaSchedulerHandle = null;
+  }
+
+  paasDbQuotaSchedulerConfig = normalizePaaSDatabaseQuotaSchedulerConfig(config);
+  if (paasDbQuotaSchedulerConfig.intervalMinutes > 0) {
+    paasDbQuotaSchedulerHandle = setInterval(() => {
+      runScheduledPaaSDatabaseQuotaScan('interval').catch((err) => {
+        console.warn('[paas-db-quota:interval] unhandled scheduler failure:', err.message);
+      });
+    }, paasDbQuotaSchedulerConfig.intervalMinutes * 60 * 1000);
+  }
+
+  return getPaaSDatabaseQuotaSchedulerRuntime();
 }
 
 function getDefaultUiSettings() {
@@ -2495,6 +2654,41 @@ app.post('/api/paas-availability/refresh', async (req, res) => {
   }
 });
 
+app.get('/api/paas-db-quota', async (req, res) => {
+  try {
+    const result = await getPaaSDatabaseQuotaSnapshot({
+      maxAgeHours: req.query.maxAgeHours
+    });
+    res.json(result);
+  } catch (err) {
+    sendErrorResponse(res, { clientMessage: 'Failed to retrieve cached PaaS database quota report.', err, scope: 'api/paas-db-quota:get', extra: { rows: [] } });
+  }
+});
+
+app.post('/api/paas-db-quota/refresh', async (req, res) => {
+  try {
+    const result = await runPaaSDatabaseQuotaScan({
+      subscriptionIds: req.body?.subscriptionIds,
+      locations: req.body?.locations || req.body?.regions,
+      services: req.body?.services || req.body?.service,
+      includeCapabilities: req.body?.includeCapabilities
+    });
+    res.json(result);
+  } catch (err) {
+    const status = err.message.includes('not found') || err.message.includes('not configured') ? 503 : 500;
+    sendErrorResponse(res, {
+      status,
+      clientMessage: 'Failed to refresh PaaS database quota report.',
+      err,
+      scope: 'api/paas-db-quota:refresh',
+      extra: {
+        rows: [],
+        detail: err && err.message ? String(err.message).slice(0, 4000) : null
+      }
+    });
+  }
+});
+
 app.get('/api/admin/recommendations/diagnostics', requireAdmin, (req, res) => {
   try {
     const diagnostics = getRecommendationDiagnostics();
@@ -2795,7 +2989,7 @@ app.post('/api/admin/ingest/capacity', requireAdmin, async (req, res) => {
 
 app.get('/api/admin/ingest/status', requireAdmin, (_, res) => {
   const activeJob = getActiveIngestionJob();
-  res.json({ ok: true, status: getIngestionStatus(), activeJob: activeJob ? serializeIngestionJob(activeJob) : null });
+  res.json({ ok: true, status: getIngestionStatus(), activeJob: activeJob ? serializeIngestionJob(activeJob) : null, paasDbQuota: getPaaSDatabaseQuotaSchedulerRuntime() });
 });
 
 app.post('/api/admin/ingest/smoke-test', requireAdmin, async (_, res) => {
@@ -2837,7 +3031,8 @@ app.get('/api/admin/ingest/schedule', requireAdmin, async (_, res) => {
       ingest: getIngestionSchedulerConfig(),
       aiModelCatalog: {
         intervalMinutes: persisted.aiModelCatalog.intervalMinutes
-      }
+      },
+      paasDbQuota: getPaaSDatabaseQuotaSchedulerRuntime()
     };
 
     res.json({ ok: true, settings: persisted, runtime, persistence, scope: getSchedulerScopeSummary(persisted) });
@@ -2880,7 +3075,8 @@ app.put('/api/admin/ingest/schedule', requireAdmin, async (req, res) => {
               req.body?.aiModelCatalog?.intervalMinutes,
               process.env.INGEST_AI_MODEL_CATALOG_INTERVAL_MINUTES || process.env.INGEST_OPENAI_MODEL_CATALOG_INTERVAL_MINUTES || 1440
             )
-          }
+          },
+          paasDbQuota: getPaaSDatabaseQuotaSchedulerRuntime()
         },
         persistence
       });
@@ -2897,6 +3093,12 @@ app.put('/api/admin/ingest/schedule', requireAdmin, async (req, res) => {
       },
       aiModelCatalog: {
         intervalMinutes: req.body?.aiModelCatalog?.intervalMinutes
+      },
+      paasDbQuota: {
+        intervalMinutes: req.body?.paasDbQuota?.intervalMinutes,
+        regionPreset: req.body?.paasDbQuota?.regionPreset,
+        services: req.body?.paasDbQuota?.services,
+        includeCapabilities: req.body?.paasDbQuota?.includeCapabilities
       }
     };
 
@@ -3196,6 +3398,7 @@ app.get('/internal/diagnostics/capacity-read', requireIngestKey, async (req, res
       trendrows: { name: 'trendRows', run: () => getCapacityTrends({ ...filters, days: 7 }) },
       familyrows: { name: 'familyRows', run: () => getFamilySummary(filters) },
       paasavailability: { name: 'paasAvailability', run: () => getPaaSAvailabilitySnapshot({ service: req.query.service || 'All' }) },
+      paasdbquota: { name: 'paasDbQuota', run: () => getPaaSDatabaseQuotaSnapshot() },
       aimodels: { name: 'aiModels', run: getAIModelAvailabilityDiagnostics },
       quotascope: { name: 'quotaScope', run: getQuotaScopeDiagnostics },
       subscriptions: { name: 'subscriptions', run: () => getSubscriptions({ limit: 20 }) }
@@ -3206,7 +3409,7 @@ app.get('/internal/diagnostics/capacity-read', requireIngestKey, async (req, res
       : (targetChecks[target] ? [targetChecks[target]] : null);
 
     if (!requestedChecks) {
-      return res.status(400).json({ ok: false, error: 'Unsupported target. Use all, capacityRows, capacityPaged, capacityAnalytics, capacityScores, trendRows, familyRows, paasAvailability, aiModels, quotaScope, or subscriptions.' });
+      return res.status(400).json({ ok: false, error: 'Unsupported target. Use all, capacityRows, capacityPaged, capacityAnalytics, capacityScores, trendRows, familyRows, paasAvailability, paasDbQuota, aiModels, quotaScope, or subscriptions.' });
     }
 
     const checks = await Promise.all(requestedChecks.map((check) => runDiagnosticCheck(check.name, check.run, { timeoutMs: 8000 })));
@@ -3418,10 +3621,10 @@ async function runStartupWarmup() {
 
   try {
     const settings = await getEffectiveSchedulerSettings();
-    startIngestionScheduler(settings.ingest);
+    applyRuntimeSchedulerSettings(settings);
   } catch (err) {
     console.warn('⚠ Failed to load DB scheduler settings; falling back to environment defaults:', err.message);
-    startIngestionScheduler();
+    applyRuntimeSchedulerSettings(getDefaultSchedulerSettings());
   }
 
   if (process.env.SQL_SERVER) {

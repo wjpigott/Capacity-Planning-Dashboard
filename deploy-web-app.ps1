@@ -10,7 +10,7 @@ if ([string]::IsNullOrWhiteSpace($ResourceGroup) -or [string]::IsNullOrWhiteSpac
     throw "Provide -ResourceGroup and -AppName, or set AZURE_RESOURCE_GROUP and AZURE_WEBAPP_NAME."
 }
 
-$scriptVersion = '2026-05-19.1'
+$scriptVersion = '2026-06-08.1'
 Write-Host "Starting clean web app deployment..."
 Write-Host "deploy-web-app.ps1 version: $scriptVersion"
 Write-Host "Source: $SourcePath"
@@ -108,6 +108,13 @@ if (Test-Path $paasToolsCheck) {
     throw "Get-AzPaaSAvailability.ps1 was not found in staging. Expected: $paasToolsCheck"
 }
 
+$paasDbQuotaWrapperCheck = Join-Path $stagingPath 'tools\Get-PaaSDatabaseQuotaReport.ps1'
+if (Test-Path $paasDbQuotaWrapperCheck) {
+    Write-Host "Verified: Get-PaaSDatabaseQuotaReport.ps1 is in staging"
+} else {
+    throw "Get-PaaSDatabaseQuotaReport.ps1 was not found in staging. Expected: $paasDbQuotaWrapperCheck"
+}
+
 # Create zip
 $zipPath = "$env:TEMP\webpackage-capdash-verified-$(Get-Date -Format 'yyyyMMdd-HHmmss').zip"
 Write-Host "Creating zip package: $zipPath"
@@ -125,6 +132,7 @@ $zipEntryNames = @($zip.Entries | ForEach-Object { $_.FullName -replace '\\', '/
 $zip.Dispose()
 $hasTools = $zipEntryNames -contains 'tools/Get-AzVMAvailability/Get-AzVMAvailability.ps1'
 $hasPaaSTools = $zipEntryNames -contains 'tools/Get-AzPaaSAvailability/Get-AzPaaSAvailability.ps1'
+$hasPaaSDbQuotaWrapper = $zipEntryNames -contains 'tools/Get-PaaSDatabaseQuotaReport.ps1'
 
 if ($hasTools) {
     Write-Host "Zip contains Get-AzVMAvailability.ps1"
@@ -142,6 +150,15 @@ if ($hasPaaSTools) {
     Write-Host "Tool entries found in zip:"
     $zipEntryNames | Where-Object { $_ -like 'tools/*' } | Select-Object -First 20 | ForEach-Object { Write-Host "  $_" }
     throw "Get-AzPaaSAvailability.ps1 was not found in the deployment zip."
+}
+
+if ($hasPaaSDbQuotaWrapper) {
+    Write-Host "Zip contains Get-PaaSDatabaseQuotaReport.ps1"
+} else {
+    Write-Host "ERROR: Get-PaaSDatabaseQuotaReport.ps1 not found in zip!"
+    Write-Host "Tool entries found in zip:"
+    $zipEntryNames | Where-Object { $_ -like 'tools/*' } | Select-Object -First 20 | ForEach-Object { Write-Host "  $_" }
+    throw "Get-PaaSDatabaseQuotaReport.ps1 was not found in the deployment zip."
 }
 
 # Deploy

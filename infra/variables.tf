@@ -203,6 +203,70 @@ variable "auth_enabled" {
   default     = true
 }
 
+variable "web_easy_auth_enabled" {
+  type        = bool
+  description = "Enable App Service Authentication / Easy Auth on the dashboard Web App"
+  default     = false
+}
+
+variable "web_easy_auth_allowed_client_applications" {
+  type        = list(string)
+  description = "Client application IDs allowed by Web App Easy Auth for bearer-authenticated API/internal calls"
+  default     = []
+}
+
+variable "web_easy_auth_allowed_audiences" {
+  type        = list(string)
+  description = "Optional explicit Web App Easy Auth token audiences"
+  default     = []
+}
+
+variable "ingest_api_key_enabled" {
+  type        = bool
+  description = "Allow x-ingest-key fallback for internal routes"
+  default     = true
+}
+
+variable "worker_auth_mode" {
+  type        = string
+  description = "Dashboard-to-worker authentication mode"
+  default     = "shared-secret"
+  validation {
+    condition     = contains(["shared-secret", "entra"], var.worker_auth_mode)
+    error_message = "worker_auth_mode must be shared-secret or entra."
+  }
+}
+
+variable "function_easy_auth_enabled" {
+  type        = bool
+  description = "Enable App Service Authentication / Easy Auth on the worker Function App"
+  default     = false
+}
+
+variable "worker_auth_client_id" {
+  type        = string
+  description = "Microsoft Entra application client ID used by worker Function App Easy Auth"
+  default     = ""
+}
+
+variable "worker_auth_token_audience" {
+  type        = string
+  description = "Token audience used by the dashboard Web App for worker Function App calls"
+  default     = ""
+}
+
+variable "function_easy_auth_allowed_client_applications" {
+  type        = list(string)
+  description = "Client application IDs allowed by Function App Easy Auth"
+  default     = []
+}
+
+variable "function_easy_auth_allowed_audiences" {
+  type        = list(string)
+  description = "Optional explicit Function App Easy Auth token audiences"
+  default     = []
+}
+
 variable "entra_tenant_id" {
   type        = string
   description = "Microsoft Entra tenant ID for the dashboard auth flow"

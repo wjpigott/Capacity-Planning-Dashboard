@@ -115,6 +115,14 @@ function ConvertTo-StringArray([object]$Value) {
         return @()
     }
 
+    if ($Value -is [System.Collections.IDictionary]) {
+        if ($Value.Contains('value')) {
+            return ConvertTo-StringArray $Value['value']
+        }
+
+        return @($Value.Values | ForEach-Object { ConvertTo-StringArray $_ })
+    }
+
     if ($Value -is [string]) {
         return @(
             $Value -split ',' |
@@ -632,6 +640,16 @@ function ConvertTo-DeployParameterMap([System.Collections.ArrayList]$Arguments, 
         'ExistingPrivateEndpointSubnetName',
         'WorkerStoragePublicNetworkAccess',
         'CreateWorkerStoragePrivateEndpoints',
+        'WebEasyAuthEnabled',
+        'WebEasyAuthAllowedClientApplications',
+        'WebEasyAuthAllowedAudiences',
+        'IngestApiKeyEnabled',
+        'WorkerAuthMode',
+        'FunctionEasyAuthEnabled',
+        'WorkerAuthClientId',
+        'WorkerAuthTokenAudience',
+        'FunctionEasyAuthAllowedClientApplications',
+        'FunctionEasyAuthAllowedAudiences',
         'ManageEntraWebRedirectUri',
         'ReportViewerGroupIds',
         'CreateMissingEntraAccessGroups'
@@ -774,6 +792,10 @@ $manageEntraWebRedirectUri = $false
 $adminGroupId = ''
 $reportViewerGroupIds = ''
 $createMissingGroups = $false
+$webEasyAuthEnabled = $false
+$webEasyAuthAllowedClientApplications = @()
+$webEasyAuthAllowedAudiences = @()
+$ingestApiKeyEnabled = $true
 
 if ($authEnabled) {
     $entraTenantId = Prompt-String -Name 'EntraTenantId' -Question 'Entra tenant ID for dashboard sign-in' -DefaultValue $tenantDefault -Required
@@ -782,6 +804,13 @@ if ($authEnabled) {
     $authRedirectUri = Prompt-String -Name 'AuthRedirectUri' -Question 'Auth redirect URI for the Entra app registration' -DefaultValue $expectedAuthRedirectUri
     if ($provider -eq 'Terraform') {
         $manageEntraWebRedirectUri = Prompt-YesNo -Name 'ManageEntraWebRedirectUri' -Question 'Allow Terraform wrapper to add the generated callback URI to the app registration?' -DefaultValue $false
+    }
+
+    $webEasyAuthEnabled = Prompt-YesNo -Name 'WebEasyAuthEnabled' -Question 'Enable App Service Authentication / Easy Auth on the Web App?' -DefaultValue $false
+    if ($webEasyAuthEnabled) {
+        $webEasyAuthAllowedClientApplications = Prompt-List -Name 'WebEasyAuthAllowedClientApplications' -Question 'Optional Web Easy Auth allowed client application IDs for bearer automation (comma-separated)'
+        $webEasyAuthAllowedAudiences = Prompt-List -Name 'WebEasyAuthAllowedAudiences' -Question 'Optional Web Easy Auth allowed audiences (comma-separated; blank uses api://<client-id> and client-id)'
+        $ingestApiKeyEnabled = Prompt-YesNo -Name 'IngestApiKeyEnabled' -Question 'Keep x-ingest-key enabled for internal bootstrap/ingestion fallback?' -DefaultValue $true
     }
 
     while ($true) {
@@ -956,7 +985,23 @@ if (Prompt-YesNo -Name 'ProvideSessionSecret' -Question 'Provide an existing SES
     $sessionSecret = Prompt-Secret -Name 'SessionSecret' -Question 'SESSION_SECRET value' -Required
 }
 
-$workerSecretMode = Prompt-Choice -Name 'WorkerSharedSecretMode' -Question 'Worker shared secret handling?' -Choices @('Generate', 'Provide existing', 'Skip') -DefaultValue 'Generate'
+$workerAuthMode = Prompt-Choice -Name 'WorkerAuthMode' -Question 'Dashboard-to-worker authentication mode?' -Choices @('shared-secret', 'entra') -DefaultValue 'shared-secret'
+$functionEasyAuthEnabled = $false
+$workerAuthClientId = ''
+$workerAuthTokenAudience = ''
+$functionEasyAuthAllowedClientApplications = @()
+$functionEasyAuthAllowedAudiences = @()
+$workerSecretMode = 'Skip'
+if ($workerAuthMode -eq 'entra') {
+    $functionEasyAuthEnabled = Prompt-YesNo -Name 'FunctionEasyAuthEnabled' -Question 'Enable App Service Authentication / Easy Auth on the worker Function App?' -DefaultValue $true
+    $workerAuthClientId = Prompt-String -Name 'WorkerAuthClientId' -Question 'Worker auth app registration client ID' -Required
+    $workerAuthTokenAudience = Prompt-String -Name 'WorkerAuthTokenAudience' -Question 'Worker token audience (for example api://<worker-client-id>)' -DefaultValue "api://$workerAuthClientId" -Required
+    $functionEasyAuthAllowedClientApplications = Prompt-List -Name 'FunctionEasyAuthAllowedClientApplications' -Question 'Optional Function Easy Auth allowed client application IDs (comma-separated)'
+    $functionEasyAuthAllowedAudiences = Prompt-List -Name 'FunctionEasyAuthAllowedAudiences' -Question 'Optional Function Easy Auth allowed audiences (comma-separated; blank uses worker token audience)'
+}
+else {
+    $workerSecretMode = Prompt-Choice -Name 'WorkerSharedSecretMode' -Question 'Worker shared secret handling?' -Choices @('Generate', 'Provide existing', 'Skip') -DefaultValue 'Generate'
+}
 $workerSharedSecret = ''
 if ($workerSecretMode -eq 'Generate') {
     $workerSharedSecret = Set-Answer -Name 'WorkerSharedSecret' -Value (New-GeneratedSecret -ByteCount 32)
@@ -1014,6 +1059,16 @@ Add-DeployArgument -Arguments $deployArguments -Name '-AssignWorkerComputeRecomm
 Add-DeployArgument -Arguments $deployArguments -Name '-AssignWorkerCostManagementReaderRole' -Value $assignWorkerCostManagementReaderRole
 Add-DeployArgument -Arguments $deployArguments -Name '-AssignWorkerBillingReaderRole' -Value $assignWorkerBillingReaderRole
 Add-DeployArgument -Arguments $deployArguments -Name '-AuthEnabled' -Value $authEnabled
+Add-DeployArgument -Arguments $deployArguments -Name '-WebEasyAuthEnabled' -Value $webEasyAuthEnabled
+Add-DeployArgument -Arguments $deployArguments -Name '-WebEasyAuthAllowedClientApplications' -Value $webEasyAuthAllowedClientApplications
+Add-DeployArgument -Arguments $deployArguments -Name '-WebEasyAuthAllowedAudiences' -Value $webEasyAuthAllowedAudiences
+Add-DeployArgument -Arguments $deployArguments -Name '-IngestApiKeyEnabled' -Value $ingestApiKeyEnabled
+Add-DeployArgument -Arguments $deployArguments -Name '-WorkerAuthMode' -Value $workerAuthMode
+Add-DeployArgument -Arguments $deployArguments -Name '-FunctionEasyAuthEnabled' -Value $functionEasyAuthEnabled
+Add-DeployArgument -Arguments $deployArguments -Name '-WorkerAuthClientId' -Value $workerAuthClientId
+Add-DeployArgument -Arguments $deployArguments -Name '-WorkerAuthTokenAudience' -Value $workerAuthTokenAudience
+Add-DeployArgument -Arguments $deployArguments -Name '-FunctionEasyAuthAllowedClientApplications' -Value $functionEasyAuthAllowedClientApplications
+Add-DeployArgument -Arguments $deployArguments -Name '-FunctionEasyAuthAllowedAudiences' -Value $functionEasyAuthAllowedAudiences
 Add-DeployArgument -Arguments $deployArguments -Name '-EntraTenantId' -Value $entraTenantId
 Add-DeployArgument -Arguments $deployArguments -Name '-EntraClientId' -Value $entraClientId
 Add-DeployArgument -Arguments $deployArguments -Name '-EntraClientSecret' -Value $entraClientSecret
@@ -1044,6 +1099,10 @@ $plan = [ordered]@{
     ExpectedFunctionAppName = $expectedFunctionAppName
     RandomizeNameConflict = $randomizeNames
     AuthEnabled = $authEnabled
+    WebEasyAuthEnabled = $webEasyAuthEnabled
+    IngestApiKeyEnabled = $ingestApiKeyEnabled
+    WorkerAuthMode = $workerAuthMode
+    FunctionEasyAuthEnabled = $functionEasyAuthEnabled
     AuthRedirectUri = if ($authEnabled) { $authRedirectUri } else { 'Auth disabled' }
     AccessGroupMode = if ($authEnabled) { Get-Answer -Name 'AccessGroupMode' -DefaultValue '(not set)' } else { 'Auth disabled' }
     ExistingSql = if ([string]::IsNullOrWhiteSpace($existingSqlServerName)) { 'No' } else { $existingSqlServerName }

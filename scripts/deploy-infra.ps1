@@ -36,6 +36,16 @@ param(
     [Parameter(Mandatory = $false)][bool]$AssignWorkerCostManagementReaderRole = $true,
     [Parameter(Mandatory = $false)][bool]$AssignWorkerBillingReaderRole = $true,
     [Parameter(Mandatory = $false)][bool]$AuthEnabled = $true,
+    [Parameter(Mandatory = $false)][bool]$WebEasyAuthEnabled = $false,
+    [Parameter(Mandatory = $false)][string[]]$WebEasyAuthAllowedClientApplications = @(),
+    [Parameter(Mandatory = $false)][string[]]$WebEasyAuthAllowedAudiences = @(),
+    [Parameter(Mandatory = $false)][bool]$IngestApiKeyEnabled = $true,
+    [Parameter(Mandatory = $false)][ValidateSet('shared-secret','entra')][string]$WorkerAuthMode = 'shared-secret',
+    [Parameter(Mandatory = $false)][bool]$FunctionEasyAuthEnabled = $false,
+    [Parameter(Mandatory = $false)][string]$WorkerAuthClientId,
+    [Parameter(Mandatory = $false)][string]$WorkerAuthTokenAudience,
+    [Parameter(Mandatory = $false)][string[]]$FunctionEasyAuthAllowedClientApplications = @(),
+    [Parameter(Mandatory = $false)][string[]]$FunctionEasyAuthAllowedAudiences = @(),
     [Parameter(Mandatory = $false)][string]$EntraTenantId,
     [Parameter(Mandatory = $false)][string]$EntraClientId,
     [Parameter(Mandatory = $false)][string]$EntraClientSecret,
@@ -323,6 +333,14 @@ function Test-TerraformVariableSupported([string]$VariableName) {
 
 function Add-BicepDeploymentParameter([string]$Name, [object]$Value, [switch]$RequiredWhenSet) {
     if (Test-BicepParameterSupported -ParameterName $Name) {
+        if ($Value -is [bool]) {
+            return @('--parameters', "$Name=$($Value.ToString().ToLowerInvariant())")
+        }
+
+        if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
+            return @('--parameters', "$Name=$($Value | ConvertTo-Json -Compress)")
+        }
+
         return @('--parameters', "$Name=$Value")
     }
 
@@ -843,7 +861,7 @@ if ([string]::IsNullOrWhiteSpace($SessionSecret)) {
     $SessionSecret = Resolve-WebAppSecretSettingValue -ResourceGroupName $ResourceGroupName -WebAppName $webAppName -SettingName 'SESSION_SECRET' -CurrentValue $SessionSecret
 }
 
-if ([string]::IsNullOrWhiteSpace($WorkerSharedSecret)) {
+if ($WorkerAuthMode -ne 'entra' -and [string]::IsNullOrWhiteSpace($WorkerSharedSecret)) {
     $WorkerSharedSecret = Resolve-WebAppSecretSettingValue -ResourceGroupName $ResourceGroupName -WebAppName $webAppName -SettingName 'CAPACITY_WORKER_SHARED_SECRET' -CurrentValue $WorkerSharedSecret
 }
 
@@ -906,6 +924,16 @@ function Deploy-Terraform {
         Set-TerraformVariableValue -Variables $tfVariables -Name 'create_function_private_endpoint' -Value ([bool]$CreateFunctionPrivateEndpoint)
         Set-TerraformVariableValue -Variables $tfVariables -Name 'worker_storage_public_network_access' -Value $WorkerStoragePublicNetworkAccess
         Set-TerraformVariableValue -Variables $tfVariables -Name 'create_worker_storage_private_endpoints' -Value ([bool]$CreateWorkerStoragePrivateEndpoints)
+        Set-TerraformVariableValue -Variables $tfVariables -Name 'web_easy_auth_enabled' -Value ([bool]$WebEasyAuthEnabled)
+        Set-TerraformVariableValue -Variables $tfVariables -Name 'web_easy_auth_allowed_client_applications' -Value $WebEasyAuthAllowedClientApplications
+        Set-TerraformVariableValue -Variables $tfVariables -Name 'web_easy_auth_allowed_audiences' -Value $WebEasyAuthAllowedAudiences
+        Set-TerraformVariableValue -Variables $tfVariables -Name 'ingest_api_key_enabled' -Value ([bool]$IngestApiKeyEnabled)
+        Set-TerraformVariableValue -Variables $tfVariables -Name 'worker_auth_mode' -Value $WorkerAuthMode
+        Set-TerraformVariableValue -Variables $tfVariables -Name 'function_easy_auth_enabled' -Value ([bool]$FunctionEasyAuthEnabled)
+        Set-TerraformVariableValue -Variables $tfVariables -Name 'worker_auth_client_id' -Value $WorkerAuthClientId
+        Set-TerraformVariableValue -Variables $tfVariables -Name 'worker_auth_token_audience' -Value $WorkerAuthTokenAudience
+        Set-TerraformVariableValue -Variables $tfVariables -Name 'function_easy_auth_allowed_client_applications' -Value $FunctionEasyAuthAllowedClientApplications
+        Set-TerraformVariableValue -Variables $tfVariables -Name 'function_easy_auth_allowed_audiences' -Value $FunctionEasyAuthAllowedAudiences
         if (-not [string]::IsNullOrWhiteSpace($QuotaManagementGroupId)){ $tfVariables['quota_management_group_id'] = $QuotaManagementGroupId }
         if (-not [string]::IsNullOrWhiteSpace($ExistingSqlServerName))                { $tfVariables['existing_sql_server_name'] = $ExistingSqlServerName }
         if (-not [string]::IsNullOrWhiteSpace($ExistingSqlServerResourceGroupName))   { $tfVariables['existing_sql_server_resource_group_name'] = $ExistingSqlServerResourceGroupName }
@@ -1021,6 +1049,16 @@ $deploymentArgs += @('--parameters', "functionPublicNetworkAccess=$FunctionPubli
 $deploymentArgs += @('--parameters', "createFunctionPrivateEndpoint=$($CreateFunctionPrivateEndpoint.ToString().ToLowerInvariant())")
 $deploymentArgs += @('--parameters', "workerStoragePublicNetworkAccess=$WorkerStoragePublicNetworkAccess")
 $deploymentArgs += @('--parameters', "createWorkerStoragePrivateEndpoints=$($CreateWorkerStoragePrivateEndpoints.ToString().ToLowerInvariant())")
+$deploymentArgs += Add-BicepDeploymentParameter -Name 'webEasyAuthEnabled' -Value $WebEasyAuthEnabled
+$deploymentArgs += Add-BicepDeploymentParameter -Name 'webEasyAuthAllowedClientApplications' -Value $WebEasyAuthAllowedClientApplications
+$deploymentArgs += Add-BicepDeploymentParameter -Name 'webEasyAuthAllowedAudiences' -Value $WebEasyAuthAllowedAudiences
+$deploymentArgs += Add-BicepDeploymentParameter -Name 'ingestApiKeyEnabled' -Value $IngestApiKeyEnabled
+$deploymentArgs += Add-BicepDeploymentParameter -Name 'workerAuthMode' -Value $WorkerAuthMode
+$deploymentArgs += Add-BicepDeploymentParameter -Name 'functionEasyAuthEnabled' -Value $FunctionEasyAuthEnabled
+$deploymentArgs += Add-BicepDeploymentParameter -Name 'workerAuthClientId' -Value $WorkerAuthClientId
+$deploymentArgs += Add-BicepDeploymentParameter -Name 'workerAuthTokenAudience' -Value $WorkerAuthTokenAudience
+$deploymentArgs += Add-BicepDeploymentParameter -Name 'functionEasyAuthAllowedClientApplications' -Value $FunctionEasyAuthAllowedClientApplications
+$deploymentArgs += Add-BicepDeploymentParameter -Name 'functionEasyAuthAllowedAudiences' -Value $FunctionEasyAuthAllowedAudiences
 
 $deploymentArgs += @('--parameters', "existingSqlServerName=$ExistingSqlServerName")
 $deploymentArgs += @('--parameters', "existingSqlServerResourceGroupName=$ExistingSqlServerResourceGroupName")

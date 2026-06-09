@@ -99,6 +99,15 @@ Security-sensitive networking defaults:
 
 When `create_worker_storage_private_endpoints = true`, Terraform creates blob, queue, table, and file private endpoints and private DNS zones for the Function worker host storage account. Existing storage reuse assumes the customer-approved private connectivity path is valid.
 
+Easy Auth deployment controls:
+
+- `web_easy_auth_enabled` enables App Service Authentication on the dashboard Web App.
+- `worker_auth_mode = "entra"` switches dashboard-to-worker calls from the worker shared secret to Microsoft Entra bearer tokens.
+- `function_easy_auth_enabled` enables App Service Authentication on the worker Function App.
+- `worker_auth_client_id` and `worker_auth_token_audience` identify the worker auth app registration/audience.
+- `web_easy_auth_allowed_client_applications` and `function_easy_auth_allowed_client_applications` should be set to the intended automation/caller client IDs before production rollout.
+- `ingest_api_key_enabled` defaults to `true`; keep it enabled until deployment/bootstrap automation can call internal endpoints with bearer tokens.
+
 Optional app registration management:
 
 - Set `manage_entra_web_redirect_uri = true` if you want Terraform to append the generated dashboard callback URL to the existing app registration's web redirect URIs.

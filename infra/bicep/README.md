@@ -65,6 +65,7 @@ Use this table during customer reviews to explain why each Azure service exists 
 - Dashboard subscription discovery RBAC can now be assigned automatically during infra deployment by passing `webReaderSubscriptionIds` to apply `Reader` on those subscriptions.
 - Dashboard quota-apply RBAC can now be assigned automatically during infra deployment by passing `webQuotaWriterSubscriptionIds` to apply `GroupQuota Request Operator` on those subscriptions.
 - Dashboard Entra sign-in can now be configured during infra deployment through app settings (`authEnabled`, `entraTenantId`, `entraClientId`, `entraClientSecret`, `adminGroupId`, optional `reportViewerGroupIds`, and optional `authRedirectUri`).
+- App Service Authentication / Easy Auth can be configured during infra deployment with `webEasyAuthEnabled`, `functionEasyAuthEnabled`, `workerAuthMode`, `workerAuthClientId`, `workerAuthTokenAudience`, and the optional allowed-audience/client-application arrays. Keep `workerAuthMode = 'shared-secret'` until the target environment has a worker auth app registration and bearer-token smoke tests are ready.
 - Split read/write identities in later phases (recommended) for least privilege.
 
 ## Networking parameters
@@ -78,6 +79,10 @@ Use this table during customer reviews to explain why each Azure service exists 
 - `createFunctionPrivateEndpoint` (`true` by default; creates `privatelink.azurewebsites.net` DNS and private endpoint for the worker)
 - `workerStoragePublicNetworkAccess` (`Disabled` by default; keep disabled when using worker storage private endpoints)
 - `createWorkerStoragePrivateEndpoints` (`true` by default; creates `privatelink.<service>.core.windows.net` DNS and private endpoints for blob, queue, table, and file)
+- `webEasyAuthEnabled` (`false` by default; enables Easy Auth on the Web App when the dashboard app registration and bearer automation path are ready)
+- `workerAuthMode` (`shared-secret` by default; set to `entra` with `functionEasyAuthEnabled = true` after the worker auth app registration is available)
+- `workerAuthClientId` and `workerAuthTokenAudience` (required for Function App Easy Auth / Entra worker auth)
+- `ingestApiKeyEnabled` (`true` by default; keep enabled until deployment/bootstrap automation no longer depends on `x-ingest-key`)
 
 Existing-network mode is intended for customer or separate-tenant testing where the network team owns VNet creation. Supply these names together:
 

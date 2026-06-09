@@ -156,13 +156,13 @@ Track these changes together before promoting Easy Auth to test or production:
 |---|---|---|
 | Web App Easy Auth | Validated manually on isolated Web App. App code can consume Easy Auth principal headers. | Add Bicep and Terraform App Service Authentication resources/settings for Web App, including allowed audiences and intended internal automation clients. |
 | Function App Easy Auth | Validated manually on isolated Function App. Web App can call worker with managed-identity bearer token. | Add Bicep and Terraform App Service Authentication resources/settings for Function App and document the worker audience app registration. |
-| Worker shared secret | Shared-secret mode remains default and backward compatible. | Make `CAPACITY_WORKER_AUTH_MODE=entra` the environment default only after dev/test validation, then stop prompting for `workerSharedSecret` / `worker_shared_secret` in Easy Auth mode. |
+| Worker shared secret | Shared-secret mode remains default and backward compatible; deployment scripts skip worker shared-secret prompts/resolution when `WorkerAuthMode=entra`. | Make `CAPACITY_WORKER_AUTH_MODE=entra` the environment default only after dev/test validation. |
 | Internal ingest key | `INGEST_API_KEY_ENABLED=false` was validated on isolated Web App with bearer-authenticated internal diagnostics. | Update deployment/bootstrap automation to use bearer tokens before removing or making `INGEST_API_KEY` optional in Easy Auth environments. |
 | Entra client secret | Still required by the current custom Express auth-code flow. | If Web App Easy Auth becomes the only browser sign-in path, remove the custom Express secret requirement and update prompts/docs accordingly. |
 | Session secret | Still required while Express sessions are used. | Re-evaluate after browser auth is fully delegated to Easy Auth and any remaining session-backed features are removed or redesigned. |
 | Key Vault secrets | Still used for `ENTRA_CLIENT_SECRET`, `INGEST_API_KEY`, `SESSION_SECRET`, and shared-secret fallback. | Remove only the secrets no longer referenced by app settings in the target auth mode; keep Key Vault for any remaining runtime secrets. |
 | Function worker storage private endpoints | Bicep and Terraform now include default-on worker storage private endpoint support for blob, queue, table, and file services. | Deploy and validate DNS/connectivity in dev/test before disabling or restricting public storage access in existing environments. |
-| Deployment docs | This tracker and infra READMEs identify the auth/storage changes. | Update top-level README, installer prompts, customer prereqs, and deployment examples when the IaC Easy Auth resources are added. |
+| Deployment docs | This tracker, top-level README, infra READMEs, installer notes, and locked-down prereqs identify the auth/storage changes. | Update release notes and customer examples again after dev/test Easy Auth deployment validation. |
 
 ## Checklist for tomorrow
 
@@ -174,12 +174,12 @@ Completed before stopping:
 
 Still needed:
 
-- [ ] Decide whether to encode Web App and Function App Easy Auth in this branch now or keep the current branch as an isolated proof and open a follow-up branch for IaC auth resources.
-- [ ] Add Bicep `authsettingsV2` resources for the Web App and Function App if this branch should own the full Easy Auth rollout.
-- [ ] Add matching Terraform `auth_settings_v2` blocks/resources for the Web App and Function App, including allowed audiences and allowed client applications.
+- [x] Decide whether to encode Web App and Function App Easy Auth in this branch now or keep the current branch as an isolated proof and open a follow-up branch for IaC auth resources. Decision: this branch owns the full Easy Auth and infra deployment changes.
+- [x] Add Bicep `authsettingsV2` resources for the Web App and Function App.
+- [x] Add matching Terraform `auth_settings_v2` blocks/resources for the Web App and Function App, including allowed audiences and allowed client applications.
 - [ ] Define the production-safe internal automation caller for bearer-authenticated internal endpoints; do not leave the isolated Azure CLI public client ID as the production allow-list.
-- [ ] Update `scripts/deploy-infra.ps1` and `scripts/Start-CapacityDeployment.ps1` with an explicit auth mode selection before changing any secret prompts.
-- [ ] Once an Easy Auth deployment mode exists, make `workerSharedSecret` / `worker_shared_secret` prompts conditional: required for `shared-secret`, skipped for `entra`.
+- [x] Update `scripts/deploy-infra.ps1` and `scripts/Start-CapacityDeployment.ps1` with an explicit auth mode selection before changing any secret prompts.
+- [x] Once an Easy Auth deployment mode exists, make `workerSharedSecret` / `worker_shared_secret` prompts conditional: required for `shared-secret`, skipped for `entra`.
 - [ ] Once bootstrap automation can call internal endpoints with bearer tokens, make `INGEST_API_KEY` optional for Easy Auth deployments and keep it required for shared-secret/internal-key deployments.
 - [ ] Decide whether Web App Easy Auth fully replaces the custom Express auth-code flow. If yes, remove the `ENTRA_CLIENT_SECRET` prompt/secret requirement for that mode and verify browser sign-in plus group claims through Easy Auth principal headers.
 - [ ] Decide whether Express sessions are still required after Easy Auth becomes the browser sign-in path. If no, plan removal of `SESSION_SECRET`; if yes, keep it in Key Vault.

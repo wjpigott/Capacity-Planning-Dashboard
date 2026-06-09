@@ -57,7 +57,7 @@ This project is licensed under the terms of the [MIT License](LICENSE).
 
 The current-state diagram reflects what is deployed now: App Service hosting the static UI + Express API, Azure SQL with Entra-only auth, managed identity database access, Key Vault RBAC integration, Function App worker private ingress through Private Link, and App Insights/Log Analytics.
 
-The `feature/function-worker-auth-hardening` branch also validates the next security posture in an isolated app pair: Web App Easy Auth, Function App Easy Auth, bearer-token internal diagnostics, Entra-authenticated dashboard-to-worker calls, and worker storage private endpoint support in Bicep/Terraform. The Easy Auth platform settings were validated manually on the isolated resources and still need to be encoded as first-class Bicep/Terraform resources before this becomes the default deployment path.
+The `feature/function-worker-auth-hardening` branch also validates the next security posture in an isolated app pair: Web App Easy Auth, Function App Easy Auth, bearer-token internal diagnostics, Entra-authenticated dashboard-to-worker calls, and worker storage private endpoint support. Bicep and Terraform now expose Easy Auth settings, but production rollout still needs environment-specific client/audience allow-lists and bootstrap automation validation before this becomes the default deployment path.
 
 The next execution split is now scaffolded in-repo: a dedicated Azure Functions PowerShell 7 worker host under `functions/CapacityWorker/` for live placement and future quota move/apply orchestration.
 
@@ -130,7 +130,7 @@ Troubleshooting `Report access is not enabled for your account`:
 - [x] Family filter ingestion — optional; set `INGEST_QUOTA_FAMILY_FILTERS` to a comma-separated list to restrict, or omit entirely to ingest all VM families
 - [x] Ingestion scheduler (DB-backed admin settings with environment fallback)
 - [ ] Move recurring scheduler execution to Function App TimerTrigger jobs (ingestion + live placement)
-- [~] Harden Function App worker ingress with App Service Authentication / Microsoft Entra auth: app code and isolated smoke tests are complete on the auth-hardening branch; Bicep/Terraform App Service Authentication resources and promotion runbooks remain
+- [~] Harden Function App worker ingress with App Service Authentication / Microsoft Entra auth: app code, Bicep/Terraform knobs, and isolated smoke tests are complete on the auth-hardening branch; production allow-lists, bootstrap bearer automation, and promotion runbooks remain
 - [ ] Retry/backoff and dead-letter behavior for ingestion failures
 
 #### API and analytics
@@ -928,7 +928,7 @@ Required for deployed dashboard operation:
 - `AUTH_REDIRECT_URI` (OAuth callback URI; defaults to local dev when omitted)
 - `INGEST_API_KEY` (required only for internal ingestion/bootstrap routes)
 
-Easy Auth hardening mode changes these requirements, but that mode is not yet the default IaC path. In the isolated validation, `INGEST_API_KEY_ENABLED=false` forced internal diagnostics/bootstrap-style traffic to use `Authorization: Bearer` instead of the custom `x-ingest-key` header. Do not remove `INGEST_API_KEY` from existing environments until bootstrap/deployment automation has a verified bearer-token path.
+Easy Auth hardening mode changes these requirements, but that mode is not yet the default deployment path. In the isolated validation, `INGEST_API_KEY_ENABLED=false` forced internal diagnostics/bootstrap-style traffic to use `Authorization: Bearer` instead of the custom `x-ingest-key` header. Do not remove `INGEST_API_KEY` from existing environments until bootstrap/deployment automation has a verified bearer-token path.
 
 Entra app registration token configuration:
 

@@ -146,6 +146,40 @@ param assignWorkerBillingReaderRole bool = true
 @description('Enable Microsoft Entra sign-in for the dashboard app routes.')
 param authEnabled bool = true
 
+@description('Enable App Service Authentication / Easy Auth on the dashboard Web App. Use with bearer-authenticated internal automation after validation.')
+param webEasyAuthEnabled bool = false
+
+@description('Client application IDs allowed by Web App Easy Auth for bearer-authenticated API/internal calls. Leave empty for normal browser sign-in without an app allow-list.')
+param webEasyAuthAllowedClientApplications array = []
+
+@description('Optional explicit Web App Easy Auth token audiences. Defaults to api://<entraClientId> and <entraClientId> when omitted.')
+param webEasyAuthAllowedAudiences array = []
+
+@description('Allow x-ingest-key fallback for internal routes. Set false only after Web App Easy Auth bearer automation is validated.')
+param ingestApiKeyEnabled bool = true
+
+@description('Dashboard-to-worker authentication mode.')
+@allowed([
+  'shared-secret'
+  'entra'
+])
+param workerAuthMode string = 'shared-secret'
+
+@description('Enable App Service Authentication / Easy Auth on the worker Function App. Required for workerAuthMode=entra.')
+param functionEasyAuthEnabled bool = false
+
+@description('Microsoft Entra application (client) ID used by the worker Function App Easy Auth audience.')
+param workerAuthClientId string = ''
+
+@description('Token audience used by the dashboard Web App when acquiring a Microsoft Entra token for the worker Function App.')
+param workerAuthTokenAudience string = ''
+
+@description('Client application IDs allowed by Function App Easy Auth. Use the intended dashboard managed identity/client IDs for production.')
+param functionEasyAuthAllowedClientApplications array = []
+
+@description('Optional explicit Function App Easy Auth token audiences. Defaults to workerAuthTokenAudience when omitted.')
+param functionEasyAuthAllowedAudiences array = []
+
 @description('Microsoft Entra tenant ID used by the dashboard auth flow.')
 param entraTenantId string = ''
 
@@ -192,6 +226,15 @@ var keyVaultPrivateDnsZoneName = startsWith(keyVaultDnsSuffix, 'vaultcore.')
 var keyVaultPrivateDnsZoneVnetLinkName = 'pdz-link-kv-capdash-${environment}-${workloadSuffix}'
 var functionPrivateDnsZoneName = 'privatelink.azurewebsites.net'
 var functionPrivateDnsZoneVnetLinkName = 'pdz-link-func-capdash-${environment}-${workloadSuffix}'
+var entraLoginEndpoint = az.environment().authentication.loginEndpoint
+var entraIssuer = empty(entraTenantId) ? '' : '${entraLoginEndpoint}${entraTenantId}/v2.0'
+var effectiveWebEasyAuthAllowedAudiences = empty(webEasyAuthAllowedAudiences) && !empty(entraClientId) ? [
+  'api://${entraClientId}'
+  entraClientId
+] : webEasyAuthAllowedAudiences
+var effectiveFunctionEasyAuthAllowedAudiences = empty(functionEasyAuthAllowedAudiences) && !empty(workerAuthTokenAudience) ? [
+  workerAuthTokenAudience
+] : functionEasyAuthAllowedAudiences
 var workerStoragePrivateEndpointServices = [
   'blob'
   'queue'
@@ -238,6 +281,7 @@ var ingestApiKeyKeyVaultReference = '@Microsoft.KeyVault(SecretUri=${effectiveKe
 var sessionSecretKeyVaultReference = '@Microsoft.KeyVault(SecretUri=${effectiveKeyVaultUri}secrets/${sessionSecretSecretName})'
 var workerSharedSecretKeyVaultReference = empty(workerSharedSecret) ? '' : '@Microsoft.KeyVault(SecretUri=${effectiveKeyVaultUri}secrets/${workerSharedSecretSecretName})'
 var entraClientSecretKeyVaultReference = empty(entraClientSecret) ? '' : '@Microsoft.KeyVault(SecretUri=${effectiveKeyVaultUri}secrets/${entraClientSecretSecretName})'
+var effectiveWorkerSharedSecretReference = workerAuthMode == 'entra' ? '' : workerSharedSecretKeyVaultReference
 
 resource vnet 'Microsoft.Network/virtualNetworks@2023-09-01' = if (!useExistingVirtualNetwork) {
   name: vnetName
@@ -453,7 +497,23 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
         }
         {
           name: 'CAPACITY_WORKER_SHARED_SECRET'
-          value: workerSharedSecretKeyVaultReference
+          value: effectiveWorkerSharedSecretReference
+        }
+        {
+          name: 'CAPACITY_WORKER_AUTH_MODE'
+          value: workerAuthMode
+        }
+        {
+          name: 'CAPACITY_WORKER_TOKEN_AUDIENCE'
+          value: workerAuthTokenAudience
+        }
+        {
+          name: 'INGEST_EASY_AUTH_BEARER_ENABLED'
+          value: string(webEasyAuthEnabled)
+        }
+        {
+          name: 'INGEST_API_KEY_ENABLED'
+          value: string(ingestApiKeyEnabled)
         }
         {
           name: 'INGEST_API_KEY'
@@ -531,6 +591,39 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
   ]
 }
 
+resource webAppAuthSettings 'Microsoft.Web/sites/config@2022-03-01' = if (webEasyAuthEnabled) {
+  parent: webApp
+  name: 'authsettingsV2'
+  properties: {
+    platform: {
+      enabled: true
+      runtimeVersion: '~1'
+    }
+    globalValidation: {
+      requireAuthentication: true
+      unauthenticatedClientAction: 'Return401'
+      redirectToProvider: 'azureActiveDirectory'
+    }
+    identityProviders: {
+      azureActiveDirectory: {
+        enabled: true
+        registration: {
+          clientId: entraClientId
+          clientSecretSettingName: 'ENTRA_CLIENT_SECRET'
+          openIdIssuer: entraIssuer
+        }
+        validation: {
+          allowedAudiences: effectiveWebEasyAuthAllowedAudiences
+          defaultAuthorizationPolicy: {
+            allowedApplications: webEasyAuthAllowedClientApplications
+            allowedPrincipals: {}
+          }
+        }
+      }
+    }
+  }
+}
+
 resource webAppVnetIntegration 'Microsoft.Web/sites/networkConfig@2023-12-01' = {
   parent: webApp
   name: 'virtualNetwork'
@@ -588,7 +681,7 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         }
         {
           name: 'WORKER_SHARED_SECRET'
-          value: workerSharedSecretKeyVaultReference
+          value: effectiveWorkerSharedSecretReference
         }
         {
           name: 'WEBSITE_DNS_SERVER'
@@ -604,6 +697,38 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
   dependsOn: [
     vnet
   ]
+}
+
+resource functionAppAuthSettings 'Microsoft.Web/sites/config@2022-03-01' = if (functionEasyAuthEnabled) {
+  parent: functionApp
+  name: 'authsettingsV2'
+  properties: {
+    platform: {
+      enabled: true
+      runtimeVersion: '~1'
+    }
+    globalValidation: {
+      requireAuthentication: true
+      unauthenticatedClientAction: 'Return401'
+      redirectToProvider: 'azureActiveDirectory'
+    }
+    identityProviders: {
+      azureActiveDirectory: {
+        enabled: true
+        registration: {
+          clientId: workerAuthClientId
+          openIdIssuer: entraIssuer
+        }
+        validation: {
+          allowedAudiences: effectiveFunctionEasyAuthAllowedAudiences
+          defaultAuthorizationPolicy: {
+            allowedApplications: functionEasyAuthAllowedClientApplications
+            allowedPrincipals: {}
+          }
+        }
+      }
+    }
+  }
 }
 
 resource functionAppVnetIntegration 'Microsoft.Web/sites/networkConfig@2023-12-01' = {

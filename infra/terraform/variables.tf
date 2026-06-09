@@ -286,6 +286,70 @@ variable "auth_enabled" {
   default     = true
 }
 
+variable "web_easy_auth_enabled" {
+  type        = bool
+  description = "Enable App Service Authentication / Easy Auth on the dashboard Web App. Use with bearer-authenticated internal automation after validation."
+  default     = false
+}
+
+variable "web_easy_auth_allowed_client_applications" {
+  type        = list(string)
+  description = "Client application IDs allowed by Web App Easy Auth for bearer-authenticated API/internal calls. Leave empty for normal browser sign-in without an app allow-list."
+  default     = []
+}
+
+variable "web_easy_auth_allowed_audiences" {
+  type        = list(string)
+  description = "Optional explicit Web App Easy Auth token audiences. Defaults to api://<entra_client_id> and <entra_client_id> when omitted."
+  default     = []
+}
+
+variable "ingest_api_key_enabled" {
+  type        = bool
+  description = "Allow x-ingest-key fallback for internal routes. Set false only after Web App Easy Auth bearer automation is validated."
+  default     = true
+}
+
+variable "worker_auth_mode" {
+  type        = string
+  description = "Dashboard-to-worker authentication mode."
+  default     = "shared-secret"
+  validation {
+    condition     = contains(["shared-secret", "entra"], var.worker_auth_mode)
+    error_message = "worker_auth_mode must be shared-secret or entra."
+  }
+}
+
+variable "function_easy_auth_enabled" {
+  type        = bool
+  description = "Enable App Service Authentication / Easy Auth on the worker Function App. Required for worker_auth_mode=entra."
+  default     = false
+}
+
+variable "worker_auth_client_id" {
+  type        = string
+  description = "Microsoft Entra application client ID used by the worker Function App Easy Auth audience."
+  default     = ""
+}
+
+variable "worker_auth_token_audience" {
+  type        = string
+  description = "Token audience used by the dashboard Web App when acquiring a Microsoft Entra token for the worker Function App."
+  default     = ""
+}
+
+variable "function_easy_auth_allowed_client_applications" {
+  type        = list(string)
+  description = "Client application IDs allowed by Function App Easy Auth. Use the intended dashboard managed identity/client IDs for production."
+  default     = []
+}
+
+variable "function_easy_auth_allowed_audiences" {
+  type        = list(string)
+  description = "Optional explicit Function App Easy Auth token audiences. Defaults to worker_auth_token_audience when omitted."
+  default     = []
+}
+
 variable "entra_tenant_id" {
   type        = string
   description = "Microsoft Entra tenant ID for the dashboard auth flow"

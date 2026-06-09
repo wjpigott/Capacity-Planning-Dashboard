@@ -126,11 +126,16 @@ Entra app registration client ID
 Entra app registration client secret
 Auth redirect URI for the Entra app registration
 Allow Terraform wrapper to add the generated callback URI to the app registration?
+Enable App Service Authentication / Easy Auth on the Web App?
+Optional Web Easy Auth allowed client application IDs for bearer automation
+Keep x-ingest-key enabled for internal bootstrap/ingestion fallback?
 ```
 
 Suggested demo answer:
 
 - Enable auth: `Y`.
+- Web Easy Auth: keep `N` for the stable shared-secret demo path; choose `Y` only when testing the full Easy Auth hardening branch.
+- Keep `x-ingest-key` enabled until bootstrap automation has a validated bearer-token path.
 - Redirect URI: accept the generated value unless the customer has a specific app hostname plan.
 - Terraform app registration update: answer `Y` only if the deployment identity has permission to update the app registration redirect URI.
 
@@ -234,6 +239,7 @@ Expected prompts:
 ```text
 Provide an existing INGEST_API_KEY instead of letting deployment resolve/generate one?
 Provide an existing SESSION_SECRET instead of letting deployment resolve/generate one?
+Dashboard-to-worker authentication mode?
 Worker shared secret handling?
 Deploy the dashboard web package after infrastructure succeeds?
 Deploy the worker package after infrastructure succeeds?
@@ -243,7 +249,8 @@ Run database bootstrap through the deployed web app?
 Suggested demo answers:
 
 - Let deployment resolve or generate `INGEST_API_KEY` and `SESSION_SECRET` unless the customer has a secret-management standard.
-- Worker shared secret: `Generate` for the current shared-secret deployment mode; this should change to `Skip` only after Easy Auth is represented in Bicep/Terraform and the target environment has passed bearer-auth smoke tests.
+- Worker auth mode: use `shared-secret` for the stable demo path, or `entra` only when the worker auth app registration, Function App Easy Auth audience, and bearer smoke tests are part of the demo.
+- Worker shared secret: `Generate` for `shared-secret`; skipped automatically for `entra`.
 - Deploy web app: `Y`.
 - Deploy worker app: `Y`.
 - Database bootstrap: `Y` for a clean environment.

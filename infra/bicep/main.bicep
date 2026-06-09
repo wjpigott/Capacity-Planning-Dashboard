@@ -149,6 +149,13 @@ param authEnabled bool = true
 @description('Enable App Service Authentication / Easy Auth on the dashboard Web App. Use with bearer-authenticated internal automation after validation.')
 param webEasyAuthEnabled bool = false
 
+@description('Unauthenticated action for Web App Easy Auth. Use RedirectToLoginPage for browser sign-in, or Return401 for API-only smoke probes.')
+@allowed([
+  'RedirectToLoginPage'
+  'Return401'
+])
+param webEasyAuthUnauthenticatedClientAction string = 'Return401'
+
 @description('Client application IDs allowed by Web App Easy Auth for bearer-authenticated API/internal calls. Leave empty for normal browser sign-in without an app allow-list.')
 param webEasyAuthAllowedClientApplications array = []
 
@@ -168,10 +175,10 @@ param workerAuthMode string = 'shared-secret'
 @description('Enable App Service Authentication / Easy Auth on the worker Function App. Required for workerAuthMode=entra.')
 param functionEasyAuthEnabled bool = false
 
-@description('Microsoft Entra application (client) ID used by the worker Function App Easy Auth audience.')
+@description('Microsoft Entra application (client) ID used by the worker Function App Easy Auth audience. Defaults to entraClientId when blank so one app registration can secure both Web App and Function App.')
 param workerAuthClientId string = ''
 
-@description('Token audience used by the dashboard Web App when acquiring a Microsoft Entra token for the worker Function App.')
+@description('Token audience used by the dashboard Web App when acquiring a Microsoft Entra token for the worker Function App. Defaults to api://<entraClientId> when blank.')
 param workerAuthTokenAudience string = ''
 
 @description('Client application IDs allowed by Function App Easy Auth. Use the intended dashboard managed identity/client IDs for production.')
@@ -228,13 +235,27 @@ var functionPrivateDnsZoneName = 'privatelink.azurewebsites.net'
 var functionPrivateDnsZoneVnetLinkName = 'pdz-link-func-capdash-${environment}-${workloadSuffix}'
 var entraLoginEndpoint = az.environment().authentication.loginEndpoint
 var entraIssuer = empty(entraTenantId) ? '' : '${entraLoginEndpoint}${entraTenantId}/v2.0'
+var effectiveWorkerAuthClientId = empty(workerAuthClientId) ? entraClientId : workerAuthClientId
+var effectiveWorkerAuthTokenAudience = empty(workerAuthTokenAudience) && !empty(effectiveWorkerAuthClientId) ? 'api://${effectiveWorkerAuthClientId}' : workerAuthTokenAudience
 var effectiveWebEasyAuthAllowedAudiences = empty(webEasyAuthAllowedAudiences) && !empty(entraClientId) ? [
   'api://${entraClientId}'
   entraClientId
 ] : webEasyAuthAllowedAudiences
-var effectiveFunctionEasyAuthAllowedAudiences = empty(functionEasyAuthAllowedAudiences) && !empty(workerAuthTokenAudience) ? [
-  workerAuthTokenAudience
+var effectiveFunctionEasyAuthAllowedAudiences = empty(functionEasyAuthAllowedAudiences) && !empty(effectiveWorkerAuthTokenAudience) ? [
+  effectiveWorkerAuthTokenAudience
 ] : functionEasyAuthAllowedAudiences
+var webEasyAuthValidation = union({ allowedAudiences: effectiveWebEasyAuthAllowedAudiences }, !empty(webEasyAuthAllowedClientApplications) ? {
+  defaultAuthorizationPolicy: {
+    allowedApplications: webEasyAuthAllowedClientApplications
+    allowedPrincipals: {}
+  }
+} : {})
+var functionEasyAuthValidation = union({ allowedAudiences: effectiveFunctionEasyAuthAllowedAudiences }, !empty(functionEasyAuthAllowedClientApplications) ? {
+  defaultAuthorizationPolicy: {
+    allowedApplications: functionEasyAuthAllowedClientApplications
+    allowedPrincipals: {}
+  }
+} : {})
 var workerStoragePrivateEndpointServices = [
   'blob'
   'queue'
@@ -505,7 +526,7 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
         }
         {
           name: 'CAPACITY_WORKER_TOKEN_AUDIENCE'
-          value: workerAuthTokenAudience
+          value: effectiveWorkerAuthTokenAudience
         }
         {
           name: 'INGEST_EASY_AUTH_BEARER_ENABLED'
@@ -601,7 +622,7 @@ resource webAppAuthSettings 'Microsoft.Web/sites/config@2022-03-01' = if (webEas
     }
     globalValidation: {
       requireAuthentication: true
-      unauthenticatedClientAction: 'Return401'
+      unauthenticatedClientAction: webEasyAuthUnauthenticatedClientAction
       redirectToProvider: 'azureActiveDirectory'
     }
     identityProviders: {
@@ -612,13 +633,7 @@ resource webAppAuthSettings 'Microsoft.Web/sites/config@2022-03-01' = if (webEas
           clientSecretSettingName: 'ENTRA_CLIENT_SECRET'
           openIdIssuer: entraIssuer
         }
-        validation: {
-          allowedAudiences: effectiveWebEasyAuthAllowedAudiences
-          defaultAuthorizationPolicy: {
-            allowedApplications: webEasyAuthAllowedClientApplications
-            allowedPrincipals: {}
-          }
-        }
+        validation: webEasyAuthValidation
       }
     }
   }
@@ -716,16 +731,10 @@ resource functionAppAuthSettings 'Microsoft.Web/sites/config@2022-03-01' = if (f
       azureActiveDirectory: {
         enabled: true
         registration: {
-          clientId: workerAuthClientId
+          clientId: effectiveWorkerAuthClientId
           openIdIssuer: entraIssuer
         }
-        validation: {
-          allowedAudiences: effectiveFunctionEasyAuthAllowedAudiences
-          defaultAuthorizationPolicy: {
-            allowedApplications: functionEasyAuthAllowedClientApplications
-            allowedPrincipals: {}
-          }
-        }
+        validation: functionEasyAuthValidation
       }
     }
   }

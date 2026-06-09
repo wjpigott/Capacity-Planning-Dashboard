@@ -1,6 +1,6 @@
 {
   "name": "capacity-planning-dashboard",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "private": true,
   "description": "Native Azure capacity and quota planning dashboard: VM SKU availability, live placement scoring, quota movement orchestration, and analytics.",
   "author": "wjpigott and Capacity Dashboard contributors",

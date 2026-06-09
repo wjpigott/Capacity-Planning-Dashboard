@@ -29,6 +29,7 @@ locals {
   worker_storage_private_dns_zone_vnet_link      = "pdz-link-stfunc-capdash-${var.environment}-${var.workload_suffix}"
   worker_storage_private_endpoint_services       = toset(["blob", "queue", "table", "file"])
   effective_auth_redirect_uri                    = var.auth_redirect_uri != "" ? var.auth_redirect_uri : "https://${local.web_app_name}.azurewebsites.net/auth/callback"
+  effective_easy_auth_redirect_uri               = "https://${local.web_app_name}.azurewebsites.net/.auth/login/aad/callback"
   effective_sql_server_resource_group_name       = var.existing_sql_server_resource_group_name != "" ? var.existing_sql_server_resource_group_name : azurerm_resource_group.rg.name
   effective_sql_server_name                      = local.use_existing_sql_server ? var.existing_sql_server_name : local.sql_server_name
   effective_sql_server_fqdn                      = endswith(local.effective_sql_server_name, ".database.windows.net") ? local.effective_sql_server_name : "${local.effective_sql_server_name}.database.windows.net"
@@ -40,8 +41,10 @@ locals {
   effective_worker_storage_resource_group_name   = var.existing_worker_storage_account_resource_group_name != "" ? var.existing_worker_storage_account_resource_group_name : azurerm_resource_group.rg.name
   effective_worker_storage_name                  = local.use_existing_worker_storage_account ? var.existing_worker_storage_account_name : local.function_storage_name
   effective_worker_shared_secret_reference       = var.worker_auth_mode == "entra" ? "" : local.worker_shared_secret_key_vault_reference
+  effective_worker_auth_client_id                = trimspace(var.worker_auth_client_id) != "" ? var.worker_auth_client_id : var.entra_client_id
+  effective_worker_auth_token_audience           = trimspace(var.worker_auth_token_audience) != "" ? var.worker_auth_token_audience : (trimspace(local.effective_worker_auth_client_id) != "" ? "api://${local.effective_worker_auth_client_id}" : "")
   effective_web_easy_auth_allowed_audiences      = length(var.web_easy_auth_allowed_audiences) > 0 ? var.web_easy_auth_allowed_audiences : compact(["api://${var.entra_client_id}", var.entra_client_id])
-  effective_function_easy_auth_allowed_audiences = length(var.function_easy_auth_allowed_audiences) > 0 ? var.function_easy_auth_allowed_audiences : compact([var.worker_auth_token_audience])
+  effective_function_easy_auth_allowed_audiences = length(var.function_easy_auth_allowed_audiences) > 0 ? var.function_easy_auth_allowed_audiences : compact([local.effective_worker_auth_token_audience])
   entra_tenant_auth_endpoint                     = var.entra_tenant_id != "" ? "https://login.microsoftonline.com/${var.entra_tenant_id}/v2.0" : ""
   effective_virtual_network_resource_group_name  = var.existing_virtual_network_resource_group_name != "" ? var.existing_virtual_network_resource_group_name : azurerm_resource_group.rg.name
   effective_virtual_network_name                 = local.use_existing_virtual_network ? var.existing_virtual_network_name : local.vnet_name
@@ -293,7 +296,7 @@ resource "azurerm_windows_web_app" "web" {
     "CAPACITY_RECOMMEND_WORKER_TIMEOUT_MS"  = "180000"
     "CAPACITY_WORKER_SHARED_SECRET"         = local.effective_worker_shared_secret_reference
     "CAPACITY_WORKER_AUTH_MODE"             = var.worker_auth_mode
-    "CAPACITY_WORKER_TOKEN_AUDIENCE"        = var.worker_auth_token_audience
+    "CAPACITY_WORKER_TOKEN_AUDIENCE"        = local.effective_worker_auth_token_audience
     "INGEST_EASY_AUTH_BEARER_ENABLED"       = tostring(var.web_easy_auth_enabled)
     "INGEST_API_KEY_ENABLED"                = tostring(var.ingest_api_key_enabled)
     "INGEST_API_KEY"                        = local.ingest_api_key_key_vault_reference
@@ -327,7 +330,7 @@ resource "azurerm_windows_web_app" "web" {
       runtime_version        = "~1"
       require_authentication = true
       require_https          = true
-      unauthenticated_action = "Return401"
+      unauthenticated_action = var.web_easy_auth_unauthenticated_action
       default_provider       = "azureactivedirectory"
 
       login {}
@@ -337,7 +340,7 @@ resource "azurerm_windows_web_app" "web" {
         client_secret_setting_name = "ENTRA_CLIENT_SECRET"
         tenant_auth_endpoint       = local.entra_tenant_auth_endpoint
         allowed_audiences          = local.effective_web_easy_auth_allowed_audiences
-        allowed_applications       = var.web_easy_auth_allowed_client_applications
+        allowed_applications       = length(var.web_easy_auth_allowed_client_applications) > 0 ? var.web_easy_auth_allowed_client_applications : null
       }
     }
   }
@@ -349,7 +352,7 @@ module "dashboard_web_redirect_uris" {
 
   client_id              = var.entra_client_id
   generated_redirect_uri = local.effective_auth_redirect_uri
-  extra_redirect_uris    = var.extra_entra_web_redirect_uris
+  extra_redirect_uris    = distinct(concat(var.extra_entra_web_redirect_uris, var.web_easy_auth_enabled ? [local.effective_easy_auth_redirect_uri] : []))
 
   depends_on = [azurerm_windows_web_app.web]
 }
@@ -417,10 +420,10 @@ resource "azurerm_windows_function_app" "worker" {
       login {}
 
       active_directory_v2 {
-        client_id            = var.worker_auth_client_id
+        client_id            = local.effective_worker_auth_client_id
         tenant_auth_endpoint = local.entra_tenant_auth_endpoint
         allowed_audiences    = local.effective_function_easy_auth_allowed_audiences
-        allowed_applications = var.function_easy_auth_allowed_client_applications
+        allowed_applications = length(var.function_easy_auth_allowed_client_applications) > 0 ? var.function_easy_auth_allowed_client_applications : null
       }
     }
   }

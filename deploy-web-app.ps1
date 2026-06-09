@@ -26,6 +26,31 @@ function Invoke-NativeCommandAllowStderr([scriptblock]$Command) {
     }
 }
 
+function Test-LatestWebDeploymentSucceeded([string]$ResourceGroup, [string]$AppName) {
+    for ($attempt = 1; $attempt -le 6; $attempt++) {
+        $latestDeploymentJson = Invoke-NativeCommandAllowStderr {
+            az webapp log deployment list --resource-group $ResourceGroup --name $AppName --query '[0]' --output json 2>$null
+        }
+
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($latestDeploymentJson)) {
+            try {
+                $latestDeployment = $latestDeploymentJson | ConvertFrom-Json
+                if ($latestDeployment.status -eq 4) {
+                    Write-Host "Latest Kudu deployment completed successfully: $($latestDeployment.id)"
+                    return $true
+                }
+            }
+            catch {
+                Write-Warning "Could not parse latest deployment status: $($_.Exception.Message)"
+            }
+        }
+
+        Start-Sleep -Seconds 10
+    }
+
+    return $false
+}
+
 if (-not $SkipTests) {
     if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
         throw "npm was not found on PATH. Install Node.js LTS so npm is available, or rerun deploy-web-app.ps1 with -SkipTests if tests were already run elsewhere."
@@ -196,6 +221,14 @@ if ($LASTEXITCODE -eq 0) {
 } else {
     Write-Host "Deployment failed with exit code $LASTEXITCODE"
     Write-Host "Output: $deployResult"
+    if (Test-LatestWebDeploymentSucceeded -ResourceGroup $ResourceGroup -AppName $AppName) {
+        Write-Warning "Azure CLI returned a deployment error, but Kudu reports the latest deployment succeeded. Continuing."
+        Write-Host ""
+        Write-Host "Deployment complete!"
+        Write-Host "Test the app at: https://$AppName.azurewebsites.net/"
+        return
+    }
+
     throw "Azure App Service zip deployment failed with exit code $LASTEXITCODE."
 }
 

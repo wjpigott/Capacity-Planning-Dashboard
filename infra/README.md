@@ -65,6 +65,7 @@ Both implementations can also reuse existing shared platform dependencies instea
 - SQL defaults to private-access mode (`sqlPublicNetworkAccess = 'Disabled'`) and is reachable from App Service/Function App via VNet integration and private endpoint.
 - Key Vault defaults to private-access mode (`keyVaultPublicNetworkAccess = 'Disabled'`) and is reachable from App Service/Function App via VNet integration and private endpoint.
 - Function App worker ingress defaults to private-access mode (`functionPublicNetworkAccess = 'Disabled'`) and is reachable from the dashboard Web App through `privatelink.azurewebsites.net` when the Function private endpoint is created.
+- For package publishing from a public deployment workstation, the deployment wrapper can temporarily set Function App public network access to `Enabled` while `scripts/deploy-worker.ps1` publishes the zip package, then restore the configured locked-down value immediately afterward. Run package publishing from a private-network-connected host instead when temporary public access is not allowed.
 - Function worker storage defaults to private-access mode (`workerStoragePublicNetworkAccess` / `worker_storage_public_network_access = 'Disabled'`) and is reachable from the Function App through private endpoints when worker storage private endpoints are created.
 - Customer-managed shared services can now be attached instead of created by passing the existing-resource parameters through `scripts/deploy-infra.ps1` or the raw Bicep/Terraform inputs.
 - Customer-managed virtual networks can now be attached by passing existing VNet/subnet names. In this mode the templates do not create or modify the VNet or its subnets, which is intended for customer or separate-tenant testing where network ownership is centralized.
@@ -74,6 +75,8 @@ Both implementations can also reuse existing shared platform dependencies instea
 - Dashboard subscription discovery RBAC can now be assigned automatically during infra deployment by passing `webReaderManagementGroupNames` for larger estates, with `webReaderSubscriptionIds` kept as the fallback for customers without management groups.
 - Dashboard quota-apply RBAC can now be assigned automatically during infra deployment by passing `webQuotaWriterManagementGroupNames` for larger estates, with `webQuotaWriterSubscriptionIds` kept as the fallback for customers without management groups.
 - Dashboard Entra sign-in can now be configured during infra deployment through app settings (`authEnabled`, `entraTenantId`, `entraClientId`, `entraClientSecret`, `adminGroupId`, optional `reportViewerGroupIds`, and optional `authRedirectUri`).
+- Web App Easy Auth browser sign-in requires the app registration to include the App Service callback URI `https://<web-app>.azurewebsites.net/.auth/login/aad/callback` and to enable ID token issuance. The dashboard's custom Express callback URI remains `https://<web-app>.azurewebsites.net/auth/callback` while that flow is still present.
+- When `workerAuthMode=entra` and Function Easy Auth is enabled, `scripts/deploy-infra.ps1` patches Function Easy Auth after infrastructure deployment to allow the Web App managed identity application/client ID as a caller.
 - Split read/write identities in later phases (recommended) for least privilege.
 
 ---
@@ -116,6 +119,11 @@ Use these deploy-script switches when the customer already has shared Azure depe
 Providing an existing resource name is enough to switch that dependency into reuse mode. `-ExistingSqlDatabaseName` is optional and only applies when you also pass `-ExistingSqlServerName`.
 SQL SKU note: the Azure SQL logical server does not determine DTU vs vCore; the database SKU does. If you pass only `-ExistingSqlServerName`, the deployment creates the dashboard database as the template default `S0` DTU database. If the customer requires vCore, serverless, Hyperscale, an elastic pool, or another governed database SKU, pre-create the database and pass both `-ExistingSqlServerName` and `-ExistingSqlDatabaseName`.
 For existing-network mode, `-ExistingVirtualNetworkResourceGroupName` is optional and defaults to `-ResourceGroupName`, but the VNet name and both subnet names must be supplied together.
+
+Bicep cleanup/retry behavior:
+
+- If the generated Key Vault name (`kv-capdash-<environment>-<workloadSuffix>`) exists in soft-deleted state, the wrapper fails before ARM deployment with the exact purge command. Pass `-PurgeDeletedKeyVaultOnNameConflict $true` only when you intentionally want the wrapper to permanently purge that deleted vault name before redeploying.
+- Clean Bicep deployments can occasionally hit an Azure SQL logical server provisioning timeout even when the next identical deployment succeeds. The wrapper retries this specific SQL timeout once by default. Use `-BicepSqlProvisioningRetryCount <0-3>` to disable or adjust that retry.
 
 Example:
 

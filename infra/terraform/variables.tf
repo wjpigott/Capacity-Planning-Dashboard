@@ -304,6 +304,16 @@ variable "web_easy_auth_allowed_audiences" {
   default     = []
 }
 
+variable "web_easy_auth_unauthenticated_action" {
+  type        = string
+  description = "Unauthenticated action for Web App Easy Auth. Use RedirectToLoginPage for browser sign-in, or Return401 for API-only smoke probes."
+  default     = "Return401"
+  validation {
+    condition     = contains(["RedirectToLoginPage", "Return401"], var.web_easy_auth_unauthenticated_action)
+    error_message = "web_easy_auth_unauthenticated_action must be RedirectToLoginPage or Return401."
+  }
+}
+
 variable "ingest_api_key_enabled" {
   type        = bool
   description = "Allow x-ingest-key fallback for internal routes. Set false only after Web App Easy Auth bearer automation is validated."
@@ -328,13 +338,13 @@ variable "function_easy_auth_enabled" {
 
 variable "worker_auth_client_id" {
   type        = string
-  description = "Microsoft Entra application client ID used by the worker Function App Easy Auth audience."
+  description = "Microsoft Entra application client ID used by the worker Function App Easy Auth audience. Defaults to entra_client_id when blank so one app registration can secure both Web App and Function App."
   default     = ""
 }
 
 variable "worker_auth_token_audience" {
   type        = string
-  description = "Token audience used by the dashboard Web App when acquiring a Microsoft Entra token for the worker Function App."
+  description = "Token audience used by the dashboard Web App when acquiring a Microsoft Entra token for the worker Function App. Defaults to api://<entra_client_id> when blank."
   default     = ""
 }
 
@@ -346,7 +356,7 @@ variable "function_easy_auth_allowed_client_applications" {
 
 variable "function_easy_auth_allowed_audiences" {
   type        = list(string)
-  description = "Optional explicit Function App Easy Auth token audiences. Defaults to worker_auth_token_audience when omitted."
+  description = "Optional explicit Function App Easy Auth token audiences. Defaults to the effective worker auth token audience when omitted."
   default     = []
 }
 

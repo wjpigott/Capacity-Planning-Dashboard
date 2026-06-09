@@ -4,6 +4,27 @@
 
 No unreleased changes.
 
+## v1.0.3 - 2026-06-09
+
+This patch release hardens the deployment path for App Service Authentication / Easy Auth across Bicep and Terraform.
+
+Highlights:
+
+- Added Web App and Function App Easy Auth deployment settings for both Bicep and Terraform.
+- Made one dashboard app registration the default Easy Auth model for both browser sign-in and dashboard-to-worker bearer calls.
+- Added wrapper logic to patch Function Easy Auth allowed applications with the Web App managed identity application/client ID after infrastructure deployment.
+- Added a temporary Function public-access publish window for worker zip deployment, with automatic restore to the configured locked-down value.
+- Updated database bootstrap automation to call Easy Auth-protected bootstrap endpoints with bearer tokens and validate real JSON `ok:true` responses.
+- Added Bicep wrapper handling for soft-deleted generated Key Vault names and transient Azure SQL logical-server provisioning timeouts.
+- Added Terraform and Bicep validation for worker-backed PaaS refresh through Function App Easy Auth with persisted SQL results.
+
+Operational notes:
+
+- For repeat Bicep test deployments using the same suffix, pass `-PurgeDeletedKeyVaultOnNameConflict $true` only when you intentionally want to purge a soft-deleted generated Key Vault name.
+- Bicep SQL provisioning timeout retry defaults to one retry through `-BicepSqlProvisioningRetryCount 1`.
+- Keep `INGEST_API_KEY`, `ENTRA_CLIENT_SECRET`, and `SESSION_SECRET` until the production automation-caller decision is finalized.
+- Use a Git tag named `v1.0.3` on this release commit.
+
 ## v1.0.2 - 2026-06-08
 
 This patch release adds a database-focused PaaS quota report alongside the existing PaaS availability matrix.

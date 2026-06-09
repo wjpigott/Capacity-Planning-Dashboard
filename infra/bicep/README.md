@@ -57,6 +57,7 @@ Use this table during customer reviews to explain why each Azure service exists 
 - SQL defaults to private-access mode (`sqlPublicNetworkAccess = 'Disabled'`) and is reachable from App Service/Function App via VNet integration and private endpoint.
 - Key Vault defaults to private-access mode (`keyVaultPublicNetworkAccess = 'Disabled'`) and is reachable from App Service/Function App via VNet integration and private endpoint.
 - Function App worker ingress defaults to private-access mode (`functionPublicNetworkAccess = 'Disabled'`) and is reachable from the dashboard Web App through `privatelink.azurewebsites.net` when the Function private endpoint is created.
+- For package publishing from a public deployment workstation, the deployment wrapper can temporarily set Function App public network access to `Enabled` while `scripts/deploy-worker.ps1` publishes the zip package, then restore the configured locked-down value immediately afterward. Run package publishing from a private-network-connected host instead when temporary public access is not allowed.
 - Function worker storage defaults to private-access mode (`workerStoragePublicNetworkAccess = 'Disabled'`) and is reachable from the Function App through blob, queue, table, and file private endpoints when `createWorkerStoragePrivateEndpoints = true`.
 - Existing SQL, Key Vault, and worker storage can now be reused by passing the matching `existing*Name` parameters.
 - Existing customer-managed VNets can now be reused by passing the matching `existingVirtualNetwork*` and existing subnet name parameters. In this mode Bicep does not create or modify the VNet or subnets.
@@ -65,7 +66,9 @@ Use this table during customer reviews to explain why each Azure service exists 
 - Dashboard subscription discovery RBAC can now be assigned automatically during infra deployment by passing `webReaderSubscriptionIds` to apply `Reader` on those subscriptions.
 - Dashboard quota-apply RBAC can now be assigned automatically during infra deployment by passing `webQuotaWriterSubscriptionIds` to apply `GroupQuota Request Operator` on those subscriptions.
 - Dashboard Entra sign-in can now be configured during infra deployment through app settings (`authEnabled`, `entraTenantId`, `entraClientId`, `entraClientSecret`, `adminGroupId`, optional `reportViewerGroupIds`, and optional `authRedirectUri`).
-- App Service Authentication / Easy Auth can be configured during infra deployment with `webEasyAuthEnabled`, `functionEasyAuthEnabled`, `workerAuthMode`, `workerAuthClientId`, `workerAuthTokenAudience`, and the optional allowed-audience/client-application arrays. Keep `workerAuthMode = 'shared-secret'` until the target environment has a worker auth app registration and bearer-token smoke tests are ready.
+- Web App Easy Auth browser sign-in requires the app registration to include the App Service callback URI `https://<web-app>.azurewebsites.net/.auth/login/aad/callback` and to enable ID token issuance. The dashboard's custom Express callback URI remains `https://<web-app>.azurewebsites.net/auth/callback` while that flow is still present.
+- When `workerAuthMode=entra` and Function Easy Auth is enabled, `scripts/deploy-infra.ps1` patches Function Easy Auth after infrastructure deployment to allow the Web App managed identity application/client ID as a caller.
+- App Service Authentication / Easy Auth can be configured during infra deployment with `webEasyAuthEnabled`, `functionEasyAuthEnabled`, `workerAuthMode`, `workerAuthClientId`, `workerAuthTokenAudience`, and the optional allowed-audience/client-application arrays. The preferred customer path reuses the dashboard app registration for Function worker Easy Auth: leave `workerAuthClientId` and `workerAuthTokenAudience` blank to default to `entraClientId` and `api://<entraClientId>`. Keep `workerAuthMode = 'shared-secret'` until bearer-token smoke tests are ready.
 - Split read/write identities in later phases (recommended) for least privilege.
 
 ## Networking parameters
@@ -80,8 +83,8 @@ Use this table during customer reviews to explain why each Azure service exists 
 - `workerStoragePublicNetworkAccess` (`Disabled` by default; keep disabled when using worker storage private endpoints)
 - `createWorkerStoragePrivateEndpoints` (`true` by default; creates `privatelink.<service>.core.windows.net` DNS and private endpoints for blob, queue, table, and file)
 - `webEasyAuthEnabled` (`false` by default; enables Easy Auth on the Web App when the dashboard app registration and bearer automation path are ready)
-- `workerAuthMode` (`shared-secret` by default; set to `entra` with `functionEasyAuthEnabled = true` after the worker auth app registration is available)
-- `workerAuthClientId` and `workerAuthTokenAudience` (required for Function App Easy Auth / Entra worker auth)
+- `workerAuthMode` (`shared-secret` by default; set to `entra` with `functionEasyAuthEnabled = true` after the dashboard app registration has an app ID URI/audience configured)
+- `workerAuthClientId` and `workerAuthTokenAudience` (optional overrides for Function App Easy Auth / Entra worker auth; blank reuses `entraClientId` and `api://<entraClientId>`)
 - `ingestApiKeyEnabled` (`true` by default; keep enabled until deployment/bootstrap automation no longer depends on `x-ingest-key`)
 
 Existing-network mode is intended for customer or separate-tenant testing where the network team owns VNet creation. Supply these names together:

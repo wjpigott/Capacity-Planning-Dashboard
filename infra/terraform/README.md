@@ -90,6 +90,10 @@ Required app registration inputs when `auth_enabled = true`:
 - optional `report_viewer_group_ids`
 - optional `auth_redirect_uri`
 
+When Web App Easy Auth browser sign-in is enabled, the app registration must also include `https://<web-app>.azurewebsites.net/.auth/login/aad/callback` as a web redirect URI and have ID token issuance enabled. The dashboard's custom Express callback URI remains `https://<web-app>.azurewebsites.net/auth/callback` while that flow is still present.
+
+When `worker_auth_mode = "entra"` and Function Easy Auth is enabled, `scripts/deploy-infra.ps1 -Provider Terraform` patches Function Easy Auth after infrastructure deployment to allow the Web App managed identity application/client ID as a caller.
+
 Security-sensitive networking defaults:
 
 - `function_public_network_access = "Disabled"`
@@ -104,7 +108,7 @@ Easy Auth deployment controls:
 - `web_easy_auth_enabled` enables App Service Authentication on the dashboard Web App.
 - `worker_auth_mode = "entra"` switches dashboard-to-worker calls from the worker shared secret to Microsoft Entra bearer tokens.
 - `function_easy_auth_enabled` enables App Service Authentication on the worker Function App.
-- `worker_auth_client_id` and `worker_auth_token_audience` identify the worker auth app registration/audience.
+- `worker_auth_client_id` and `worker_auth_token_audience` optionally identify a separate worker auth app registration/audience. Leave them blank to reuse `entra_client_id` and `api://<entra_client_id>` so one app registration secures both Web App and Function App.
 - `web_easy_auth_allowed_client_applications` and `function_easy_auth_allowed_client_applications` should be set to the intended automation/caller client IDs before production rollout.
 - `ingest_api_key_enabled` defaults to `true`; keep it enabled until deployment/bootstrap automation can call internal endpoints with bearer tokens.
 
@@ -352,6 +356,7 @@ With `environment = "dev"` and `workload_suffix = "demo001"`:
 - SQL Server uses Entra-only authentication (no SQL auth)
 - SQL and Key Vault default to private network access via private endpoints
 - Function App worker ingress defaults to private network access via a private endpoint and `privatelink.azurewebsites.net`
+- For package publishing from a public deployment workstation, the deployment wrapper can temporarily set Function App public network access to `Enabled` while `scripts/deploy-worker.ps1` publishes the zip package, then restore the configured locked-down value immediately afterward. Run package publishing from a private-network-connected host instead when temporary public access is not allowed.
 - Terraform assigns the deploying principal `Key Vault Secrets Officer` on the dashboard vault before writing initial secrets, then waits briefly for RBAC propagation
 - Web App and Function App use system-assigned managed identities
 - Function App storage uses identity-based access (`shared_access_key_enabled = false`)

@@ -221,6 +221,12 @@ variable "web_easy_auth_allowed_audiences" {
   default     = []
 }
 
+variable "web_easy_auth_unauthenticated_action" {
+  type        = string
+  description = "Unauthenticated action for Web App Easy Auth. Use RedirectToLoginPage for browser sign-in, or Return401 for API-only smoke probes."
+  default     = "Return401"
+}
+
 variable "ingest_api_key_enabled" {
   type        = bool
   description = "Allow x-ingest-key fallback for internal routes"
@@ -245,13 +251,13 @@ variable "function_easy_auth_enabled" {
 
 variable "worker_auth_client_id" {
   type        = string
-  description = "Microsoft Entra application client ID used by worker Function App Easy Auth"
+  description = "Microsoft Entra application client ID used by worker Function App Easy Auth. Defaults to entra_client_id when blank."
   default     = ""
 }
 
 variable "worker_auth_token_audience" {
   type        = string
-  description = "Token audience used by the dashboard Web App for worker Function App calls"
+  description = "Token audience used by the dashboard Web App for worker Function App calls. Defaults to api://<entra_client_id> when blank."
   default     = ""
 }
 

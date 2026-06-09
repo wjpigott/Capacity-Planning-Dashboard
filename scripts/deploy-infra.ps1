@@ -14,6 +14,8 @@ param(
     [Parameter(Mandatory = $false)][string[]]$WebQuotaWriterManagementGroupNames = @(),
     [Parameter(Mandatory = $false)][string]$QuotaManagementGroupId,
     [Parameter(Mandatory = $false)][string]$KeyVaultNameOverride,
+    [Parameter(Mandatory = $false)][bool]$PurgeDeletedKeyVaultOnNameConflict = $false,
+    [Parameter(Mandatory = $false)][ValidateRange(0,3)][int]$BicepSqlProvisioningRetryCount = 1,
     [Parameter(Mandatory = $false)][ValidateSet('Enabled','Disabled')][string]$KeyVaultPublicNetworkAccess = 'Enabled',
     [Parameter(Mandatory = $false)][ValidateSet('Enabled','Disabled')][string]$FunctionPublicNetworkAccess = 'Disabled',
     [Parameter(Mandatory = $false)][bool]$CreateFunctionPrivateEndpoint = $true,
@@ -37,6 +39,7 @@ param(
     [Parameter(Mandatory = $false)][bool]$AssignWorkerBillingReaderRole = $true,
     [Parameter(Mandatory = $false)][bool]$AuthEnabled = $true,
     [Parameter(Mandatory = $false)][bool]$WebEasyAuthEnabled = $false,
+    [Parameter(Mandatory = $false)][ValidateSet('RedirectToLoginPage','Return401')][string]$WebEasyAuthUnauthenticatedAction = 'Return401',
     [Parameter(Mandatory = $false)][string[]]$WebEasyAuthAllowedClientApplications = @(),
     [Parameter(Mandatory = $false)][string[]]$WebEasyAuthAllowedAudiences = @(),
     [Parameter(Mandatory = $false)][bool]$IngestApiKeyEnabled = $true,
@@ -62,6 +65,7 @@ param(
     [Parameter(Mandatory = $false)][bool]$DeployWebApp = $true,
     [Parameter(Mandatory = $false)][bool]$SkipWebAppTests = $false,
     [Parameter(Mandatory = $false)][bool]$DeployWorkerApp = $true,
+    [Parameter(Mandatory = $false)][bool]$TemporarilyEnableFunctionPublicAccessForWorkerDeploy = $true,
     [Parameter(Mandatory = $false)][bool]$ApplyDatabaseBootstrap = $true,
     [Parameter(Mandatory = $false)][string]$IngestApiKey,
     [Parameter(Mandatory = $false)][string]$SessionSecret
@@ -135,6 +139,131 @@ function New-ManualWorkerPackageDeployCommand([string]$ResourceGroupName, [strin
     return ".\scripts\deploy-worker.ps1 -ResourceGroupName `"$ResourceGroupName`" -FunctionAppName `"$FunctionAppName`""
 }
 
+function Get-DefaultBicepKeyVaultName([string]$Environment, [string]$Suffix) {
+    return "kv-capdash-$Environment-$Suffix"
+}
+
+function Get-DeletedKeyVaultSummary([string]$VaultName) {
+    if ([string]::IsNullOrWhiteSpace($VaultName)) {
+        return $null
+    }
+
+    $deletedVaultJson = Invoke-NativeCommandAllowStderr { az keyvault list-deleted --query "[?name=='$VaultName'] | [0]" --output json 2>$null }
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($deletedVaultJson) -or $deletedVaultJson.Trim() -eq 'null') {
+        return $null
+    }
+
+    try {
+        return $deletedVaultJson | ConvertFrom-Json
+    }
+    catch {
+        Write-Warning "Could not parse deleted Key Vault lookup for '$VaultName'. Azure CLI output: $deletedVaultJson"
+        return $null
+    }
+}
+
+function Wait-DeletedKeyVaultPurged([string]$VaultName, [int]$MaxAttempts = 30) {
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        $deletedVault = Get-DeletedKeyVaultSummary -VaultName $VaultName
+        if (-not $deletedVault) {
+            return
+        }
+
+        if ($attempt -eq $MaxAttempts) {
+            throw "Deleted Key Vault '$VaultName' is still visible after purge wait. Retry deployment later or choose a different workload suffix."
+        }
+
+        Start-Sleep -Seconds 10
+    }
+}
+
+function Resolve-BicepDeletedKeyVaultConflict([string]$VaultName) {
+    if ([string]::IsNullOrWhiteSpace($VaultName) -or -not [string]::IsNullOrWhiteSpace($ExistingKeyVaultName)) {
+        return
+    }
+
+    $deletedVault = Get-DeletedKeyVaultSummary -VaultName $VaultName
+    if (-not $deletedVault) {
+        return
+    }
+
+    $deletedLocation = if ($deletedVault.properties.location) { [string]$deletedVault.properties.location } elseif ($deletedVault.location) { [string]$deletedVault.location } else { $Location }
+    if ($PurgeDeletedKeyVaultOnNameConflict) {
+        Write-Warning "Key Vault name '$VaultName' exists in soft-deleted state. Purging it because -PurgeDeletedKeyVaultOnNameConflict is enabled."
+        $null = az keyvault purge --name $VaultName --location $deletedLocation --output none
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to purge soft-deleted Key Vault '$VaultName' in location '$deletedLocation'. Purge it manually or choose a different workload suffix."
+        }
+
+        Wait-DeletedKeyVaultPurged -VaultName $VaultName
+        Write-Host "Soft-deleted Key Vault '$VaultName' was purged. Continuing deployment."
+        return
+    }
+
+    throw "Key Vault name '$VaultName' exists in soft-deleted state in location '$deletedLocation'. Azure will block a clean Bicep redeploy with this name. Re-run with -PurgeDeletedKeyVaultOnNameConflict `$true to purge it during deployment, run 'az keyvault purge --name $VaultName --location $deletedLocation', or choose a different -WorkloadSuffix."
+}
+
+function Test-BicepSqlProvisioningTimeout([string]$OutputText) {
+    if ([string]::IsNullOrWhiteSpace($OutputText)) {
+        return $false
+    }
+
+    return $OutputText -match 'Microsoft\.Sql/servers|sql-capdash' -and $OutputText -match 'OperationTimedOut|timed out and automatically rolled back|terminal provisioning state .Failed.'
+}
+
+function Test-BicepKeyVaultSoftDeleteConflict([string]$OutputText) {
+    if ([string]::IsNullOrWhiteSpace($OutputText)) {
+        return $false
+    }
+
+    return $OutputText -match 'vault with the same name already exists in deleted state|soft.?deleted|keyvault purge|key vault purge'
+}
+
+function Invoke-BicepGroupDeployment([object[]]$DeploymentArgs) {
+    $attempt = 0
+    $maxAttempts = [Math]::Max(1, 1 + $BicepSqlProvisioningRetryCount)
+
+    while ($attempt -lt $maxAttempts) {
+        $attempt++
+        if ($attempt -gt 1) {
+            Write-Warning "Retrying Bicep deployment after Azure SQL provisioning timeout (attempt $attempt/$maxAttempts)."
+        }
+
+        $deploymentErrorFile = Join-Path $env:TEMP ("capdash-bicep-deployment-error-{0}.log" -f ([guid]::NewGuid().ToString('N')))
+        try {
+            $deploymentOutput = az @DeploymentArgs --output json 2>$deploymentErrorFile
+            $deploymentExitCode = $LASTEXITCODE
+            $deploymentError = if (Test-Path $deploymentErrorFile) { Get-Content -Path $deploymentErrorFile -Raw } else { '' }
+            $deploymentText = (@(($deploymentOutput | Out-String), $deploymentError) -join [Environment]::NewLine).Trim()
+
+            if ($deploymentExitCode -eq 0) {
+                return ($deploymentOutput | Out-String)
+            }
+
+            if (Test-BicepKeyVaultSoftDeleteConflict -OutputText $deploymentText) {
+                $vaultName = Get-DefaultBicepKeyVaultName -Environment $Environment -Suffix $WorkloadSuffix
+                throw "Bicep deployment failed because Key Vault name '$vaultName' exists in soft-deleted state. Re-run with -PurgeDeletedKeyVaultOnNameConflict `$true to purge it during deployment, run 'az keyvault purge --name $vaultName --location $Location', or choose a different -WorkloadSuffix. Azure CLI output: $deploymentText"
+            }
+
+            if ($attempt -lt $maxAttempts -and (Test-BicepSqlProvisioningTimeout -OutputText $deploymentText)) {
+                Write-Warning 'Azure SQL server provisioning timed out during Bicep deployment. This is commonly transient in clean deployments; the wrapper will retry the same deployment so ARM can reuse completed resources.'
+                continue
+            }
+
+            if (Test-BicepSqlProvisioningTimeout -OutputText $deploymentText) {
+                throw "Bicep deployment failed because Azure SQL server provisioning timed out after $attempt attempt(s). Retry the same wrapper command; completed resources in the resource group can usually be reused. Azure CLI output: $deploymentText"
+            }
+
+            throw "az deployment group create failed. Azure CLI output: $deploymentText"
+        }
+        finally {
+            if (Test-Path $deploymentErrorFile) {
+                Remove-Item -Path $deploymentErrorFile -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+}
+
 function Get-DatabaseBootstrapFailureGuidance([string]$ManualDatabaseInitializeCommand) {
     return "Database bootstrap failed after infrastructure deployment. If Azure SQL blocks the bootstrap connection, change the SQL server networking setting to Selected networks and add your current client IP, then rerun the database bootstrap. You can also skip database bootstrap during deployment and run the scripts later from an Azure-connected host. Manual command: $ManualDatabaseInitializeCommand"
 }
@@ -147,6 +276,119 @@ function Show-ManualDatabaseInitializeGuidance([string]$ManualDatabaseInitialize
     Write-Warning 'The dashboard app will not be able to read DB-backed APIs until this database initialization command succeeds and grants roles to the web app managed identity.'
     Write-Host 'Run this command from an Azure-connected host when you are ready to initialize the database:' -ForegroundColor Yellow
     Write-Host $ManualDatabaseInitializeCommand -ForegroundColor Yellow
+}
+
+function Set-FunctionPublicNetworkAccessForDeployment([string]$ResourceGroupName, [string]$FunctionAppName, [string]$PublicNetworkAccess) {
+    if ([string]::IsNullOrWhiteSpace($FunctionAppName)) {
+        throw 'Function App name is required to update public network access.'
+    }
+
+    Write-Host "Setting Function App public network access to $PublicNetworkAccess for $FunctionAppName..."
+    $null = az functionapp update --resource-group $ResourceGroupName --name $FunctionAppName --set publicNetworkAccess=$PublicNetworkAccess --output none
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to set Function App public network access to $PublicNetworkAccess for $FunctionAppName."
+    }
+}
+
+function Invoke-WorkerPackageDeployment([string]$ResourceGroupName, [string]$FunctionAppName) {
+    if (-not (Test-Path $deployWorkerScript)) {
+        throw "Worker deployment script not found: $deployWorkerScript"
+    }
+
+    $openedPublicAccess = $false
+    $shouldTemporarilyOpenPublicAccess = $TemporarilyEnableFunctionPublicAccessForWorkerDeploy -and $FunctionPublicNetworkAccess -eq 'Disabled'
+
+    try {
+        if ($shouldTemporarilyOpenPublicAccess) {
+            Set-FunctionPublicNetworkAccessForDeployment -ResourceGroupName $ResourceGroupName -FunctionAppName $FunctionAppName -PublicNetworkAccess 'Enabled'
+            $openedPublicAccess = $true
+        }
+
+        Write-Host "Infrastructure deployment succeeded. Deploying worker package to $FunctionAppName..."
+        & $deployWorkerScript -ResourceGroupName $ResourceGroupName -FunctionAppName $FunctionAppName
+        if ($LASTEXITCODE -ne 0) {
+            throw "Worker package deployment failed with exit code $LASTEXITCODE."
+        }
+    }
+    finally {
+        if ($openedPublicAccess) {
+            Set-FunctionPublicNetworkAccessForDeployment -ResourceGroupName $ResourceGroupName -FunctionAppName $FunctionAppName -PublicNetworkAccess 'Disabled'
+        }
+    }
+}
+
+function Get-ServicePrincipalApplicationId([string]$PrincipalId, [string]$Description) {
+    if ([string]::IsNullOrWhiteSpace($PrincipalId)) {
+        throw "$Description principal ID is required."
+    }
+
+    $appId = az ad sp show --id $PrincipalId --query appId --output tsv 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($appId)) {
+        throw "Could not resolve application/client ID for $Description principal '$PrincipalId'."
+    }
+
+    return $appId.Trim()
+}
+
+function Ensure-FunctionEasyAuthAllowsWebAppIdentity([string]$ResourceGroupName, [string]$WebAppName, [string]$FunctionAppName, [string]$WebPrincipalId) {
+    if ($WorkerAuthMode -ne 'entra' -or -not $FunctionEasyAuthEnabled) {
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($WebPrincipalId)) {
+        $identityJson = az webapp identity show --resource-group $ResourceGroupName --name $WebAppName --output json 2>$null
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($identityJson)) {
+            $identity = $identityJson | ConvertFrom-Json
+            $WebPrincipalId = $identity.principalId
+        }
+    }
+
+    $webAppClientId = Get-ServicePrincipalApplicationId -PrincipalId $WebPrincipalId -Description "Web App managed identity for $WebAppName"
+
+    $subscriptionId = az account show --query id --output tsv
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($subscriptionId)) {
+        throw 'Could not resolve current Azure subscription ID while patching Function Easy Auth.'
+    }
+
+    $authSettingsUri = "https://management.azure.com/subscriptions/$subscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.Web/sites/$FunctionAppName/config/authsettingsV2?api-version=2022-03-01"
+    $authSettingsJson = az rest --method GET --uri $authSettingsUri --output json
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($authSettingsJson)) {
+        throw "Could not read Function Easy Auth settings for $FunctionAppName."
+    }
+
+    $authSettings = $authSettingsJson | ConvertFrom-Json
+    $validation = $authSettings.properties.identityProviders.azureActiveDirectory.validation
+    [string[]]$existingApplications = @($validation.defaultAuthorizationPolicy.allowedApplications) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+    $nextApplications = @(@($existingApplications) + @($webAppClientId) | Select-Object -Unique)
+
+    $nextPolicy = @{
+        allowedApplications = @($nextApplications)
+        allowedPrincipals = @{}
+    }
+
+    if ($validation.PSObject.Properties.Name -contains 'defaultAuthorizationPolicy') {
+        $validation.defaultAuthorizationPolicy = $nextPolicy
+    }
+    else {
+        $validation | Add-Member -NotePropertyName defaultAuthorizationPolicy -NotePropertyValue $nextPolicy
+    }
+
+    $body = @{ properties = $authSettings.properties } | ConvertTo-Json -Depth 30 -Compress
+    $patchPath = Join-Path $env:TEMP ("capdash-function-easyauth-{0}.json" -f ([guid]::NewGuid().ToString('N')))
+    Set-Content -Path $patchPath -Value $body -NoNewline
+    try {
+        $null = az rest --method PUT --uri $authSettingsUri --headers 'Content-Type=application/json' --body "@$patchPath" --output none
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not update Function Easy Auth allowed applications for $FunctionAppName."
+        }
+    }
+    finally {
+        if (Test-Path $patchPath) {
+            Remove-Item $patchPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Write-Host "Function Easy Auth now allows Web App managed identity client ID $webAppClientId for $FunctionAppName."
 }
 
 function New-WorkloadSuffixWithToken([string]$BaseSuffix) {
@@ -338,7 +580,8 @@ function Add-BicepDeploymentParameter([string]$Name, [object]$Value, [switch]$Re
         }
 
         if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
-            return @('--parameters', "$Name=$($Value | ConvertTo-Json -Compress)")
+            $arrayValue = @($Value)
+            return @('--parameters', "$Name=$(ConvertTo-Json -InputObject $arrayValue -Compress)")
         }
 
         return @('--parameters', "$Name=$Value")
@@ -354,6 +597,10 @@ function Add-BicepDeploymentParameter([string]$Name, [object]$Value, [switch]$Re
     }
 
     return @()
+}
+
+function ConvertTo-AzCliJsonArgument([object]$Value) {
+    return (ConvertTo-Json -InputObject $Value -Compress).Replace('"', '\"')
 }
 
 function Set-TerraformVariableValue([System.Collections.IDictionary]$Variables, [string]$Name, [object]$Value, [switch]$RequiredWhenSet) {
@@ -573,6 +820,27 @@ function Get-SqlAdminAccessToken() {
     }
 
     return $token.Trim()
+}
+
+function Get-DashboardBootstrapAccessToken() {
+    if (-not $WebEasyAuthEnabled -or [string]::IsNullOrWhiteSpace($EntraClientId)) {
+        return $null
+    }
+
+    $tokenScope = "api://$EntraClientId/user_impersonation"
+    $token = Invoke-NativeCommandAllowStderr { az account get-access-token --scope $tokenScope --query accessToken --output tsv 2>$null }
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($token)) {
+        throw "Could not acquire a dashboard bootstrap bearer token for scope '$tokenScope'. Run 'az login --scope $tokenScope' for the deployment identity, or pass Web Easy Auth allowed client applications for the automation caller."
+    }
+
+    return $token.Trim()
+}
+
+function Assert-DatabaseBootstrapResult($Result, [string]$EndpointName) {
+    if (-not $Result -or -not ($Result.PSObject.Properties.Name -contains 'ok') -or -not [bool]$Result.ok) {
+        $serializedResult = try { $Result | ConvertTo-Json -Depth 8 -Compress } catch { [string]$Result }
+        throw "$EndpointName did not return a successful JSON bootstrap result. Response: $serializedResult"
+    }
 }
 
 function Resolve-WebAppIngestApiKey([string]$ResourceGroupName, [string]$WebAppName, [string]$CurrentIngestApiKey) {
@@ -865,6 +1133,15 @@ if ($WorkerAuthMode -ne 'entra' -and [string]::IsNullOrWhiteSpace($WorkerSharedS
     $WorkerSharedSecret = Resolve-WebAppSecretSettingValue -ResourceGroupName $ResourceGroupName -WebAppName $webAppName -SettingName 'CAPACITY_WORKER_SHARED_SECRET' -CurrentValue $WorkerSharedSecret
 }
 
+if ($WorkerAuthMode -eq 'entra') {
+    if ([string]::IsNullOrWhiteSpace($WorkerAuthClientId)) {
+        $WorkerAuthClientId = $EntraClientId
+    }
+    if ([string]::IsNullOrWhiteSpace($WorkerAuthTokenAudience) -and -not [string]::IsNullOrWhiteSpace($WorkerAuthClientId)) {
+        $WorkerAuthTokenAudience = "api://$WorkerAuthClientId"
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($EntraClientSecret)) {
     $EntraClientSecret = Resolve-WebAppSecretSettingValue -ResourceGroupName $ResourceGroupName -WebAppName $webAppName -SettingName 'ENTRA_CLIENT_SECRET' -CurrentValue $EntraClientSecret
 }
@@ -925,6 +1202,7 @@ function Deploy-Terraform {
         Set-TerraformVariableValue -Variables $tfVariables -Name 'worker_storage_public_network_access' -Value $WorkerStoragePublicNetworkAccess
         Set-TerraformVariableValue -Variables $tfVariables -Name 'create_worker_storage_private_endpoints' -Value ([bool]$CreateWorkerStoragePrivateEndpoints)
         Set-TerraformVariableValue -Variables $tfVariables -Name 'web_easy_auth_enabled' -Value ([bool]$WebEasyAuthEnabled)
+        Set-TerraformVariableValue -Variables $tfVariables -Name 'web_easy_auth_unauthenticated_action' -Value $WebEasyAuthUnauthenticatedAction
         Set-TerraformVariableValue -Variables $tfVariables -Name 'web_easy_auth_allowed_client_applications' -Value $WebEasyAuthAllowedClientApplications
         Set-TerraformVariableValue -Variables $tfVariables -Name 'web_easy_auth_allowed_audiences' -Value $WebEasyAuthAllowedAudiences
         Set-TerraformVariableValue -Variables $tfVariables -Name 'ingest_api_key_enabled' -Value ([bool]$IngestApiKeyEnabled)
@@ -1002,6 +1280,16 @@ function Deploy-Terraform {
             $script:functionAppName = $terraformFunctionAppName.Trim()
         }
 
+        $terraformWebPrincipalId = & $terraform output -raw managed_identity_principal_id 2>$null
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($terraformWebPrincipalId)) {
+            $script:DeployedWebPrincipalId = $terraformWebPrincipalId.Trim()
+        }
+
+        $terraformWorkerPrincipalId = & $terraform output -raw function_managed_identity_principal_id 2>$null
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($terraformWorkerPrincipalId)) {
+            $script:DeployedWorkerPrincipalId = $terraformWorkerPrincipalId.Trim()
+        }
+
         Write-Host "Terraform deployment succeeded." -ForegroundColor Green
     }
     finally {
@@ -1014,6 +1302,11 @@ function Deploy-Terraform {
 }
 
 # ── Bicep deployment path ────────────────────────────────────────────────────
+if ($Provider -eq 'Bicep') {
+    $bicepKeyVaultName = Get-DefaultBicepKeyVaultName -Environment $Environment -Suffix $WorkloadSuffix
+    Resolve-BicepDeletedKeyVaultConflict -VaultName $bicepKeyVaultName
+}
+
 $deploymentArgs = @(
     'deployment', 'group', 'create',
     '--resource-group', $ResourceGroupName,
@@ -1050,15 +1343,16 @@ $deploymentArgs += @('--parameters', "createFunctionPrivateEndpoint=$($CreateFun
 $deploymentArgs += @('--parameters', "workerStoragePublicNetworkAccess=$WorkerStoragePublicNetworkAccess")
 $deploymentArgs += @('--parameters', "createWorkerStoragePrivateEndpoints=$($CreateWorkerStoragePrivateEndpoints.ToString().ToLowerInvariant())")
 $deploymentArgs += Add-BicepDeploymentParameter -Name 'webEasyAuthEnabled' -Value $WebEasyAuthEnabled
-$deploymentArgs += Add-BicepDeploymentParameter -Name 'webEasyAuthAllowedClientApplications' -Value $WebEasyAuthAllowedClientApplications
-$deploymentArgs += Add-BicepDeploymentParameter -Name 'webEasyAuthAllowedAudiences' -Value $WebEasyAuthAllowedAudiences
+$deploymentArgs += Add-BicepDeploymentParameter -Name 'webEasyAuthUnauthenticatedClientAction' -Value $WebEasyAuthUnauthenticatedAction
+$deploymentArgs += @('--parameters', "webEasyAuthAllowedClientApplications=$(ConvertTo-AzCliJsonArgument -Value @($WebEasyAuthAllowedClientApplications))")
+$deploymentArgs += @('--parameters', "webEasyAuthAllowedAudiences=$(ConvertTo-AzCliJsonArgument -Value @($WebEasyAuthAllowedAudiences))")
 $deploymentArgs += Add-BicepDeploymentParameter -Name 'ingestApiKeyEnabled' -Value $IngestApiKeyEnabled
 $deploymentArgs += Add-BicepDeploymentParameter -Name 'workerAuthMode' -Value $WorkerAuthMode
 $deploymentArgs += Add-BicepDeploymentParameter -Name 'functionEasyAuthEnabled' -Value $FunctionEasyAuthEnabled
 $deploymentArgs += Add-BicepDeploymentParameter -Name 'workerAuthClientId' -Value $WorkerAuthClientId
 $deploymentArgs += Add-BicepDeploymentParameter -Name 'workerAuthTokenAudience' -Value $WorkerAuthTokenAudience
-$deploymentArgs += Add-BicepDeploymentParameter -Name 'functionEasyAuthAllowedClientApplications' -Value $FunctionEasyAuthAllowedClientApplications
-$deploymentArgs += Add-BicepDeploymentParameter -Name 'functionEasyAuthAllowedAudiences' -Value $FunctionEasyAuthAllowedAudiences
+$deploymentArgs += @('--parameters', "functionEasyAuthAllowedClientApplications=$(ConvertTo-AzCliJsonArgument -Value @($FunctionEasyAuthAllowedClientApplications))")
+$deploymentArgs += @('--parameters', "functionEasyAuthAllowedAudiences=$(ConvertTo-AzCliJsonArgument -Value @($FunctionEasyAuthAllowedAudiences))")
 
 $deploymentArgs += @('--parameters', "existingSqlServerName=$ExistingSqlServerName")
 $deploymentArgs += @('--parameters', "existingSqlServerResourceGroupName=$ExistingSqlServerResourceGroupName")
@@ -1096,7 +1390,7 @@ if (-not [string]::IsNullOrWhiteSpace($AdminGroupId)) {
     $deploymentArgs += @('--parameters', "adminGroupId=$AdminGroupId")
 }
 
-$deploymentArgs += Add-BicepDeploymentParameter -Name 'reportViewerGroupIds' -Value $ReportViewerGroupIds
+$deploymentArgs += @('--parameters', "reportViewerGroupIds=$(ConvertTo-AzCliJsonArgument -Value @($ReportViewerGroupIds))")
 
 $hasManagementGroupRbac = $WorkerRbacManagementGroupNames.Count -gt 0 -or $WebReaderManagementGroupNames.Count -gt 0 -or $WebQuotaWriterManagementGroupNames.Count -gt 0
 if ($hasManagementGroupRbac) {
@@ -1201,7 +1495,7 @@ $deploymentArgs += @('--parameters', "authEnabled=$($AuthEnabled.ToString().ToLo
 if (-not [string]::IsNullOrWhiteSpace($AdminGroupId)) {
     $deploymentArgs += @('--parameters', "adminGroupId=$AdminGroupId")
 }
-$deploymentArgs += Add-BicepDeploymentParameter -Name 'reportViewerGroupIds' -Value $ReportViewerGroupIds
+$deploymentArgs += @('--parameters', "reportViewerGroupIds=$(ConvertTo-AzCliJsonArgument -Value @($ReportViewerGroupIds))")
 if ($hasManagementGroupRbac) {
     $deploymentArgs += Add-BicepDeploymentParameter -Name 'deployManagementGroupRbacAssignments' -Value 'false'
 }
@@ -1213,14 +1507,15 @@ $manualDatabaseInitializeGuidanceShown = $false
 try {
     $webPrincipalId = $null
     $workerPrincipalId = $null
+    $script:DeployedWebPrincipalId = $null
+    $script:DeployedWorkerPrincipalId = $null
     if ($Provider -eq 'Terraform') {
         Deploy-Terraform
+        $webPrincipalId = $script:DeployedWebPrincipalId
+        $workerPrincipalId = $script:DeployedWorkerPrincipalId
     }
     else {
-        $deploymentResultJson = az @deploymentArgs --output json
-        if ($LASTEXITCODE -ne 0) {
-            throw 'az deployment group create failed'
-        }
+        $deploymentResultJson = Invoke-BicepGroupDeployment -DeploymentArgs $deploymentArgs
 
         if (-not [string]::IsNullOrWhiteSpace($deploymentResultJson)) {
             $deploymentResult = $deploymentResultJson | ConvertFrom-Json
@@ -1243,6 +1538,8 @@ try {
     }
 
     $infrastructureDeploymentSucceeded = $true
+
+    Ensure-FunctionEasyAuthAllowsWebAppIdentity -ResourceGroupName $ResourceGroupName -WebAppName $webAppName -FunctionAppName $functionAppName -WebPrincipalId $webPrincipalId
 
     $manualDatabaseInitializeCommand = New-ManualDatabaseInitializeCommand -SqlServerHostName $effectiveSqlServerHostName -DatabaseName $effectiveSqlDatabaseName -IdentityName $webAppName
     $manualWebPackageDeployCommand = New-ManualWebPackageDeployCommand -ResourceGroupName $ResourceGroupName -AppName $webAppName
@@ -1277,15 +1574,7 @@ try {
     }
 
     if ($DeployWorkerApp) {
-        if (-not (Test-Path $deployWorkerScript)) {
-            throw "Worker deployment script not found: $deployWorkerScript"
-        }
-
-        Write-Host "Infrastructure deployment succeeded. Deploying worker package to $functionAppName..."
-        & $deployWorkerScript -ResourceGroupName $ResourceGroupName -FunctionAppName $functionAppName
-        if ($LASTEXITCODE -ne 0) {
-            throw "Worker package deployment failed with exit code $LASTEXITCODE."
-        }
+        Invoke-WorkerPackageDeployment -ResourceGroupName $ResourceGroupName -FunctionAppName $functionAppName
     }
 
     if (-not $DeployWorkerApp) {
@@ -1303,6 +1592,10 @@ try {
             $adminBootstrapUri = "https://$webAppName.azurewebsites.net/internal/db/bootstrap-admin"
             $resolvedBootstrapIngestApiKey = Resolve-WebAppIngestApiKey -ResourceGroupName $ResourceGroupName -WebAppName $webAppName -CurrentIngestApiKey $IngestApiKey
             $headers = @{ 'x-ingest-key' = $resolvedBootstrapIngestApiKey }
+            $dashboardBootstrapAccessToken = Get-DashboardBootstrapAccessToken
+            if (-not [string]::IsNullOrWhiteSpace($dashboardBootstrapAccessToken)) {
+                $headers['Authorization'] = "Bearer $dashboardBootstrapAccessToken"
+            }
             $bootstrapResult = $null
             $bootstrapError = $null
 
@@ -1310,6 +1603,7 @@ try {
                 try {
                     Write-Host "Running dashboard SQL bootstrap (attempt $attempt/12)..."
                     $bootstrapResult = Invoke-RestMethod -Method Post -Uri $bootstrapUri -Headers $headers -TimeoutSec 300
+                    Assert-DatabaseBootstrapResult -Result $bootstrapResult -EndpointName '/internal/db/bootstrap'
                     break
                 }
                 catch {
@@ -1325,6 +1619,33 @@ try {
                 }
             }
 
+            if ($bootstrapResult) {
+                try {
+                    Write-Host 'Granting dashboard managed identity database roles using the current Azure CLI login...'
+                    $sqlAccessToken = Get-SqlAdminAccessToken
+                    $adminHeaders = @{
+                        'x-ingest-key' = $resolvedBootstrapIngestApiKey
+                        'Content-Type' = 'application/json'
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($dashboardBootstrapAccessToken)) {
+                        $adminHeaders['Authorization'] = "Bearer $dashboardBootstrapAccessToken"
+                    }
+                    $roleGrantBody = @{
+                        sqlAccessToken = $sqlAccessToken
+                        appIdentityName = $webAppName
+                        runtimeRoles = @('db_datareader', 'db_datawriter')
+                        skipBootstrap = $true
+                    } | ConvertTo-Json -Depth 5 -Compress
+
+                    $bootstrapResult = Invoke-RestMethod -Method Post -Uri $adminBootstrapUri -Headers $adminHeaders -Body $roleGrantBody -TimeoutSec 300
+                    Assert-DatabaseBootstrapResult -Result $bootstrapResult -EndpointName '/internal/db/bootstrap-admin'
+                }
+                catch {
+                    Write-Warning "Database schema bootstrap completed, but managed-identity role grant failed: $($_.Exception.Message)"
+                    Write-Warning $databaseBootstrapFailureGuidance
+                }
+            }
+
             if (-not $bootstrapResult) {
                 try {
                     Write-Host 'Attempting admin-assisted SQL bootstrap using the current Azure CLI login...'
@@ -1333,6 +1654,9 @@ try {
                         'x-ingest-key' = $resolvedBootstrapIngestApiKey
                         'Content-Type' = 'application/json'
                     }
+                    if (-not [string]::IsNullOrWhiteSpace($dashboardBootstrapAccessToken)) {
+                        $adminHeaders['Authorization'] = "Bearer $dashboardBootstrapAccessToken"
+                    }
                     $adminBootstrapBody = @{
                         sqlAccessToken = $sqlAccessToken
                         appIdentityName = $webAppName
@@ -1340,6 +1664,7 @@ try {
                     } | ConvertTo-Json -Depth 5 -Compress
 
                     $bootstrapResult = Invoke-RestMethod -Method Post -Uri $adminBootstrapUri -Headers $adminHeaders -Body $adminBootstrapBody -TimeoutSec 300
+                    Assert-DatabaseBootstrapResult -Result $bootstrapResult -EndpointName '/internal/db/bootstrap-admin'
                 }
                 catch {
                     throw "$databaseBootstrapFailureGuidance Managed-identity bootstrap error: $bootstrapError Admin-assisted bootstrap error: $($_.Exception.Message) If the customer pre-created SQL, substitute the actual server and database names."

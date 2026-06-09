@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.42.1.51946",
-      "templateHash": "4004759933545698646"
+      "templateHash": "9651255577946288175"
     }
   },
   "parameters": {
@@ -103,11 +103,29 @@
         "description": "Function App public network access mode. Keep Disabled when createFunctionPrivateEndpoint is true so worker ingress stays private."
       }
     },
+    "workerStoragePublicNetworkAccess": {
+      "type": "string",
+      "defaultValue": "Disabled",
+      "allowedValues": [
+        "Enabled",
+        "Disabled"
+      ],
+      "metadata": {
+        "description": "Function worker storage account public network access mode. Keep Disabled when createWorkerStoragePrivateEndpoints is true so the worker host storage path stays private."
+      }
+    },
     "createFunctionPrivateEndpoint": {
       "type": "bool",
       "defaultValue": true,
       "metadata": {
         "description": "Create a private endpoint and private DNS zone for the worker Function App. Recommended for production and security-reviewed environments."
+      }
+    },
+    "createWorkerStoragePrivateEndpoints": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Create private endpoints and private DNS zones for the worker Function App host storage account. Recommended for production and security-reviewed environments."
       }
     },
     "workerSharedSecret": {
@@ -290,6 +308,91 @@
         "description": "Enable Microsoft Entra sign-in for the dashboard app routes."
       }
     },
+    "webEasyAuthEnabled": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Enable App Service Authentication / Easy Auth on the dashboard Web App. Use with bearer-authenticated internal automation after validation."
+      }
+    },
+    "webEasyAuthUnauthenticatedClientAction": {
+      "type": "string",
+      "defaultValue": "Return401",
+      "allowedValues": [
+        "RedirectToLoginPage",
+        "Return401"
+      ],
+      "metadata": {
+        "description": "Unauthenticated action for Web App Easy Auth. Use RedirectToLoginPage for browser sign-in, or Return401 for API-only smoke probes."
+      }
+    },
+    "webEasyAuthAllowedClientApplications": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Client application IDs allowed by Web App Easy Auth for bearer-authenticated API/internal calls. Leave empty for normal browser sign-in without an app allow-list."
+      }
+    },
+    "webEasyAuthAllowedAudiences": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional explicit Web App Easy Auth token audiences. Defaults to api://<entraClientId> and <entraClientId> when omitted."
+      }
+    },
+    "ingestApiKeyEnabled": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Allow x-ingest-key fallback for internal routes. Set false only after Web App Easy Auth bearer automation is validated."
+      }
+    },
+    "workerAuthMode": {
+      "type": "string",
+      "defaultValue": "shared-secret",
+      "allowedValues": [
+        "shared-secret",
+        "entra"
+      ],
+      "metadata": {
+        "description": "Dashboard-to-worker authentication mode."
+      }
+    },
+    "functionEasyAuthEnabled": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Enable App Service Authentication / Easy Auth on the worker Function App. Required for workerAuthMode=entra."
+      }
+    },
+    "workerAuthClientId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Microsoft Entra application (client) ID used by the worker Function App Easy Auth audience. Defaults to entraClientId when blank so one app registration can secure both Web App and Function App."
+      }
+    },
+    "workerAuthTokenAudience": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Token audience used by the dashboard Web App when acquiring a Microsoft Entra token for the worker Function App. Defaults to api://<entraClientId> when blank."
+      }
+    },
+    "functionEasyAuthAllowedClientApplications": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Client application IDs allowed by Function App Easy Auth. Use the intended dashboard managed identity/client IDs for production."
+      }
+    },
+    "functionEasyAuthAllowedAudiences": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional explicit Function App Easy Auth token audiences. Defaults to workerAuthTokenAudience when omitted."
+      }
+    },
     "entraTenantId": {
       "type": "string",
       "defaultValue": "",
@@ -334,6 +437,13 @@
     }
   },
   "variables": {
+    "copy": [
+      {
+        "name": "workerStoragePrivateEndpointNames",
+        "count": "[length(variables('workerStoragePrivateEndpointServices'))]",
+        "input": "[format('{0}-{1}', variables('workerStoragePrivateEndpointNamePrefix'), variables('workerStoragePrivateEndpointServices')[copyIndex('workerStoragePrivateEndpointNames')])]"
+      }
+    ],
     "appServicePlanName": "[format('asp-capdash-{0}-{1}', parameters('environment'), parameters('workloadSuffix'))]",
     "workerPlanName": "[format('asp-capdash-worker-{0}-{1}', parameters('environment'), parameters('workloadSuffix'))]",
     "webAppName": "[format('app-capdash-{0}-{1}', parameters('environment'), parameters('workloadSuffix'))]",
@@ -352,12 +462,28 @@
     "sqlPrivateDnsZoneVnetLinkName": "[format('pdz-link-capdash-{0}-{1}', parameters('environment'), parameters('workloadSuffix'))]",
     "keyVaultPrivateEndpointName": "[format('pep-kv-capdash-{0}-{1}', parameters('environment'), parameters('workloadSuffix'))]",
     "functionPrivateEndpointName": "[format('pep-func-capdash-{0}-{1}', parameters('environment'), parameters('workloadSuffix'))]",
+    "workerStoragePrivateEndpointNamePrefix": "[format('pep-stfunc-capdash-{0}-{1}', parameters('environment'), parameters('workloadSuffix'))]",
     "keyVaultDnsSuffixRaw": "[environment().suffixes.keyvaultDns]",
     "keyVaultDnsSuffix": "[if(startsWith(variables('keyVaultDnsSuffixRaw'), '.'), substring(variables('keyVaultDnsSuffixRaw'), 1), variables('keyVaultDnsSuffixRaw'))]",
     "keyVaultPrivateDnsZoneName": "[if(startsWith(variables('keyVaultDnsSuffix'), 'vaultcore.'), format('privatelink.{0}', variables('keyVaultDnsSuffix')), replace(variables('keyVaultDnsSuffix'), 'vault.', 'privatelink.vaultcore.'))]",
     "keyVaultPrivateDnsZoneVnetLinkName": "[format('pdz-link-kv-capdash-{0}-{1}', parameters('environment'), parameters('workloadSuffix'))]",
     "functionPrivateDnsZoneName": "privatelink.azurewebsites.net",
     "functionPrivateDnsZoneVnetLinkName": "[format('pdz-link-func-capdash-{0}-{1}', parameters('environment'), parameters('workloadSuffix'))]",
+    "entraLoginEndpoint": "[environment().authentication.loginEndpoint]",
+    "entraIssuer": "[if(empty(parameters('entraTenantId')), '', format('{0}{1}/v2.0', variables('entraLoginEndpoint'), parameters('entraTenantId')))]",
+    "effectiveWorkerAuthClientId": "[if(empty(parameters('workerAuthClientId')), parameters('entraClientId'), parameters('workerAuthClientId'))]",
+    "effectiveWorkerAuthTokenAudience": "[if(and(empty(parameters('workerAuthTokenAudience')), not(empty(variables('effectiveWorkerAuthClientId')))), format('api://{0}', variables('effectiveWorkerAuthClientId')), parameters('workerAuthTokenAudience'))]",
+    "effectiveWebEasyAuthAllowedAudiences": "[if(and(empty(parameters('webEasyAuthAllowedAudiences')), not(empty(parameters('entraClientId')))), createArray(format('api://{0}', parameters('entraClientId')), parameters('entraClientId')), parameters('webEasyAuthAllowedAudiences'))]",
+    "effectiveFunctionEasyAuthAllowedAudiences": "[if(and(empty(parameters('functionEasyAuthAllowedAudiences')), not(empty(variables('effectiveWorkerAuthTokenAudience')))), createArray(variables('effectiveWorkerAuthTokenAudience')), parameters('functionEasyAuthAllowedAudiences'))]",
+    "webEasyAuthValidation": "[union(createObject('allowedAudiences', variables('effectiveWebEasyAuthAllowedAudiences')), if(not(empty(parameters('webEasyAuthAllowedClientApplications'))), createObject('defaultAuthorizationPolicy', createObject('allowedApplications', parameters('webEasyAuthAllowedClientApplications'), 'allowedPrincipals', createObject())), createObject()))]",
+    "functionEasyAuthValidation": "[union(createObject('allowedAudiences', variables('effectiveFunctionEasyAuthAllowedAudiences')), if(not(empty(parameters('functionEasyAuthAllowedClientApplications'))), createObject('defaultAuthorizationPolicy', createObject('allowedApplications', parameters('functionEasyAuthAllowedClientApplications'), 'allowedPrincipals', createObject())), createObject()))]",
+    "workerStoragePrivateEndpointServices": [
+      "blob",
+      "queue",
+      "table",
+      "file"
+    ],
+    "workerStoragePrivateDnsZoneVnetLinkNamePrefix": "[format('pdz-link-stfunc-capdash-{0}-{1}', parameters('environment'), parameters('workloadSuffix'))]",
     "effectiveAuthRedirectUri": "[if(empty(parameters('authRedirectUri')), format('https://{0}.azurewebsites.net/auth/callback', variables('webAppName')), parameters('authRedirectUri'))]",
     "useExistingSqlServer": "[not(empty(parameters('existingSqlServerName')))]",
     "useExistingSqlDatabase": "[not(empty(parameters('existingSqlDatabaseName')))]",
@@ -387,7 +513,8 @@
     "ingestApiKeyKeyVaultReference": "[format('@Microsoft.KeyVault(SecretUri={0}secrets/{1})', variables('effectiveKeyVaultUri'), variables('ingestApiKeySecretName'))]",
     "sessionSecretKeyVaultReference": "[format('@Microsoft.KeyVault(SecretUri={0}secrets/{1})', variables('effectiveKeyVaultUri'), variables('sessionSecretSecretName'))]",
     "workerSharedSecretKeyVaultReference": "[if(empty(parameters('workerSharedSecret')), '', format('@Microsoft.KeyVault(SecretUri={0}secrets/{1})', variables('effectiveKeyVaultUri'), variables('workerSharedSecretSecretName')))]",
-    "entraClientSecretKeyVaultReference": "[if(empty(parameters('entraClientSecret')), '', format('@Microsoft.KeyVault(SecretUri={0}secrets/{1})', variables('effectiveKeyVaultUri'), variables('entraClientSecretSecretName')))]"
+    "entraClientSecretKeyVaultReference": "[if(empty(parameters('entraClientSecret')), '', format('@Microsoft.KeyVault(SecretUri={0}secrets/{1})', variables('effectiveKeyVaultUri'), variables('entraClientSecretSecretName')))]",
+    "effectiveWorkerSharedSecretReference": "[if(equals(parameters('workerAuthMode'), 'entra'), '', variables('workerSharedSecretKeyVaultReference'))]"
   },
   "resources": {
     "vnet": {
@@ -468,8 +595,96 @@
         "supportsHttpsTrafficOnly": true,
         "allowBlobPublicAccess": false,
         "allowSharedKeyAccess": false,
+        "publicNetworkAccess": "[parameters('workerStoragePublicNetworkAccess')]",
         "accessTier": "Hot"
       }
+    },
+    "workerStoragePrivateDnsZones": {
+      "copy": {
+        "name": "workerStoragePrivateDnsZones",
+        "count": "[length(variables('workerStoragePrivateEndpointServices'))]"
+      },
+      "condition": "[parameters('createWorkerStoragePrivateEndpoints')]",
+      "type": "Microsoft.Network/privateDnsZones",
+      "apiVersion": "2020-06-01",
+      "name": "[format('privatelink.{0}.core.windows.net', variables('workerStoragePrivateEndpointServices')[copyIndex()])]",
+      "location": "global"
+    },
+    "workerStoragePrivateDnsZoneVnetLinks": {
+      "copy": {
+        "name": "workerStoragePrivateDnsZoneVnetLinks",
+        "count": "[length(variables('workerStoragePrivateEndpointServices'))]"
+      },
+      "condition": "[parameters('createWorkerStoragePrivateEndpoints')]",
+      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+      "apiVersion": "2020-06-01",
+      "name": "[format('{0}/{1}', format('privatelink.{0}.core.windows.net', variables('workerStoragePrivateEndpointServices')[copyIndex()]), format('{0}-{1}', variables('workerStoragePrivateDnsZoneVnetLinkNamePrefix'), variables('workerStoragePrivateEndpointServices')[copyIndex()]))]",
+      "location": "global",
+      "properties": {
+        "registrationEnabled": false,
+        "virtualNetwork": {
+          "id": "[variables('effectiveVirtualNetworkId')]"
+        }
+      },
+      "dependsOn": [
+        "vnet",
+        "[format('workerStoragePrivateDnsZones[{0}]', copyIndex())]"
+      ]
+    },
+    "workerStoragePrivateEndpoints": {
+      "copy": {
+        "name": "workerStoragePrivateEndpoints",
+        "count": "[length(variables('workerStoragePrivateEndpointServices'))]"
+      },
+      "condition": "[parameters('createWorkerStoragePrivateEndpoints')]",
+      "type": "Microsoft.Network/privateEndpoints",
+      "apiVersion": "2023-09-01",
+      "name": "[format('{0}-{1}', variables('workerStoragePrivateEndpointNamePrefix'), variables('workerStoragePrivateEndpointServices')[copyIndex()])]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "subnet": {
+          "id": "[variables('effectivePrivateEndpointSubnetId')]"
+        },
+        "privateLinkServiceConnections": [
+          {
+            "name": "[format('workerStorage{0}Connection', variables('workerStoragePrivateEndpointServices')[copyIndex()])]",
+            "properties": {
+              "privateLinkServiceId": "[resourceId(variables('effectiveWorkerStorageAccountResourceGroupName'), 'Microsoft.Storage/storageAccounts', variables('effectiveWorkerStorageAccountName'))]",
+              "groupIds": [
+                "[variables('workerStoragePrivateEndpointServices')[copyIndex()]]"
+              ]
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "functionStorage",
+        "vnet"
+      ]
+    },
+    "workerStoragePrivateEndpointDnsZoneGroups": {
+      "copy": {
+        "name": "workerStoragePrivateEndpointDnsZoneGroups",
+        "count": "[length(variables('workerStoragePrivateEndpointServices'))]"
+      },
+      "condition": "[parameters('createWorkerStoragePrivateEndpoints')]",
+      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+      "apiVersion": "2023-09-01",
+      "name": "[format('{0}/{1}', format('{0}-{1}', variables('workerStoragePrivateEndpointNamePrefix'), variables('workerStoragePrivateEndpointServices')[copyIndex()]), 'default')]",
+      "properties": {
+        "privateDnsZoneConfigs": [
+          {
+            "name": "[format('worker-storage-{0}-private-dns', variables('workerStoragePrivateEndpointServices')[copyIndex()])]",
+            "properties": {
+              "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', format('privatelink.{0}.core.windows.net', variables('workerStoragePrivateEndpointServices')[copyIndex()]))]"
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[format('workerStoragePrivateDnsZones[{0}]', copyIndex())]",
+        "[format('workerStoragePrivateEndpoints[{0}]', copyIndex())]"
+      ]
     },
     "plan": {
       "type": "Microsoft.Web/serverfarms",
@@ -556,7 +771,23 @@
             },
             {
               "name": "CAPACITY_WORKER_SHARED_SECRET",
-              "value": "[variables('workerSharedSecretKeyVaultReference')]"
+              "value": "[variables('effectiveWorkerSharedSecretReference')]"
+            },
+            {
+              "name": "CAPACITY_WORKER_AUTH_MODE",
+              "value": "[parameters('workerAuthMode')]"
+            },
+            {
+              "name": "CAPACITY_WORKER_TOKEN_AUDIENCE",
+              "value": "[variables('effectiveWorkerAuthTokenAudience')]"
+            },
+            {
+              "name": "INGEST_EASY_AUTH_BEARER_ENABLED",
+              "value": "[string(parameters('webEasyAuthEnabled'))]"
+            },
+            {
+              "name": "INGEST_API_KEY_ENABLED",
+              "value": "[string(parameters('ingestApiKeyEnabled'))]"
             },
             {
               "name": "INGEST_API_KEY",
@@ -636,6 +867,37 @@
         "vnet"
       ]
     },
+    "webAppAuthSettings": {
+      "condition": "[parameters('webEasyAuthEnabled')]",
+      "type": "Microsoft.Web/sites/config",
+      "apiVersion": "2022-03-01",
+      "name": "[format('{0}/{1}', variables('webAppName'), 'authsettingsV2')]",
+      "properties": {
+        "platform": {
+          "enabled": true,
+          "runtimeVersion": "~1"
+        },
+        "globalValidation": {
+          "requireAuthentication": true,
+          "unauthenticatedClientAction": "[parameters('webEasyAuthUnauthenticatedClientAction')]",
+          "redirectToProvider": "azureActiveDirectory"
+        },
+        "identityProviders": {
+          "azureActiveDirectory": {
+            "enabled": true,
+            "registration": {
+              "clientId": "[parameters('entraClientId')]",
+              "clientSecretSettingName": "ENTRA_CLIENT_SECRET",
+              "openIdIssuer": "[variables('entraIssuer')]"
+            },
+            "validation": "[variables('webEasyAuthValidation')]"
+          }
+        }
+      },
+      "dependsOn": [
+        "webApp"
+      ]
+    },
     "webAppVnetIntegration": {
       "type": "Microsoft.Web/sites/networkConfig",
       "apiVersion": "2023-12-01",
@@ -696,7 +958,7 @@
             },
             {
               "name": "WORKER_SHARED_SECRET",
-              "value": "[variables('workerSharedSecretKeyVaultReference')]"
+              "value": "[variables('effectiveWorkerSharedSecretReference')]"
             },
             {
               "name": "WEBSITE_DNS_SERVER",
@@ -713,6 +975,36 @@
         "appInsights",
         "vnet",
         "workerPlan"
+      ]
+    },
+    "functionAppAuthSettings": {
+      "condition": "[parameters('functionEasyAuthEnabled')]",
+      "type": "Microsoft.Web/sites/config",
+      "apiVersion": "2022-03-01",
+      "name": "[format('{0}/{1}', variables('functionAppName'), 'authsettingsV2')]",
+      "properties": {
+        "platform": {
+          "enabled": true,
+          "runtimeVersion": "~1"
+        },
+        "globalValidation": {
+          "requireAuthentication": true,
+          "unauthenticatedClientAction": "Return401",
+          "redirectToProvider": "azureActiveDirectory"
+        },
+        "identityProviders": {
+          "azureActiveDirectory": {
+            "enabled": true,
+            "registration": {
+              "clientId": "[variables('effectiveWorkerAuthClientId')]",
+              "openIdIssuer": "[variables('entraIssuer')]"
+            },
+            "validation": "[variables('functionEasyAuthValidation')]"
+          }
+        }
+      },
+      "dependsOn": [
+        "functionApp"
       ]
     },
     "functionAppVnetIntegration": {
@@ -2227,6 +2519,10 @@
     "functionPrivateEndpointName": {
       "type": "string",
       "value": "[if(parameters('createFunctionPrivateEndpoint'), variables('functionPrivateEndpointName'), '')]"
+    },
+    "workerStoragePrivateEndpointNames": {
+      "type": "array",
+      "value": "[if(parameters('createWorkerStoragePrivateEndpoints'), variables('workerStoragePrivateEndpointNames'), createArray())]"
     }
   }
 }

@@ -20,6 +20,7 @@ Terraform equivalent of the Bicep templates in this folder. Provisions the full 
 | SQL Private Endpoint + DNS zone + VNet link | `azurerm_private_endpoint.sql`, `azurerm_private_dns_zone.sql`, `azurerm_private_dns_zone_virtual_network_link.sql` |
 | Key Vault Private Endpoint + DNS zone + VNet link | `azurerm_private_endpoint.kv`, `azurerm_private_dns_zone.kv`, `azurerm_private_dns_zone_virtual_network_link.kv` |
 | Function App Private Endpoint + DNS zone + VNet link | `azurerm_private_endpoint.function`, `azurerm_private_dns_zone.function`, `azurerm_private_dns_zone_virtual_network_link.function` |
+| Worker Storage Private Endpoints + DNS zones + VNet links | `azurerm_private_endpoint.worker_storage`, `azurerm_private_dns_zone.worker_storage`, `azurerm_private_dns_zone_virtual_network_link.worker_storage` for blob, queue, table, and file |
 | Role Assignments (5) | KV Secrets User (×2), Storage Blob/Queue/Table (×3) |
 | Cross-scope RBAC (modules) | `worker-subscription-rbac`, `worker-management-group-rbac`, `web-subscription-reader`, `web-management-group-reader`, `web-subscription-quota-writer`, `web-management-group-quota-writer` |
 
@@ -88,6 +89,28 @@ Required app registration inputs when `auth_enabled = true`:
 - optional `admin_group_id`
 - optional `report_viewer_group_ids`
 - optional `auth_redirect_uri`
+
+When Web App Easy Auth browser sign-in is enabled, the app registration must also include `https://<web-app>.azurewebsites.net/.auth/login/aad/callback` as a web redirect URI and have ID token issuance enabled. The dashboard's custom Express callback URI remains `https://<web-app>.azurewebsites.net/auth/callback` while that flow is still present.
+
+When `worker_auth_mode = "entra"` and Function Easy Auth is enabled, `scripts/deploy-infra.ps1 -Provider Terraform` patches Function Easy Auth after infrastructure deployment to allow the Web App managed identity application/client ID as a caller.
+
+Security-sensitive networking defaults:
+
+- `function_public_network_access = "Disabled"`
+- `create_function_private_endpoint = true`
+- `worker_storage_public_network_access = "Disabled"`
+- `create_worker_storage_private_endpoints = true`
+
+When `create_worker_storage_private_endpoints = true`, Terraform creates blob, queue, table, and file private endpoints and private DNS zones for the Function worker host storage account. Existing storage reuse assumes the customer-approved private connectivity path is valid.
+
+Easy Auth deployment controls:
+
+- `web_easy_auth_enabled` enables App Service Authentication on the dashboard Web App.
+- `worker_auth_mode = "entra"` switches dashboard-to-worker calls from the worker shared secret to Microsoft Entra bearer tokens.
+- `function_easy_auth_enabled` enables App Service Authentication on the worker Function App.
+- `worker_auth_client_id` and `worker_auth_token_audience` optionally identify a separate worker auth app registration/audience. Leave them blank to reuse `entra_client_id` and `api://<entra_client_id>` so one app registration secures both Web App and Function App.
+- `web_easy_auth_allowed_client_applications` and `function_easy_auth_allowed_client_applications` should be set to the intended automation/caller client IDs before production rollout.
+- `ingest_api_key_enabled` defaults to `true`; keep it enabled until deployment/bootstrap automation can call internal endpoints with bearer tokens.
 
 Optional app registration management:
 
@@ -333,6 +356,7 @@ With `environment = "dev"` and `workload_suffix = "demo001"`:
 - SQL Server uses Entra-only authentication (no SQL auth)
 - SQL and Key Vault default to private network access via private endpoints
 - Function App worker ingress defaults to private network access via a private endpoint and `privatelink.azurewebsites.net`
+- For package publishing from a public deployment workstation, the deployment wrapper can temporarily set Function App public network access to `Enabled` while `scripts/deploy-worker.ps1` publishes the zip package, then restore the configured locked-down value immediately afterward. Run package publishing from a private-network-connected host instead when temporary public access is not allowed.
 - Terraform assigns the deploying principal `Key Vault Secrets Officer` on the dashboard vault before writing initial secrets, then waits briefly for RBAC propagation
 - Web App and Function App use system-assigned managed identities
 - Function App storage uses identity-based access (`shared_access_key_enabled = false`)

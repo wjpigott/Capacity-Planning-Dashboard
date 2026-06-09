@@ -106,9 +106,25 @@ variable "function_public_network_access" {
   }
 }
 
+variable "worker_storage_public_network_access" {
+  type        = string
+  description = "Function worker storage account public network access mode. Keep Disabled when create_worker_storage_private_endpoints is true so the worker host storage path stays private."
+  default     = "Disabled"
+  validation {
+    condition     = contains(["Enabled", "Disabled"], var.worker_storage_public_network_access)
+    error_message = "Must be Enabled or Disabled."
+  }
+}
+
 variable "create_function_private_endpoint" {
   type        = bool
   description = "Create a private endpoint and private DNS zone for the worker Function App. Recommended for production and security-reviewed environments."
+  default     = true
+}
+
+variable "create_worker_storage_private_endpoints" {
+  type        = bool
+  description = "Create private endpoints and private DNS zones for the worker Function App host storage account. Recommended for production and security-reviewed environments."
   default     = true
 }
 
@@ -185,6 +201,76 @@ variable "auth_enabled" {
   type        = bool
   description = "Enable Microsoft Entra sign-in for the dashboard app routes"
   default     = true
+}
+
+variable "web_easy_auth_enabled" {
+  type        = bool
+  description = "Enable App Service Authentication / Easy Auth on the dashboard Web App"
+  default     = false
+}
+
+variable "web_easy_auth_allowed_client_applications" {
+  type        = list(string)
+  description = "Client application IDs allowed by Web App Easy Auth for bearer-authenticated API/internal calls"
+  default     = []
+}
+
+variable "web_easy_auth_allowed_audiences" {
+  type        = list(string)
+  description = "Optional explicit Web App Easy Auth token audiences"
+  default     = []
+}
+
+variable "web_easy_auth_unauthenticated_action" {
+  type        = string
+  description = "Unauthenticated action for Web App Easy Auth. Use RedirectToLoginPage for browser sign-in, or Return401 for API-only smoke probes."
+  default     = "Return401"
+}
+
+variable "ingest_api_key_enabled" {
+  type        = bool
+  description = "Allow x-ingest-key fallback for internal routes"
+  default     = true
+}
+
+variable "worker_auth_mode" {
+  type        = string
+  description = "Dashboard-to-worker authentication mode"
+  default     = "shared-secret"
+  validation {
+    condition     = contains(["shared-secret", "entra"], var.worker_auth_mode)
+    error_message = "worker_auth_mode must be shared-secret or entra."
+  }
+}
+
+variable "function_easy_auth_enabled" {
+  type        = bool
+  description = "Enable App Service Authentication / Easy Auth on the worker Function App"
+  default     = false
+}
+
+variable "worker_auth_client_id" {
+  type        = string
+  description = "Microsoft Entra application client ID used by worker Function App Easy Auth. Defaults to entra_client_id when blank."
+  default     = ""
+}
+
+variable "worker_auth_token_audience" {
+  type        = string
+  description = "Token audience used by the dashboard Web App for worker Function App calls. Defaults to api://<entra_client_id> when blank."
+  default     = ""
+}
+
+variable "function_easy_auth_allowed_client_applications" {
+  type        = list(string)
+  description = "Client application IDs allowed by Function App Easy Auth"
+  default     = []
+}
+
+variable "function_easy_auth_allowed_audiences" {
+  type        = list(string)
+  description = "Optional explicit Function App Easy Auth token audiences"
+  default     = []
 }
 
 variable "entra_tenant_id" {

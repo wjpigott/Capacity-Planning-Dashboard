@@ -111,6 +111,9 @@ $app = New-MgApplication `
     -SignInAudience 'AzureADMultipleOrgs' `
     -Web @{
         RedirectUris = $redirectUris.ToArray()
+        ImplicitGrantSettings = @{
+            EnableIdTokenIssuance = $true
+        }
     } `
     -RequiredResourceAccess @($requiredAccess) `
     -GroupMembershipClaims 'SecurityGroup'

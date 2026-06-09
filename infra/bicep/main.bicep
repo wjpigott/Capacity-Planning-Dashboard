@@ -52,8 +52,18 @@ param keyVaultPublicNetworkAccess string = 'Disabled'
 ])
 param functionPublicNetworkAccess string = 'Disabled'
 
+@description('Function worker storage account public network access mode. Keep Disabled when createWorkerStoragePrivateEndpoints is true so the worker host storage path stays private.')
+@allowed([
+  'Enabled'
+  'Disabled'
+])
+param workerStoragePublicNetworkAccess string = 'Disabled'
+
 @description('Create a private endpoint and private DNS zone for the worker Function App. Recommended for production and security-reviewed environments.')
 param createFunctionPrivateEndpoint bool = true
+
+@description('Create private endpoints and private DNS zones for the worker Function App host storage account. Recommended for production and security-reviewed environments.')
+param createWorkerStoragePrivateEndpoints bool = true
 
 @secure()
 @description('Optional shared secret used between the dashboard web app and the worker function app')
@@ -136,6 +146,47 @@ param assignWorkerBillingReaderRole bool = true
 @description('Enable Microsoft Entra sign-in for the dashboard app routes.')
 param authEnabled bool = true
 
+@description('Enable App Service Authentication / Easy Auth on the dashboard Web App. Use with bearer-authenticated internal automation after validation.')
+param webEasyAuthEnabled bool = false
+
+@description('Unauthenticated action for Web App Easy Auth. Use RedirectToLoginPage for browser sign-in, or Return401 for API-only smoke probes.')
+@allowed([
+  'RedirectToLoginPage'
+  'Return401'
+])
+param webEasyAuthUnauthenticatedClientAction string = 'Return401'
+
+@description('Client application IDs allowed by Web App Easy Auth for bearer-authenticated API/internal calls. Leave empty for normal browser sign-in without an app allow-list.')
+param webEasyAuthAllowedClientApplications array = []
+
+@description('Optional explicit Web App Easy Auth token audiences. Defaults to api://<entraClientId> and <entraClientId> when omitted.')
+param webEasyAuthAllowedAudiences array = []
+
+@description('Allow x-ingest-key fallback for internal routes. Set false only after Web App Easy Auth bearer automation is validated.')
+param ingestApiKeyEnabled bool = true
+
+@description('Dashboard-to-worker authentication mode.')
+@allowed([
+  'shared-secret'
+  'entra'
+])
+param workerAuthMode string = 'shared-secret'
+
+@description('Enable App Service Authentication / Easy Auth on the worker Function App. Required for workerAuthMode=entra.')
+param functionEasyAuthEnabled bool = false
+
+@description('Microsoft Entra application (client) ID used by the worker Function App Easy Auth audience. Defaults to entraClientId when blank so one app registration can secure both Web App and Function App.')
+param workerAuthClientId string = ''
+
+@description('Token audience used by the dashboard Web App when acquiring a Microsoft Entra token for the worker Function App. Defaults to api://<entraClientId> when blank.')
+param workerAuthTokenAudience string = ''
+
+@description('Client application IDs allowed by Function App Easy Auth. Use the intended dashboard managed identity/client IDs for production.')
+param functionEasyAuthAllowedClientApplications array = []
+
+@description('Optional explicit Function App Easy Auth token audiences. Defaults to workerAuthTokenAudience when omitted.')
+param functionEasyAuthAllowedAudiences array = []
+
 @description('Microsoft Entra tenant ID used by the dashboard auth flow.')
 param entraTenantId string = ''
 
@@ -173,6 +224,7 @@ var sqlPrivateDnsZoneName = 'privatelink${az.environment().suffixes.sqlServerHos
 var sqlPrivateDnsZoneVnetLinkName = 'pdz-link-capdash-${environment}-${workloadSuffix}'
 var keyVaultPrivateEndpointName = 'pep-kv-capdash-${environment}-${workloadSuffix}'
 var functionPrivateEndpointName = 'pep-func-capdash-${environment}-${workloadSuffix}'
+var workerStoragePrivateEndpointNamePrefix = 'pep-stfunc-capdash-${environment}-${workloadSuffix}'
 var keyVaultDnsSuffixRaw = az.environment().suffixes.keyvaultDns
 var keyVaultDnsSuffix = startsWith(keyVaultDnsSuffixRaw, '.') ? substring(keyVaultDnsSuffixRaw, 1) : keyVaultDnsSuffixRaw
 var keyVaultPrivateDnsZoneName = startsWith(keyVaultDnsSuffix, 'vaultcore.')
@@ -181,6 +233,37 @@ var keyVaultPrivateDnsZoneName = startsWith(keyVaultDnsSuffix, 'vaultcore.')
 var keyVaultPrivateDnsZoneVnetLinkName = 'pdz-link-kv-capdash-${environment}-${workloadSuffix}'
 var functionPrivateDnsZoneName = 'privatelink.azurewebsites.net'
 var functionPrivateDnsZoneVnetLinkName = 'pdz-link-func-capdash-${environment}-${workloadSuffix}'
+var entraLoginEndpoint = az.environment().authentication.loginEndpoint
+var entraIssuer = empty(entraTenantId) ? '' : '${entraLoginEndpoint}${entraTenantId}/v2.0'
+var effectiveWorkerAuthClientId = empty(workerAuthClientId) ? entraClientId : workerAuthClientId
+var effectiveWorkerAuthTokenAudience = empty(workerAuthTokenAudience) && !empty(effectiveWorkerAuthClientId) ? 'api://${effectiveWorkerAuthClientId}' : workerAuthTokenAudience
+var effectiveWebEasyAuthAllowedAudiences = empty(webEasyAuthAllowedAudiences) && !empty(entraClientId) ? [
+  'api://${entraClientId}'
+  entraClientId
+] : webEasyAuthAllowedAudiences
+var effectiveFunctionEasyAuthAllowedAudiences = empty(functionEasyAuthAllowedAudiences) && !empty(effectiveWorkerAuthTokenAudience) ? [
+  effectiveWorkerAuthTokenAudience
+] : functionEasyAuthAllowedAudiences
+var webEasyAuthValidation = union({ allowedAudiences: effectiveWebEasyAuthAllowedAudiences }, !empty(webEasyAuthAllowedClientApplications) ? {
+  defaultAuthorizationPolicy: {
+    allowedApplications: webEasyAuthAllowedClientApplications
+    allowedPrincipals: {}
+  }
+} : {})
+var functionEasyAuthValidation = union({ allowedAudiences: effectiveFunctionEasyAuthAllowedAudiences }, !empty(functionEasyAuthAllowedClientApplications) ? {
+  defaultAuthorizationPolicy: {
+    allowedApplications: functionEasyAuthAllowedClientApplications
+    allowedPrincipals: {}
+  }
+} : {})
+var workerStoragePrivateEndpointServices = [
+  'blob'
+  'queue'
+  'table'
+  'file'
+]
+var workerStoragePrivateDnsZoneVnetLinkNamePrefix = 'pdz-link-stfunc-capdash-${environment}-${workloadSuffix}'
+var workerStoragePrivateEndpointNames = [for (service, index) in workerStoragePrivateEndpointServices: workerStoragePrivateEndpoints[index].name]
 var effectiveAuthRedirectUri = empty(authRedirectUri)
   ? 'https://${webAppName}.azurewebsites.net/auth/callback'
   : authRedirectUri
@@ -219,6 +302,7 @@ var ingestApiKeyKeyVaultReference = '@Microsoft.KeyVault(SecretUri=${effectiveKe
 var sessionSecretKeyVaultReference = '@Microsoft.KeyVault(SecretUri=${effectiveKeyVaultUri}secrets/${sessionSecretSecretName})'
 var workerSharedSecretKeyVaultReference = empty(workerSharedSecret) ? '' : '@Microsoft.KeyVault(SecretUri=${effectiveKeyVaultUri}secrets/${workerSharedSecretSecretName})'
 var entraClientSecretKeyVaultReference = empty(entraClientSecret) ? '' : '@Microsoft.KeyVault(SecretUri=${effectiveKeyVaultUri}secrets/${entraClientSecretSecretName})'
+var effectiveWorkerSharedSecretReference = workerAuthMode == 'entra' ? '' : workerSharedSecretKeyVaultReference
 
 resource vnet 'Microsoft.Network/virtualNetworks@2023-09-01' = if (!useExistingVirtualNetwork) {
   name: vnetName
@@ -288,9 +372,70 @@ resource functionStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = if (!u
     supportsHttpsTrafficOnly: true
     allowBlobPublicAccess: false
     allowSharedKeyAccess: false
+    publicNetworkAccess: workerStoragePublicNetworkAccess
     accessTier: 'Hot'
   }
 }
+
+resource workerStoragePrivateDnsZones 'Microsoft.Network/privateDnsZones@2020-06-01' = [for service in workerStoragePrivateEndpointServices: if (createWorkerStoragePrivateEndpoints) {
+  name: 'privatelink.${service}.core.windows.net'
+  location: 'global'
+}]
+
+resource workerStoragePrivateDnsZoneVnetLinks 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = [for (service, index) in workerStoragePrivateEndpointServices: if (createWorkerStoragePrivateEndpoints) {
+  parent: workerStoragePrivateDnsZones[index]
+  name: '${workerStoragePrivateDnsZoneVnetLinkNamePrefix}-${service}'
+  location: 'global'
+  properties: {
+    registrationEnabled: false
+    virtualNetwork: {
+      id: effectiveVirtualNetworkId
+    }
+  }
+  dependsOn: [
+    vnet
+  ]
+}]
+
+resource workerStoragePrivateEndpoints 'Microsoft.Network/privateEndpoints@2023-09-01' = [for service in workerStoragePrivateEndpointServices: if (createWorkerStoragePrivateEndpoints) {
+  name: '${workerStoragePrivateEndpointNamePrefix}-${service}'
+  location: location
+  properties: {
+    subnet: {
+      id: effectivePrivateEndpointSubnetId
+    }
+    privateLinkServiceConnections: [
+      {
+        name: 'workerStorage${service}Connection'
+        properties: {
+          privateLinkServiceId: resourceId(effectiveWorkerStorageAccountResourceGroupName, 'Microsoft.Storage/storageAccounts', effectiveWorkerStorageAccountName)
+          groupIds: [
+            service
+          ]
+        }
+      }
+    ]
+  }
+  dependsOn: [
+    functionStorage
+    vnet
+  ]
+}]
+
+resource workerStoragePrivateEndpointDnsZoneGroups 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-09-01' = [for (service, index) in workerStoragePrivateEndpointServices: if (createWorkerStoragePrivateEndpoints) {
+  parent: workerStoragePrivateEndpoints[index]
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'worker-storage-${service}-private-dns'
+        properties: {
+          privateDnsZoneId: workerStoragePrivateDnsZones[index].id
+        }
+      }
+    ]
+  }
+}]
 
 resource plan 'Microsoft.Web/serverfarms@2023-12-01' = {
   name: appServicePlanName
@@ -373,7 +518,23 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
         }
         {
           name: 'CAPACITY_WORKER_SHARED_SECRET'
-          value: workerSharedSecretKeyVaultReference
+          value: effectiveWorkerSharedSecretReference
+        }
+        {
+          name: 'CAPACITY_WORKER_AUTH_MODE'
+          value: workerAuthMode
+        }
+        {
+          name: 'CAPACITY_WORKER_TOKEN_AUDIENCE'
+          value: effectiveWorkerAuthTokenAudience
+        }
+        {
+          name: 'INGEST_EASY_AUTH_BEARER_ENABLED'
+          value: string(webEasyAuthEnabled)
+        }
+        {
+          name: 'INGEST_API_KEY_ENABLED'
+          value: string(ingestApiKeyEnabled)
         }
         {
           name: 'INGEST_API_KEY'
@@ -451,6 +612,33 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
   ]
 }
 
+resource webAppAuthSettings 'Microsoft.Web/sites/config@2022-03-01' = if (webEasyAuthEnabled) {
+  parent: webApp
+  name: 'authsettingsV2'
+  properties: {
+    platform: {
+      enabled: true
+      runtimeVersion: '~1'
+    }
+    globalValidation: {
+      requireAuthentication: true
+      unauthenticatedClientAction: webEasyAuthUnauthenticatedClientAction
+      redirectToProvider: 'azureActiveDirectory'
+    }
+    identityProviders: {
+      azureActiveDirectory: {
+        enabled: true
+        registration: {
+          clientId: entraClientId
+          clientSecretSettingName: 'ENTRA_CLIENT_SECRET'
+          openIdIssuer: entraIssuer
+        }
+        validation: webEasyAuthValidation
+      }
+    }
+  }
+}
+
 resource webAppVnetIntegration 'Microsoft.Web/sites/networkConfig@2023-12-01' = {
   parent: webApp
   name: 'virtualNetwork'
@@ -508,7 +696,7 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         }
         {
           name: 'WORKER_SHARED_SECRET'
-          value: workerSharedSecretKeyVaultReference
+          value: effectiveWorkerSharedSecretReference
         }
         {
           name: 'WEBSITE_DNS_SERVER'
@@ -524,6 +712,32 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
   dependsOn: [
     vnet
   ]
+}
+
+resource functionAppAuthSettings 'Microsoft.Web/sites/config@2022-03-01' = if (functionEasyAuthEnabled) {
+  parent: functionApp
+  name: 'authsettingsV2'
+  properties: {
+    platform: {
+      enabled: true
+      runtimeVersion: '~1'
+    }
+    globalValidation: {
+      requireAuthentication: true
+      unauthenticatedClientAction: 'Return401'
+      redirectToProvider: 'azureActiveDirectory'
+    }
+    identityProviders: {
+      azureActiveDirectory: {
+        enabled: true
+        registration: {
+          clientId: effectiveWorkerAuthClientId
+          openIdIssuer: entraIssuer
+        }
+        validation: functionEasyAuthValidation
+      }
+    }
+  }
 }
 
 resource functionAppVnetIntegration 'Microsoft.Web/sites/networkConfig@2023-12-01' = {
@@ -935,3 +1149,4 @@ output virtualNetworkName string = effectiveVirtualNetworkName
 output sqlPrivateEndpointName string = useExistingSqlServer ? '' : sqlPrivateEndpoint.name
 output keyVaultPrivateEndpointName string = useExistingKeyVault ? '' : keyVaultPrivateEndpoint.name
 output functionPrivateEndpointName string = createFunctionPrivateEndpoint ? functionPrivateEndpoint.name : ''
+output workerStoragePrivateEndpointNames array = createWorkerStoragePrivateEndpoints ? workerStoragePrivateEndpointNames : []

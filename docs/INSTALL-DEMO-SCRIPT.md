@@ -19,6 +19,7 @@ Before recording, prepare these values so the video can move cleanly:
 - Microsoft Entra tenant ID.
 - Existing app registration client ID and client secret.
 - App registration redirect URI plan: `https://app-capdash-<environment>-<suffix>.azurewebsites.net/auth/callback`.
+- When Web App Easy Auth browser sign-in is enabled, also add `https://app-capdash-<environment>-<suffix>.azurewebsites.net/.auth/login/aad/callback` as a web redirect URI and enable ID token issuance for the app registration.
 - Confirm the app registration emits Security Group Object IDs in the ID token: **Token configuration** > **Add groups claim** > **Security groups** > **ID** > **Group ID**.
 - Confirm `CapacityAdmin` and `CapacityReportViewers` exist, or have approved group Object IDs ready.
 - SQL Entra admin login and Object ID, or confirm the current Azure CLI user can be used.
@@ -126,11 +127,17 @@ Entra app registration client ID
 Entra app registration client secret
 Auth redirect URI for the Entra app registration
 Allow Terraform wrapper to add the generated callback URI to the app registration?
+Enable App Service Authentication / Easy Auth on the Web App?
+Web Easy Auth behavior for unauthenticated browser requests?
+Optional Web Easy Auth allowed client application IDs for bearer automation
+Keep x-ingest-key enabled for internal bootstrap/ingestion fallback?
 ```
 
 Suggested demo answer:
 
 - Enable auth: `Y`.
+- Web Easy Auth: keep `N` for the stable shared-secret demo path; choose `Y` for the full Easy Auth hardening path. Choose `RedirectToLoginPage` when users should reach Microsoft login from the browser; choose `Return401` only for API-style smoke probes.
+- Keep `x-ingest-key` enabled until bootstrap automation has a validated bearer-token path.
 - Redirect URI: accept the generated value unless the customer has a specific app hostname plan.
 - Terraform app registration update: answer `Y` only if the deployment identity has permission to update the app registration redirect URI.
 
@@ -167,6 +174,7 @@ Use current Azure signed-in user as SQL Entra admin?
 Does the customer already have an Azure SQL server to reuse?
 Does the customer already have a Key Vault to reuse?
 Does the customer already have a worker storage account to reuse?
+Create private endpoints for the worker storage account blob, queue, table, and file services?
 Does the customer already have a Virtual Network to reuse?
 ```
 
@@ -174,6 +182,7 @@ Suggested demo answer:
 
 - Use current signed-in user for SQL admin when appropriate.
 - For a clean demo, answer `N` to existing SQL, Key Vault, worker storage, and VNet.
+- Keep worker storage private endpoints enabled for security-reviewed demos unless the storage account is pre-wired through a customer-managed private path.
 - If you answer `Y` to an existing resource prompt, be ready to provide its exact existing resource name and resource group when asked.
 
 Narration:
@@ -188,6 +197,7 @@ Does the customer already have a Key Vault to reuse? (y/N): n
 Optional Key Vault name override for Terraform soft-delete/name conflicts:
 Allow Terraform runner public network access to Key Vault for secret provisioning? (Y/n): y
 Does the customer already have a worker storage account to reuse? (y/N): n
+Create private endpoints for the worker storage account blob, queue, table, and file services? (Y/n): y
 Does the customer already have a Virtual Network to reuse? (y/N): n
 ```
 
@@ -231,18 +241,22 @@ Expected prompts:
 ```text
 Provide an existing INGEST_API_KEY instead of letting deployment resolve/generate one?
 Provide an existing SESSION_SECRET instead of letting deployment resolve/generate one?
+Dashboard-to-worker authentication mode?
 Worker shared secret handling?
 Deploy the dashboard web package after infrastructure succeeds?
 Deploy the worker package after infrastructure succeeds?
+Temporarily enable Function public network access only while publishing the worker package, then lock it back down?
 Run database bootstrap through the deployed web app?
 ```
 
 Suggested demo answers:
 
 - Let deployment resolve or generate `INGEST_API_KEY` and `SESSION_SECRET` unless the customer has a secret-management standard.
-- Worker shared secret: `Generate`.
+- Worker auth mode: use `shared-secret` for the stable demo path, or `entra` when Function App Easy Auth and bearer smoke tests are part of the demo. The preferred Easy Auth path reuses the dashboard app registration for the worker audience (`api://<dashboard-client-id>`); provide a separate worker app registration only for stricter customer isolation requirements.
+- Worker shared secret: `Generate` for `shared-secret`; skipped automatically for `entra`.
 - Deploy web app: `Y`.
 - Deploy worker app: `Y`.
+- Temporary Function public access: `Y` for a public deployment workstation when Function public access is otherwise disabled; the wrapper locks it back down after zip publish. Use `N` only when the worker package will be published from a private-network-connected host.
 - Database bootstrap: `Y` for a clean environment.
 
 Narration:

@@ -115,6 +115,14 @@ function ConvertTo-StringArray([object]$Value) {
         return @()
     }
 
+    if ($Value -is [System.Collections.IDictionary]) {
+        if ($Value.Contains('value')) {
+            return ConvertTo-StringArray $Value['value']
+        }
+
+        return @($Value.Values | ForEach-Object { ConvertTo-StringArray $_ })
+    }
+
     if ($Value -is [string]) {
         return @(
             $Value -split ',' |
@@ -630,6 +638,22 @@ function ConvertTo-DeployParameterMap([System.Collections.ArrayList]$Arguments, 
         'ExistingVirtualNetworkResourceGroupName',
         'ExistingAppServiceIntegrationSubnetName',
         'ExistingPrivateEndpointSubnetName',
+        'PurgeDeletedKeyVaultOnNameConflict',
+        'BicepSqlProvisioningRetryCount',
+        'WorkerStoragePublicNetworkAccess',
+        'CreateWorkerStoragePrivateEndpoints',
+        'WebEasyAuthEnabled',
+        'WebEasyAuthUnauthenticatedAction',
+        'WebEasyAuthAllowedClientApplications',
+        'WebEasyAuthAllowedAudiences',
+        'IngestApiKeyEnabled',
+        'WorkerAuthMode',
+        'FunctionEasyAuthEnabled',
+        'WorkerAuthClientId',
+        'WorkerAuthTokenAudience',
+        'FunctionEasyAuthAllowedClientApplications',
+        'FunctionEasyAuthAllowedAudiences',
+        'TemporarilyEnableFunctionPublicAccessForWorkerDeploy',
         'ManageEntraWebRedirectUri',
         'ReportViewerGroupIds',
         'CreateMissingEntraAccessGroups'
@@ -772,6 +796,11 @@ $manageEntraWebRedirectUri = $false
 $adminGroupId = ''
 $reportViewerGroupIds = ''
 $createMissingGroups = $false
+$webEasyAuthEnabled = $false
+$webEasyAuthUnauthenticatedAction = 'Return401'
+$webEasyAuthAllowedClientApplications = @()
+$webEasyAuthAllowedAudiences = @()
+$ingestApiKeyEnabled = $true
 
 if ($authEnabled) {
     $entraTenantId = Prompt-String -Name 'EntraTenantId' -Question 'Entra tenant ID for dashboard sign-in' -DefaultValue $tenantDefault -Required
@@ -780,6 +809,14 @@ if ($authEnabled) {
     $authRedirectUri = Prompt-String -Name 'AuthRedirectUri' -Question 'Auth redirect URI for the Entra app registration' -DefaultValue $expectedAuthRedirectUri
     if ($provider -eq 'Terraform') {
         $manageEntraWebRedirectUri = Prompt-YesNo -Name 'ManageEntraWebRedirectUri' -Question 'Allow Terraform wrapper to add the generated callback URI to the app registration?' -DefaultValue $false
+    }
+
+    $webEasyAuthEnabled = Prompt-YesNo -Name 'WebEasyAuthEnabled' -Question 'Enable App Service Authentication / Easy Auth on the Web App?' -DefaultValue $false
+    if ($webEasyAuthEnabled) {
+        $webEasyAuthUnauthenticatedAction = Prompt-Choice -Name 'WebEasyAuthUnauthenticatedAction' -Question 'Web Easy Auth behavior for unauthenticated browser requests?' -Choices @('RedirectToLoginPage', 'Return401') -DefaultValue 'RedirectToLoginPage'
+        $webEasyAuthAllowedClientApplications = Prompt-List -Name 'WebEasyAuthAllowedClientApplications' -Question 'Optional Web Easy Auth allowed client application IDs for bearer automation (comma-separated)'
+        $webEasyAuthAllowedAudiences = Prompt-List -Name 'WebEasyAuthAllowedAudiences' -Question 'Optional Web Easy Auth allowed audiences (comma-separated; blank uses api://<client-id> and client-id)'
+        $ingestApiKeyEnabled = Prompt-YesNo -Name 'IngestApiKeyEnabled' -Question 'Keep x-ingest-key enabled for internal bootstrap/ingestion fallback?' -DefaultValue $true
     }
 
     while ($true) {
@@ -869,15 +906,23 @@ if (Prompt-YesNo -Name 'UseExistingSql' -Question 'Does the customer already hav
 $existingKeyVaultName = ''
 $existingKeyVaultResourceGroupName = ''
 $keyVaultNameOverride = ''
+$purgeDeletedKeyVaultOnNameConflict = $false
+$bicepSqlProvisioningRetryCount = 1
 $keyVaultPublicNetworkAccess = 'Disabled'
 $functionPublicNetworkAccess = 'Disabled'
 $createFunctionPrivateEndpoint = $true
+$workerStoragePublicNetworkAccess = 'Disabled'
+$createWorkerStoragePrivateEndpoints = $true
 if (Prompt-YesNo -Name 'UseExistingKeyVault' -Question 'Does the customer already have a Key Vault to reuse?' -DefaultValue $false) {
     $existingKeyVaultName = Prompt-String -Name 'ExistingKeyVaultName' -Question 'Existing Key Vault name' -Required
     $existingKeyVaultResourceGroupName = Prompt-String -Name 'ExistingKeyVaultResourceGroupName' -Question 'Existing Key Vault resource group' -DefaultValue $resourceGroupName
 }
 elseif ($provider -eq 'Terraform') {
     $keyVaultNameOverride = Prompt-String -Name 'KeyVaultNameOverride' -Question 'Optional Key Vault name override for Terraform soft-delete/name conflicts'
+}
+elseif ($provider -eq 'Bicep') {
+    $purgeDeletedKeyVaultOnNameConflict = Prompt-YesNo -Name 'PurgeDeletedKeyVaultOnNameConflict' -Question 'If the generated Key Vault name exists in soft-deleted state, purge it during deployment?' -DefaultValue $false
+    $bicepSqlProvisioningRetryCount = [int](Prompt-String -Name 'BicepSqlProvisioningRetryCount' -Question 'Bicep Azure SQL provisioning timeout retry count' -DefaultValue '1')
 }
 
 if ($provider -eq 'Terraform') {
@@ -890,6 +935,11 @@ $existingWorkerStorageResourceGroupName = ''
 if (Prompt-YesNo -Name 'UseExistingWorkerStorage' -Question 'Does the customer already have a worker storage account to reuse?' -DefaultValue $false) {
     $existingWorkerStorageAccountName = Prompt-String -Name 'ExistingWorkerStorageAccountName' -Question 'Existing worker storage account name' -Required
     $existingWorkerStorageResourceGroupName = Prompt-String -Name 'ExistingWorkerStorageResourceGroupName' -Question 'Existing worker storage account resource group' -DefaultValue $resourceGroupName
+}
+
+$createWorkerStoragePrivateEndpoints = Prompt-YesNo -Name 'CreateWorkerStoragePrivateEndpoints' -Question 'Create private endpoints for the worker storage account blob, queue, table, and file services?' -DefaultValue $true
+if (-not $createWorkerStoragePrivateEndpoints) {
+    $workerStoragePublicNetworkAccess = if (Prompt-YesNo -Name 'EnableWorkerStoragePublicNetworkAccess' -Question 'Allow public network access to the worker storage account?' -DefaultValue $false) { 'Enabled' } else { 'Disabled' }
 }
 
 $existingVirtualNetworkName = ''
@@ -947,7 +997,23 @@ if (Prompt-YesNo -Name 'ProvideSessionSecret' -Question 'Provide an existing SES
     $sessionSecret = Prompt-Secret -Name 'SessionSecret' -Question 'SESSION_SECRET value' -Required
 }
 
-$workerSecretMode = Prompt-Choice -Name 'WorkerSharedSecretMode' -Question 'Worker shared secret handling?' -Choices @('Generate', 'Provide existing', 'Skip') -DefaultValue 'Generate'
+$workerAuthMode = Prompt-Choice -Name 'WorkerAuthMode' -Question 'Dashboard-to-worker authentication mode?' -Choices @('shared-secret', 'entra') -DefaultValue 'shared-secret'
+$functionEasyAuthEnabled = $false
+$workerAuthClientId = ''
+$workerAuthTokenAudience = ''
+$functionEasyAuthAllowedClientApplications = @()
+$functionEasyAuthAllowedAudiences = @()
+$workerSecretMode = 'Skip'
+if ($workerAuthMode -eq 'entra') {
+    $functionEasyAuthEnabled = Prompt-YesNo -Name 'FunctionEasyAuthEnabled' -Question 'Enable App Service Authentication / Easy Auth on the worker Function App?' -DefaultValue $true
+    $workerAuthClientId = Prompt-String -Name 'WorkerAuthClientId' -Question 'Worker Easy Auth app registration client ID' -DefaultValue $entraClientId -Required
+    $workerAuthTokenAudience = Prompt-String -Name 'WorkerAuthTokenAudience' -Question 'Worker token audience' -DefaultValue "api://$workerAuthClientId" -Required
+    $functionEasyAuthAllowedClientApplications = Prompt-List -Name 'FunctionEasyAuthAllowedClientApplications' -Question 'Optional Function Easy Auth allowed client application IDs (comma-separated)'
+    $functionEasyAuthAllowedAudiences = Prompt-List -Name 'FunctionEasyAuthAllowedAudiences' -Question 'Optional Function Easy Auth allowed audiences (comma-separated; blank uses worker token audience)'
+}
+else {
+    $workerSecretMode = Prompt-Choice -Name 'WorkerSharedSecretMode' -Question 'Worker shared secret handling?' -Choices @('Generate', 'Provide existing', 'Skip') -DefaultValue 'Generate'
+}
 $workerSharedSecret = ''
 if ($workerSecretMode -eq 'Generate') {
     $workerSharedSecret = Set-Answer -Name 'WorkerSharedSecret' -Value (New-GeneratedSecret -ByteCount 32)
@@ -960,6 +1026,10 @@ $deployWebApp = Prompt-YesNo -Name 'DeployWebApp' -Question 'Deploy the dashboar
 $skipWebAppTests = $false
 $skipWebAppTests = [bool](Resolve-WebPackageTestGate -DeployWebApp $deployWebApp -SkipWebAppTests $skipWebAppTests)
 $deployWorkerApp = Prompt-YesNo -Name 'DeployWorkerApp' -Question 'Deploy the worker package after infrastructure succeeds?' -DefaultValue $true
+$temporarilyEnableFunctionPublicAccessForWorkerDeploy = $false
+if ($deployWorkerApp -and $functionPublicNetworkAccess -eq 'Disabled') {
+    $temporarilyEnableFunctionPublicAccessForWorkerDeploy = Prompt-YesNo -Name 'TemporarilyEnableFunctionPublicAccessForWorkerDeploy' -Question 'Temporarily enable Function public network access only while publishing the worker package, then lock it back down?' -DefaultValue $true
+}
 $defaultBootstrap = [string]::IsNullOrWhiteSpace($existingSqlServerName)
 $applyDatabaseBootstrap = Prompt-YesNo -Name 'ApplyDatabaseBootstrap' -Question 'Run database bootstrap through the deployed web app?' -DefaultValue $defaultBootstrap
 if ($applyDatabaseBootstrap -and -not $deployWebApp) {
@@ -983,9 +1053,13 @@ Add-DeployArgument -Arguments $deployArguments -Name '-WebQuotaWriterSubscriptio
 Add-DeployArgument -Arguments $deployArguments -Name '-WebQuotaWriterManagementGroupNames' -Value $webQuotaWriterManagementGroupNames
 Add-DeployArgument -Arguments $deployArguments -Name '-QuotaManagementGroupId' -Value $quotaManagementGroupId
 Add-DeployArgument -Arguments $deployArguments -Name '-KeyVaultNameOverride' -Value $keyVaultNameOverride
+Add-DeployArgument -Arguments $deployArguments -Name '-PurgeDeletedKeyVaultOnNameConflict' -Value $purgeDeletedKeyVaultOnNameConflict
+Add-DeployArgument -Arguments $deployArguments -Name '-BicepSqlProvisioningRetryCount' -Value $bicepSqlProvisioningRetryCount
 Add-DeployArgument -Arguments $deployArguments -Name '-KeyVaultPublicNetworkAccess' -Value $keyVaultPublicNetworkAccess
 Add-DeployArgument -Arguments $deployArguments -Name '-FunctionPublicNetworkAccess' -Value $functionPublicNetworkAccess
 Add-DeployArgument -Arguments $deployArguments -Name '-CreateFunctionPrivateEndpoint' -Value $createFunctionPrivateEndpoint
+Add-DeployArgument -Arguments $deployArguments -Name '-WorkerStoragePublicNetworkAccess' -Value $workerStoragePublicNetworkAccess
+Add-DeployArgument -Arguments $deployArguments -Name '-CreateWorkerStoragePrivateEndpoints' -Value $createWorkerStoragePrivateEndpoints
 Add-DeployArgument -Arguments $deployArguments -Name '-ExistingSqlServerName' -Value $existingSqlServerName
 Add-DeployArgument -Arguments $deployArguments -Name '-ExistingSqlServerResourceGroupName' -Value $existingSqlServerResourceGroupName
 Add-DeployArgument -Arguments $deployArguments -Name '-ExistingSqlDatabaseName' -Value $existingSqlDatabaseName
@@ -1003,6 +1077,17 @@ Add-DeployArgument -Arguments $deployArguments -Name '-AssignWorkerComputeRecomm
 Add-DeployArgument -Arguments $deployArguments -Name '-AssignWorkerCostManagementReaderRole' -Value $assignWorkerCostManagementReaderRole
 Add-DeployArgument -Arguments $deployArguments -Name '-AssignWorkerBillingReaderRole' -Value $assignWorkerBillingReaderRole
 Add-DeployArgument -Arguments $deployArguments -Name '-AuthEnabled' -Value $authEnabled
+Add-DeployArgument -Arguments $deployArguments -Name '-WebEasyAuthEnabled' -Value $webEasyAuthEnabled
+Add-DeployArgument -Arguments $deployArguments -Name '-WebEasyAuthUnauthenticatedAction' -Value $webEasyAuthUnauthenticatedAction
+Add-DeployArgument -Arguments $deployArguments -Name '-WebEasyAuthAllowedClientApplications' -Value $webEasyAuthAllowedClientApplications
+Add-DeployArgument -Arguments $deployArguments -Name '-WebEasyAuthAllowedAudiences' -Value $webEasyAuthAllowedAudiences
+Add-DeployArgument -Arguments $deployArguments -Name '-IngestApiKeyEnabled' -Value $ingestApiKeyEnabled
+Add-DeployArgument -Arguments $deployArguments -Name '-WorkerAuthMode' -Value $workerAuthMode
+Add-DeployArgument -Arguments $deployArguments -Name '-FunctionEasyAuthEnabled' -Value $functionEasyAuthEnabled
+Add-DeployArgument -Arguments $deployArguments -Name '-WorkerAuthClientId' -Value $workerAuthClientId
+Add-DeployArgument -Arguments $deployArguments -Name '-WorkerAuthTokenAudience' -Value $workerAuthTokenAudience
+Add-DeployArgument -Arguments $deployArguments -Name '-FunctionEasyAuthAllowedClientApplications' -Value $functionEasyAuthAllowedClientApplications
+Add-DeployArgument -Arguments $deployArguments -Name '-FunctionEasyAuthAllowedAudiences' -Value $functionEasyAuthAllowedAudiences
 Add-DeployArgument -Arguments $deployArguments -Name '-EntraTenantId' -Value $entraTenantId
 Add-DeployArgument -Arguments $deployArguments -Name '-EntraClientId' -Value $entraClientId
 Add-DeployArgument -Arguments $deployArguments -Name '-EntraClientSecret' -Value $entraClientSecret
@@ -1017,6 +1102,7 @@ Add-DeployArgument -Arguments $deployArguments -Name '-RandomizeWorkloadSuffixOn
 Add-DeployArgument -Arguments $deployArguments -Name '-DeployWebApp' -Value $deployWebApp
 Add-DeployArgument -Arguments $deployArguments -Name '-SkipWebAppTests' -Value $skipWebAppTests
 Add-DeployArgument -Arguments $deployArguments -Name '-DeployWorkerApp' -Value $deployWorkerApp
+Add-DeployArgument -Arguments $deployArguments -Name '-TemporarilyEnableFunctionPublicAccessForWorkerDeploy' -Value $temporarilyEnableFunctionPublicAccessForWorkerDeploy
 Add-DeployArgument -Arguments $deployArguments -Name '-ApplyDatabaseBootstrap' -Value $applyDatabaseBootstrap
 Add-DeployArgument -Arguments $deployArguments -Name '-IngestApiKey' -Value $ingestApiKey
 Add-DeployArgument -Arguments $deployArguments -Name '-SessionSecret' -Value $sessionSecret
@@ -1033,17 +1119,27 @@ $plan = [ordered]@{
     ExpectedFunctionAppName = $expectedFunctionAppName
     RandomizeNameConflict = $randomizeNames
     AuthEnabled = $authEnabled
+    WebEasyAuthEnabled = $webEasyAuthEnabled
+    WebEasyAuthUnauthenticatedAction = $webEasyAuthUnauthenticatedAction
+    IngestApiKeyEnabled = $ingestApiKeyEnabled
+    WorkerAuthMode = $workerAuthMode
+    FunctionEasyAuthEnabled = $functionEasyAuthEnabled
     AuthRedirectUri = if ($authEnabled) { $authRedirectUri } else { 'Auth disabled' }
     AccessGroupMode = if ($authEnabled) { Get-Answer -Name 'AccessGroupMode' -DefaultValue '(not set)' } else { 'Auth disabled' }
     ExistingSql = if ([string]::IsNullOrWhiteSpace($existingSqlServerName)) { 'No' } else { $existingSqlServerName }
     ExistingKeyVault = if ([string]::IsNullOrWhiteSpace($existingKeyVaultName)) { 'No' } else { $existingKeyVaultName }
+    PurgeDeletedKeyVaultOnNameConflict = if ($provider -eq 'Bicep') { $purgeDeletedKeyVaultOnNameConflict } else { 'N/A' }
+    BicepSqlProvisioningRetryCount = if ($provider -eq 'Bicep') { $bicepSqlProvisioningRetryCount } else { 'N/A' }
     KeyVaultPublicNetworkAccess = if ($provider -eq 'Terraform') { $keyVaultPublicNetworkAccess } else { 'Template default' }
     ExistingWorkerStorage = if ([string]::IsNullOrWhiteSpace($existingWorkerStorageAccountName)) { 'No' } else { $existingWorkerStorageAccountName }
+    WorkerStoragePublicNetworkAccess = $workerStoragePublicNetworkAccess
+    CreateWorkerStoragePrivateEndpoints = $createWorkerStoragePrivateEndpoints
     ExistingVirtualNetwork = if ([string]::IsNullOrWhiteSpace($existingVirtualNetworkName)) { 'No' } else { $existingVirtualNetworkName }
     RbacMode = $rbacMode
     DeployWebApp = $deployWebApp
     SkipWebAppTests = $skipWebAppTests
     DeployWorkerApp = $deployWorkerApp
+    TemporaryFunctionPublicAccessForWorkerDeploy = $temporarilyEnableFunctionPublicAccessForWorkerDeploy
     ApplyDatabaseBootstrap = $applyDatabaseBootstrap
 }
 

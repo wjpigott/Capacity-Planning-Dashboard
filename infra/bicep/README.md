@@ -13,6 +13,7 @@ This template provisions a native Azure baseline for the dashboard solution and 
 - SQL Private Endpoint + Private DNS zone link (`privatelink.database.windows.net`)
 - Key Vault Private Endpoint + Private DNS zone link (`privatelink.vaultcore.azure.net`)
 - Function App Private Endpoint + Private DNS zone link (`privatelink.azurewebsites.net`)
+- Function worker Storage Account private endpoints + Private DNS zone links for blob, queue, table, and file services
 - Azure Key Vault (RBAC authorization)
 - Application Insights + Log Analytics
 
@@ -39,6 +40,7 @@ Use this table during customer reviews to explain why each Azure service exists 
 | Key Vault | Yes, unless reusing existing vault | Stores deployment/runtime secrets such as app secrets and internal shared secrets. | No | Uses RBAC authorization and managed identity access. |
 | Key Vault Private Endpoint + Private DNS | Yes when creating Key Vault and private vault access is enabled | Private connectivity from the app hosts to Key Vault. | No | Skipped when reusing a Key Vault that already has customer-managed private connectivity. |
 | Function App Private Endpoint + Private DNS | Yes by default | Private connectivity from the dashboard Web App to the worker Function App. | No | Set `createFunctionPrivateEndpoint` to false only when using another approved ingress path. |
+| Worker Storage Private Endpoints + Private DNS | Yes by default | Private connectivity from the Function App to its Azure Functions host storage account. | No | Creates blob, queue, table, and file private endpoints. Existing storage reuse assumes the customer-approved private connectivity path is valid. |
 | Application Insights + Log Analytics | Yes | Application telemetry, diagnostics, and operational troubleshooting. | No | Does not replace Azure SQL for dashboard report data. |
 | Role assignments | Yes, based on parameters | Grants least-required access for Key Vault, worker host storage, cross-subscription reads, live placement, billing/pricing, and quota apply. | No | Scope depends on management-group or subscription parameters. |
 
@@ -55,6 +57,8 @@ Use this table during customer reviews to explain why each Azure service exists 
 - SQL defaults to private-access mode (`sqlPublicNetworkAccess = 'Disabled'`) and is reachable from App Service/Function App via VNet integration and private endpoint.
 - Key Vault defaults to private-access mode (`keyVaultPublicNetworkAccess = 'Disabled'`) and is reachable from App Service/Function App via VNet integration and private endpoint.
 - Function App worker ingress defaults to private-access mode (`functionPublicNetworkAccess = 'Disabled'`) and is reachable from the dashboard Web App through `privatelink.azurewebsites.net` when the Function private endpoint is created.
+- For package publishing from a public deployment workstation, the deployment wrapper can temporarily set Function App public network access to `Enabled` while `scripts/deploy-worker.ps1` publishes the zip package, then restore the configured locked-down value immediately afterward. Run package publishing from a private-network-connected host instead when temporary public access is not allowed.
+- Function worker storage defaults to private-access mode (`workerStoragePublicNetworkAccess = 'Disabled'`) and is reachable from the Function App through blob, queue, table, and file private endpoints when `createWorkerStoragePrivateEndpoints = true`.
 - Existing SQL, Key Vault, and worker storage can now be reused by passing the matching `existing*Name` parameters.
 - Existing customer-managed VNets can now be reused by passing the matching `existingVirtualNetwork*` and existing subnet name parameters. In this mode Bicep does not create or modify the VNet or subnets.
 - When `existingSqlServerName` or `existingKeyVaultName` is set, the template assumes customer-managed private connectivity already exists for that dependency and does not create a new private endpoint or private DNS zone for it.
@@ -62,6 +66,9 @@ Use this table during customer reviews to explain why each Azure service exists 
 - Dashboard subscription discovery RBAC can now be assigned automatically during infra deployment by passing `webReaderSubscriptionIds` to apply `Reader` on those subscriptions.
 - Dashboard quota-apply RBAC can now be assigned automatically during infra deployment by passing `webQuotaWriterSubscriptionIds` to apply `GroupQuota Request Operator` on those subscriptions.
 - Dashboard Entra sign-in can now be configured during infra deployment through app settings (`authEnabled`, `entraTenantId`, `entraClientId`, `entraClientSecret`, `adminGroupId`, optional `reportViewerGroupIds`, and optional `authRedirectUri`).
+- Web App Easy Auth browser sign-in requires the app registration to include the App Service callback URI `https://<web-app>.azurewebsites.net/.auth/login/aad/callback` and to enable ID token issuance. The dashboard's custom Express callback URI remains `https://<web-app>.azurewebsites.net/auth/callback` while that flow is still present.
+- When `workerAuthMode=entra` and Function Easy Auth is enabled, `scripts/deploy-infra.ps1` patches Function Easy Auth after infrastructure deployment to allow the Web App managed identity application/client ID as a caller.
+- App Service Authentication / Easy Auth can be configured during infra deployment with `webEasyAuthEnabled`, `functionEasyAuthEnabled`, `workerAuthMode`, `workerAuthClientId`, `workerAuthTokenAudience`, and the optional allowed-audience/client-application arrays. The preferred customer path reuses the dashboard app registration for Function worker Easy Auth: leave `workerAuthClientId` and `workerAuthTokenAudience` blank to default to `entraClientId` and `api://<entraClientId>`. Keep `workerAuthMode = 'shared-secret'` until bearer-token smoke tests are ready.
 - Split read/write identities in later phases (recommended) for least privilege.
 
 ## Networking parameters
@@ -73,6 +80,12 @@ Use this table during customer reviews to explain why each Azure service exists 
 - `keyVaultPublicNetworkAccess` (`Disabled` by default; set `Enabled` only for temporary break-glass access)
 - `functionPublicNetworkAccess` (`Disabled` by default; keep disabled when using the Function private endpoint)
 - `createFunctionPrivateEndpoint` (`true` by default; creates `privatelink.azurewebsites.net` DNS and private endpoint for the worker)
+- `workerStoragePublicNetworkAccess` (`Disabled` by default; keep disabled when using worker storage private endpoints)
+- `createWorkerStoragePrivateEndpoints` (`true` by default; creates `privatelink.<service>.core.windows.net` DNS and private endpoints for blob, queue, table, and file)
+- `webEasyAuthEnabled` (`false` by default; enables Easy Auth on the Web App when the dashboard app registration and bearer automation path are ready)
+- `workerAuthMode` (`shared-secret` by default; set to `entra` with `functionEasyAuthEnabled = true` after the dashboard app registration has an app ID URI/audience configured)
+- `workerAuthClientId` and `workerAuthTokenAudience` (optional overrides for Function App Easy Auth / Entra worker auth; blank reuses `entraClientId` and `api://<entraClientId>`)
+- `ingestApiKeyEnabled` (`true` by default; keep enabled until deployment/bootstrap automation no longer depends on `x-ingest-key`)
 
 Existing-network mode is intended for customer or separate-tenant testing where the network team owns VNet creation. Supply these names together:
 
@@ -84,8 +97,8 @@ Existing-network mode is intended for customer or separate-tenant testing where 
 Required customer-managed subnet configuration:
 
 - The App Service integration subnet must be delegated to `Microsoft.Web/serverFarms` and have enough free IPs for the Web App and Function App integrations.
-- The private endpoint subnet must allow private endpoints for SQL and Key Vault when those dependencies are created by this template.
-- DNS resolution from the App Service/Function App integration subnet must resolve the SQL and Key Vault private DNS zones used by the customer's network path.
+- The private endpoint subnet must allow private endpoints for SQL, Key Vault, Function App, and worker storage when those dependencies are created by this template.
+- DNS resolution from the App Service/Function App integration subnet must resolve the SQL, Key Vault, Function App, and worker storage private DNS zones used by the customer's network path.
 
 ## Existing resource parameters
 

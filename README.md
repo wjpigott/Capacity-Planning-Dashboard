@@ -5,17 +5,19 @@ This repository contains the initial platform scaffold for a native Azure capaci
 
 ## Current Release
 
-Current version: `v1.0.2`
+Current version: `v1.0.3`
 
-This version adds the PaaS DB Quota report, scheduler scope consolidation, and Function App private endpoint defaults on top of the original proof-of-concept baseline. Future compatible feature updates should move to the next minor version, such as `v1.1.0`; patch-only fixes to this baseline should use `v1.0.3`, `v1.0.4`, and so on.
+This version hardens App Service Authentication / Easy Auth deployments across Bicep and Terraform on top of the original proof-of-concept baseline. Future compatible feature updates should move to the next minor version, such as `v1.1.0`; patch-only fixes to this baseline should use `v1.0.4`, `v1.0.5`, and so on.
 
-Key additions in `v1.0.2`:
+Key additions in `v1.0.3`:
 
-- PaaS DB Quota report for database quota usage, regional access, zone access, and optional capability evidence.
-- SQL persistence and cached reloads for PaaS DB Quota report runs.
-- PaaS DB Quota scheduler controls that reuse the shared Capacity Ingest subscription and management group scope.
-- Function App private endpoint and `privatelink.azurewebsites.net` deployment defaults so worker ingress can be private by default.
-- Hidden legacy PaaS Availability navigation entry while retaining backend routes and SQL tables for rollback.
+- Web App and Function App Easy Auth deployment settings for Bicep and Terraform.
+- One-app-registration Easy Auth path by default: the dashboard app registration secures both browser sign-in and dashboard-to-worker bearer calls.
+- Deployment wrapper patching of Function Easy Auth allowed applications with the Web App managed identity application/client ID.
+- Temporary Function public-access window for worker zip publishing, with automatic restore to the locked-down value.
+- Bearer-authenticated database bootstrap through the deployed Web App, with JSON `ok:true` response validation.
+- Bicep deployment ergonomics for soft-deleted Key Vault names and transient Azure SQL logical-server provisioning timeouts.
+- Validated Terraform and Bicep worker-backed PaaS refresh through Function App Easy Auth with persisted SQL results.
 
 Release history is tracked in `docs/RELEASE-NOTES.md`. Git tags should use the same version string as the release, for example `v1.0.0-poc`, so others can retrieve the exact code behind a deployed version.
 
@@ -57,7 +59,7 @@ This project is licensed under the terms of the [MIT License](LICENSE).
 
 The current-state diagram reflects what is deployed now: App Service hosting the static UI + Express API, Azure SQL with Entra-only auth, managed identity database access, Key Vault RBAC integration, Function App worker private ingress through Private Link, and App Insights/Log Analytics.
 
-The `feature/function-worker-auth-hardening` branch validates the next security posture in isolated Bicep/Terraform app pairs: Web App Easy Auth, Function App Easy Auth, browser login through App Service Authentication, Entra-authenticated dashboard-to-worker calls, temporary Function public access only during worker zip publish, database bootstrap through the deployed Web App, and worker storage private endpoint support. Bicep and Terraform now expose the Easy Auth settings; production rollout still needs the final customer automation-caller decision before `INGEST_API_KEY` can become optional.
+Version `v1.0.3` validates the next security posture in isolated Bicep/Terraform app pairs: Web App Easy Auth, Function App Easy Auth, browser login through App Service Authentication, Entra-authenticated dashboard-to-worker calls, temporary Function public access only during worker zip publish, database bootstrap through the deployed Web App, and worker storage private endpoint support. Bicep and Terraform now expose the Easy Auth settings; production rollout still needs the final customer automation-caller decision before `INGEST_API_KEY` can become optional.
 
 The next execution split is now scaffolded in-repo: a dedicated Azure Functions PowerShell 7 worker host under `functions/CapacityWorker/` for live placement and future quota move/apply orchestration.
 
@@ -77,7 +79,7 @@ Status legend:
 | --- | --- | --- |
 | Platform and infrastructure | `[x]` | App Service, SQL, Key Vault, App Insights, Log Analytics deployed via Bicep |
 | Worker execution host | `[~]` | Azure Functions PowerShell 7 worker runs on a dedicated App Service plan with managed-identity host storage; live placement worker still needs module restore validation |
-| Security and identity | `[~]` | Entra admin + AAD-only SQL auth, managed identity runtime access, no raw subscription IDs stored in snapshots; dashboard auth flow is enabled; Easy Auth hardening is validated on the branch for Bicep and is being mirrored through Terraform |
+| Security and identity | `[~]` | Entra admin + AAD-only SQL auth, managed identity runtime access, no raw subscription IDs stored in snapshots; dashboard auth flow is enabled; Easy Auth hardening is validated for Bicep and Terraform in `v1.0.3` |
 | Live ingestion pipeline | `[x]` | Internal ingestion endpoint + scheduler; family filtering is optional (omit `INGEST_QUOTA_FAMILY_FILTERS` to ingest all families) + SQL snapshot writes |
 | API and analytics | `[~]` | Capacity API, subscription catalog, family summary, masked subscription summary, and trend APIs complete; quota discovery, plan, simulation, and apply APIs are live |
 | UX and dashboard | `[~]` | Capacity grid, filters (region, resource type, SKU family search, availability, subscription), sidebar report navigation, analytics tables, and chart views complete; export/workflow pages still pending |
@@ -102,7 +104,7 @@ Status legend:
 - [x] Internal ingestion endpoints protected by `INGEST_API_KEY`
 - [x] Subscription identities masked (`subscriptionKey`) in stored analytics rows
 - [x] Entra sign-in, admin group gating, and report viewer group gating enabled via dashboard auth flow, `ADMIN_GROUP_ID`, and `REPORT_VIEWER_GROUP_IDS`
-- [~] Easy Auth hardening branch validated on isolated Web/Function apps: anonymous Web API calls return `401`, `x-ingest-key` alone returns `401`, bearer-authenticated internal diagnostics return `200`, and worker calls run through Function App Easy Auth
+- [~] Easy Auth hardening validated on isolated Bicep/Terraform Web/Function apps: anonymous Web API calls return `401`, `x-ingest-key` alone returns `401`, bearer-authenticated internal diagnostics return `200`, and worker calls run through Function App Easy Auth
 
 Dashboard report access is controlled separately from administrator access. Users must either be in the admin group configured by `ADMIN_GROUP_ID` or in one of the report viewer groups configured by `REPORT_VIEWER_GROUP_IDS`. The current viewer group is named `CapacityReportViewers`; add users to that Entra group before asking them to sign in to the dashboard.
 
@@ -130,7 +132,7 @@ Troubleshooting `Report access is not enabled for your account`:
 - [x] Family filter ingestion — optional; set `INGEST_QUOTA_FAMILY_FILTERS` to a comma-separated list to restrict, or omit entirely to ingest all VM families
 - [x] Ingestion scheduler (DB-backed admin settings with environment fallback)
 - [ ] Move recurring scheduler execution to Function App TimerTrigger jobs (ingestion + live placement)
-- [~] Harden Function App worker ingress with App Service Authentication / Microsoft Entra auth: app code, Bicep/Terraform knobs, and isolated smoke tests are complete on the auth-hardening branch; production allow-lists, bootstrap bearer automation, and promotion runbooks remain
+- [~] Harden Function App worker ingress with App Service Authentication / Microsoft Entra auth: app code, Bicep/Terraform knobs, and isolated smoke tests are complete in `v1.0.3`; production allow-lists and promotion runbooks remain
 - [ ] Retry/backoff and dead-letter behavior for ingestion failures
 
 #### API and analytics
@@ -837,9 +839,9 @@ Hosted worker guidance:
 - Configure `AzureWebJobsStorage` with managed identity, not a shared-key connection string.
 - Grant the worker identity storage data-plane access on the host storage account.
 - Default infrastructure creates a Function App private endpoint, links `privatelink.azurewebsites.net`, and disables Function App public network access so the dashboard Web App reaches the worker privately.
-- Current stable dev baseline uses `CAPACITY_WORKER_SHARED_SECRET` on the web app and `WORKER_SHARED_SECRET` on the Function App for dashboard-to-worker calls.
-- The auth-hardening branch validates the replacement path: App Service Authentication on the Function App, dashboard-managed-identity bearer tokens, and `CAPACITY_WORKER_DISABLE_LOCAL_FALLBACK=true` during smoke tests.
-- Branch infrastructure now tracks Function worker storage private endpoints for blob, queue, table, and file services. Validate private DNS and Function startup before disabling public access on an existing storage account.
+- Shared-secret mode remains available with `CAPACITY_WORKER_SHARED_SECRET` on the web app and `WORKER_SHARED_SECRET` on the Function App for rollback or customers not ready for Easy Auth.
+- Version `v1.0.3` validates the Easy Auth replacement path: App Service Authentication on the Function App, dashboard-managed-identity bearer tokens, and no worker shared secret requirement when `CAPACITY_WORKER_AUTH_MODE=entra` is selected.
+- Infrastructure now tracks Function worker storage private endpoints for blob, queue, table, and file services. Validate private DNS and Function startup before disabling public access on an existing storage account.
 - The default infrastructure path uses a dedicated App Service plan for the worker instead of Flex Consumption.
 - Enable PowerShell managed dependencies in `host.json` so `requirements.psd1` can restore Az modules on the worker.
 - NOTE: when `-WorkerRbacManagementGroupNames` is provided during infra deployment, the worker RBAC roles are assigned at those management group scopes. Use `-WorkerRbacSubscriptionIds` only when you need the small-customer subscription fallback.

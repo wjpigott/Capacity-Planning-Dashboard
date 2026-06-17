@@ -93,6 +93,116 @@ const QUOTA_APPLY_JOB_TTL_MS = 6 * 60 * 60 * 1000;
 const INGEST_JOB_TTL_MS = 6 * 60 * 60 * 1000;
 const quotaApplyJobs = new Map();
 const ingestionJobs = new Map();
+const APP_META_CACHE_TTL_MS = 60 * 60 * 1000;
+const APP_PACKAGE_JSON_PATH = path.resolve(__dirname, '..', 'package.json');
+const DEFAULT_REPOSITORY_URL = 'https://github.com/wjpigott/Capacity-Planning-Dashboard';
+
+let appPackageMetadata = {
+  version: '0.0.0',
+  homepage: `${DEFAULT_REPOSITORY_URL}#readme`,
+  repositoryUrl: DEFAULT_REPOSITORY_URL
+};
+
+try {
+  const packageJsonRaw = fs.readFileSync(APP_PACKAGE_JSON_PATH, 'utf8');
+  const packageJson = JSON.parse(packageJsonRaw);
+  const repositoryField = packageJson?.repository;
+  const repositoryValue = typeof repositoryField === 'string'
+    ? repositoryField
+    : repositoryField?.url;
+
+  const normalizedRepositoryUrl = String(repositoryValue || DEFAULT_REPOSITORY_URL)
+    .replace(/^git\+/, '')
+    .replace(/\.git$/, '');
+
+  appPackageMetadata = {
+    version: String(packageJson?.version || '0.0.0'),
+    homepage: String(packageJson?.homepage || `${normalizedRepositoryUrl}#readme`),
+    repositoryUrl: normalizedRepositoryUrl
+  };
+} catch (error) {
+  console.warn('Unable to parse package.json for app metadata:', error?.message || error);
+}
+
+const repoPathMatch = appPackageMetadata.repositoryUrl.match(/github\.com\/(.+?)\/(.+?)(?:#|$)/i);
+const githubOwner = repoPathMatch?.[1] || 'wjpigott';
+const githubRepo = repoPathMatch?.[2] || 'Capacity-Planning-Dashboard';
+const githubLatestReleaseApiUrl = `https://api.github.com/repos/${githubOwner}/${githubRepo}/releases/latest`;
+
+let latestReleaseCache = {
+  fetchedAt: 0,
+  data: null,
+  error: ''
+};
+
+function parseVersionComponents(version) {
+  const normalized = String(version || '').trim().replace(/^v/i, '').split('-')[0];
+  const parts = normalized.split('.').map((part) => Number(part));
+  if (parts.some((part) => !Number.isFinite(part))) {
+    return null;
+  }
+  return [parts[0] || 0, parts[1] || 0, parts[2] || 0];
+}
+
+function isVersionNewer(candidate, current) {
+  const next = parseVersionComponents(candidate);
+  const now = parseVersionComponents(current);
+  if (!next || !now) {
+    return false;
+  }
+
+  for (let index = 0; index < Math.max(next.length, now.length); index += 1) {
+    const left = next[index] || 0;
+    const right = now[index] || 0;
+    if (left > right) return true;
+    if (left < right) return false;
+  }
+
+  return false;
+}
+
+async function getLatestReleaseMetadata() {
+  const now = Date.now();
+  if (latestReleaseCache.data && (now - latestReleaseCache.fetchedAt) < APP_META_CACHE_TTL_MS) {
+    return latestReleaseCache;
+  }
+
+  try {
+    const response = await fetch(githubLatestReleaseApiUrl, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'capacity-dashboard-app-meta'
+      }
+    });
+
+    if (!response.ok) {
+      latestReleaseCache = {
+        fetchedAt: now,
+        data: null,
+        error: `GitHub release check failed (${response.status})`
+      };
+      return latestReleaseCache;
+    }
+
+    const payload = await response.json();
+    latestReleaseCache = {
+      fetchedAt: now,
+      data: {
+        tagName: String(payload?.tag_name || ''),
+        releaseUrl: String(payload?.html_url || `${appPackageMetadata.repositoryUrl}/releases`)
+      },
+      error: ''
+    };
+    return latestReleaseCache;
+  } catch (error) {
+    latestReleaseCache = {
+      fetchedAt: now,
+      data: null,
+      error: error?.message || 'GitHub release check failed.'
+    };
+    return latestReleaseCache;
+  }
+}
 
 const DASHBOARD_SETTING_KEYS = {
   ingestIntervalMinutes: 'schedule.ingest.intervalMinutes',
@@ -2186,6 +2296,46 @@ app.get('/api/auth/me', (req, res) => {
   });
 });
 
+app.get('/api/app-meta', async (req, res) => {
+  const currentVersion = appPackageMetadata.version;
+  const repositoryUrl = appPackageMetadata.repositoryUrl;
+  const currentReleaseUrl = `${repositoryUrl}/blob/main/README.md#current-release`;
+
+  const account = getAccountFromSession(req);
+  const canViewReleaseCheck = canAccessAdmin(account);
+
+  let latestVersion = null;
+  let latestReleaseUrl = `${repositoryUrl}/releases`;
+  let updateAvailable = false;
+  let latestCheckError = null;
+  let latestCheckedAtUtc = null;
+
+  if (canViewReleaseCheck) {
+    const latestRelease = await getLatestReleaseMetadata();
+    latestVersion = latestRelease.data?.tagName || null;
+    latestReleaseUrl = latestRelease.data?.releaseUrl || latestReleaseUrl;
+    updateAvailable = latestVersion ? isVersionNewer(latestVersion, currentVersion) : false;
+    latestCheckError = latestRelease.error || null;
+    latestCheckedAtUtc = latestRelease.fetchedAt ? new Date(latestRelease.fetchedAt).toISOString() : null;
+  }
+
+  res.json({
+    ok: true,
+    meta: {
+      currentVersion,
+      repositoryUrl,
+      homepageUrl: appPackageMetadata.homepage,
+      currentReleaseUrl,
+      canViewReleaseCheck,
+      latestVersion,
+      latestReleaseUrl,
+      updateAvailable,
+      latestCheckError,
+      latestCheckedAtUtc
+    }
+  });
+});
+
 app.get('/api/capacity', async (req, res) => {
   try {
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
@@ -2536,7 +2686,7 @@ app.get('/api/capacity/scores', async (req, res) => {
   try {
     const pageNumber = Number(req.query.pageNumber || 1);
     const pageSize = Number(req.query.pageSize || 50);
-    
+
     const payload = await getCapacityScoreSummaryPaginated({
       regionPreset: req.query.regionPreset,
       subscriptionIds: req.query.subscriptionIds,
@@ -2547,7 +2697,7 @@ app.get('/api/capacity/scores', async (req, res) => {
       availability: req.query.availability,
       desiredCount: req.query.desiredCount
     }, pageNumber, pageSize);
-    
+
     res.json(payload);
   } catch (err) {
     sendErrorResponse(res, { clientMessage: 'Failed to retrieve capacity score summary.', err, scope: 'api/capacity/scores' });
@@ -2737,7 +2887,7 @@ app.get('/api/ai/models', async (req, res) => {
       ? `SELECT * FROM ${objectName} WHERE 1=1`
       : `SELECT *, CAST('OpenAI' AS NVARCHAR(128)) AS provider FROM ${objectName} WHERE 1=1`;
     const request = pool.request();
-    
+
     if (region) {
       query += ' AND region = @region';
       request.input('region', sql.NVarChar, region);
@@ -2755,21 +2905,21 @@ app.get('/api/ai/models', async (req, res) => {
       query += ' AND provider = @provider';
       request.input('provider', sql.NVarChar, provider);
     }
-    
+
     if (modelName) {
       query += ' AND modelName LIKE @modelName';
       request.input('modelName', sql.NVarChar, `%${modelName}%`);
     }
-    
+
     if (deploymentType) {
       query += ' AND deploymentTypes LIKE @deploymentType';
       request.input('deploymentType', sql.NVarChar, `%${deploymentType}%`);
     }
-    
+
     query += hasProviderColumn
       ? ' ORDER BY provider, region, modelName, modelVersion'
       : ' ORDER BY region, modelName, modelVersion';
-    
+
     const result = await request.query(query);
     res.json({ rows: result.recordset });
   } catch (err) {
@@ -2838,7 +2988,7 @@ app.get('/api/ai/models/regions', async (req, res) => {
     const provider = req.query.provider;
     const request = pool.request();
     let query = `
-      SELECT DISTINCT region 
+      SELECT DISTINCT region
       FROM ${objectName}
       WHERE 1 = 1
     `;
@@ -2910,11 +3060,11 @@ app.get('/api/ai/quota', async (req, res) => {
       res.status(503).json({ error: 'Database not configured' });
       return;
     }
-    
+
     const region = req.query.region;
     const provider = req.query.provider;
     const modelName = req.query.modelName;
-    
+
     let query = `
       WITH LatestAICapture AS (
         SELECT MAX(capturedAtUtc) AS capturedAtUtc
@@ -2922,7 +3072,7 @@ app.get('/api/ai/quota', async (req, res) => {
         WHERE sourceType = 'live-azure-openai-ingest'
            OR sourceType LIKE 'live-azure-ai-%-ingest'
       )
-      SELECT 
+      SELECT
         snapshot.region,
         snapshot.sourceType,
         snapshot.skuFamily,
@@ -2938,21 +3088,21 @@ app.get('/api/ai/quota', async (req, res) => {
       WHERE snapshot.sourceType = 'live-azure-openai-ingest'
          OR snapshot.sourceType LIKE 'live-azure-ai-%-ingest'
     `;
-    
+
     const request = pool.request();
-    
+
     if (region) {
       query += ' AND snapshot.region = @region';
       request.input('region', sql.NVarChar, region);
     }
-    
+
     if (modelName) {
       query += ' AND (snapshot.skuFamily LIKE @modelName OR snapshot.skuName LIKE @modelName)';
       request.input('modelName', sql.NVarChar, `%${modelName}%`);
     }
-    
+
     query += ' ORDER BY snapshot.region, snapshot.skuFamily, snapshot.skuName';
-    
+
     const result = await request.query(query);
     const rows = (result.recordset || [])
       .filter((row) => isAIQuotaSourceType(row?.sourceType))
@@ -3602,7 +3752,7 @@ app.post('/internal/db/bootstrap-admin', requireIngestKey, async (req, res) => {
     sendErrorResponse(res, { clientMessage: 'Failed to complete admin database bootstrap.', err, scope: 'internal/db/bootstrap-admin' });
   } finally {
     if (adminPool) {
-      adminPool.close().catch(() => {});
+      adminPool.close().catch(() => { });
     }
   }
 });

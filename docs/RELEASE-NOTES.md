@@ -4,6 +4,29 @@
 
 No unreleased changes.
 
+## v1.0.4 - 2026-06-17
+
+This patch release removes the runtime Babel/JSX compiler from the frontend, introduces a build-time esbuild precompile step, and adds operational observability metadata to the top bar.
+
+Highlights:
+
+- Removed `@babel/standalone` runtime JSX transpiler from `react/index.html`; the React source is now pre-compiled at deploy time via `esbuild`.
+- Added `build:react` npm script using `esbuild` with JSX transpile, minification, and sourcemap output to `react/main.compiled.js`.
+- Added `esbuild` as a `devDependency` in `package.json`.
+- Updated `deploy-web-app.ps1` to run `npm run build:react` automatically before every deployment (both with and without `-SkipTests`), eliminating CDN-drift outage risk.
+- Pinned React CDN references to `react@18.3.1` in `react/index.html`.
+- Added `/api/app-meta` backend endpoint returning current version, repository URL, homepage URL, current release URL, and (for admins) latest GitHub release metadata with 1-hour server-side cache.
+- Added version chip and GitHub Repo link in the dashboard top bar, visible to all users.
+- GitHub release check, "Update available" link, and "Last checked" timestamp are admin-only (gated by `canAccessAdmin` at the API layer; `canViewReleaseCheck` flag returned in metadata payload).
+- Added `.rx-build-chip`, `.rx-build-link`, `.rx-build-link--warn`, and `.rx-build-checked` CSS classes for the metadata bar.
+
+Operational notes:
+
+- `npm run build:react` must be available on the deploy host (Node.js LTS). The deploy script enforces this and aborts if the build fails.
+- For re-deployments without running tests use `-SkipTests`; the build step still runs.
+- The GitHub release check polls `api.github.com` once per hour per server instance. No GitHub token is required for public repos; rate-limit errors are surfaced in `latestCheckError` and cached until the TTL expires.
+- Use a Git tag named `v1.0.4` on this release commit.
+
 ## v1.0.3 - 2026-06-09
 
 This patch release hardens the deployment path for App Service Authentication / Easy Auth across Bicep and Terraform.

@@ -61,6 +61,19 @@ if (-not $SkipTests) {
         throw "package.json not found at $packageJsonPath"
     }
 
+    Write-Host "Building frontend bundle: npm run build:react"
+    Push-Location $SourcePath
+    try {
+        & npm run build:react
+        if ($LASTEXITCODE -ne 0) {
+            throw "Frontend build failed; deployment aborted. npm run build:react exited with code $LASTEXITCODE."
+        }
+        Write-Host "Frontend build completed"
+    }
+    finally {
+        Pop-Location
+    }
+
     Write-Host "Running test gate: npm test"
     Push-Location $SourcePath
     try {
@@ -69,11 +82,30 @@ if (-not $SkipTests) {
             throw "Tests failed; deployment aborted. npm test exited with code $LASTEXITCODE."
         }
         Write-Host "Tests passed"
-    } finally {
+    }
+    finally {
         Pop-Location
     }
-} else {
+}
+else {
     Write-Warning "Skipping npm test before deployment because -SkipTests was provided."
+
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        throw "npm was not found on PATH. Install Node.js LTS so npm is available, or rerun deploy-web-app.ps1 without -SkipTests."
+    }
+
+    Write-Host "Building frontend bundle: npm run build:react"
+    Push-Location $SourcePath
+    try {
+        & npm run build:react
+        if ($LASTEXITCODE -ne 0) {
+            throw "Frontend build failed; deployment aborted. npm run build:react exited with code $LASTEXITCODE."
+        }
+        Write-Host "Frontend build completed"
+    }
+    finally {
+        Pop-Location
+    }
 }
 
 # Create clean staging directory
@@ -95,7 +127,8 @@ foreach ($file in $filesToCopy) {
     $source = Join-Path $SourcePath $file
     if (Test-Path $source) {
         Copy-Item $source -Destination $stagingPath -Verbose
-    } else {
+    }
+    else {
         Write-Warning "File not found: $file"
     }
 }
@@ -109,7 +142,8 @@ foreach ($dir in $dirsToCopy) {
         $destination = Join-Path $stagingPath $dir
         Copy-Item -Path $source -Destination $destination -Recurse -Force -Verbose
         Write-Host "Copied directory: $dir (contents: $($(Get-ChildItem $destination -Recurse | Measure-Object).Count) items)"
-    } else {
+    }
+    else {
         Write-Warning "Directory not found: $dir"
     }
 }
@@ -118,7 +152,8 @@ foreach ($dir in $dirsToCopy) {
 $toolsCheck = Join-Path $stagingPath 'tools\Get-AzVMAvailability\Get-AzVMAvailability.ps1'
 if (Test-Path $toolsCheck) {
     Write-Host "Verified: Get-AzVMAvailability.ps1 is in staging"
-} else {
+}
+else {
     Write-Host "ERROR: Get-AzVMAvailability.ps1 NOT found in staging!"
     Write-Host "  Expected: $toolsCheck"
     Write-Host "  Staging contents:"
@@ -129,14 +164,16 @@ if (Test-Path $toolsCheck) {
 $paasToolsCheck = Join-Path $stagingPath 'tools\Get-AzPaaSAvailability\Get-AzPaaSAvailability.ps1'
 if (Test-Path $paasToolsCheck) {
     Write-Host "Verified: Get-AzPaaSAvailability.ps1 is in staging"
-} else {
+}
+else {
     throw "Get-AzPaaSAvailability.ps1 was not found in staging. Expected: $paasToolsCheck"
 }
 
 $paasDbQuotaWrapperCheck = Join-Path $stagingPath 'tools\Get-PaaSDatabaseQuotaReport.ps1'
 if (Test-Path $paasDbQuotaWrapperCheck) {
     Write-Host "Verified: Get-PaaSDatabaseQuotaReport.ps1 is in staging"
-} else {
+}
+else {
     throw "Get-PaaSDatabaseQuotaReport.ps1 was not found in staging. Expected: $paasDbQuotaWrapperCheck"
 }
 
@@ -161,7 +198,8 @@ $hasPaaSDbQuotaWrapper = $zipEntryNames -contains 'tools/Get-PaaSDatabaseQuotaRe
 
 if ($hasTools) {
     Write-Host "Zip contains Get-AzVMAvailability.ps1"
-} else {
+}
+else {
     Write-Host "ERROR: Get-AzVMAvailability.ps1 not found in zip!"
     Write-Host "Tool entries found in zip:"
     $zipEntryNames | Where-Object { $_ -like 'tools/*' } | Select-Object -First 20 | ForEach-Object { Write-Host "  $_" }
@@ -170,7 +208,8 @@ if ($hasTools) {
 
 if ($hasPaaSTools) {
     Write-Host "Zip contains Get-AzPaaSAvailability.ps1"
-} else {
+}
+else {
     Write-Host "ERROR: Get-AzPaaSAvailability.ps1 not found in zip!"
     Write-Host "Tool entries found in zip:"
     $zipEntryNames | Where-Object { $_ -like 'tools/*' } | Select-Object -First 20 | ForEach-Object { Write-Host "  $_" }
@@ -179,7 +218,8 @@ if ($hasPaaSTools) {
 
 if ($hasPaaSDbQuotaWrapper) {
     Write-Host "Zip contains Get-PaaSDatabaseQuotaReport.ps1"
-} else {
+}
+else {
     Write-Host "ERROR: Get-PaaSDatabaseQuotaReport.ps1 not found in zip!"
     Write-Host "Tool entries found in zip:"
     $zipEntryNames | Where-Object { $_ -like 'tools/*' } | Select-Object -First 20 | ForEach-Object { Write-Host "  $_" }
@@ -212,13 +252,16 @@ if ($LASTEXITCODE -eq 0) {
         Write-Host "  Deployment ID: $($json.id)"
         if ($json.provisioningState -eq "Succeeded" -or $json.status -eq 4) {
             Write-Host "Deployment SUCCEEDED"
-        } else {
+        }
+        else {
             Write-Host "Check deployment status"
         }
-    } catch {
+    }
+    catch {
         Write-Host "Deploy output: $deployResult"
     }
-} else {
+}
+else {
     Write-Host "Deployment failed with exit code $LASTEXITCODE"
     Write-Host "Output: $deployResult"
     if (Test-LatestWebDeploymentSucceeded -ResourceGroup $ResourceGroup -AppName $AppName) {

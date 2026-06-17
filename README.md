@@ -1,25 +1,26 @@
 # Capacity Planning Dashboard
 
 This repository contains the initial platform scaffold for a native Azure capacity planning solution.
-- Huge shout out to Zach Luz for builing out many of the API calls this solution utilizes in his repo: https://github.com/ZacharyLuz/Get-AzVMAvailability  
+- Huge shout out to Zach Luz for builing out many of the API calls this solution utilizes in his repo: https://github.com/ZacharyLuz/Get-AzVMAvailability
 
 ## Current Release
 
-Current version: `v1.0.3`
+Current version: `v1.0.4`
 
-This version hardens App Service Authentication / Easy Auth deployments across Bicep and Terraform on top of the original proof-of-concept baseline. Future compatible feature updates should move to the next minor version, such as `v1.1.0`; patch-only fixes to this baseline should use `v1.0.4`, `v1.0.5`, and so on.
+This version removes the runtime Babel/JSX compiler from the frontend, introduces a build-time esbuild precompile step, and adds operational observability metadata to the top bar.
 
-Key additions in `v1.0.3`:
+Key additions in `v1.0.4`:
 
-- Web App and Function App Easy Auth deployment settings for Bicep and Terraform.
-- One-app-registration Easy Auth path by default: the dashboard app registration secures both browser sign-in and dashboard-to-worker bearer calls.
-- Deployment wrapper patching of Function Easy Auth allowed applications with the Web App managed identity application/client ID.
-- Temporary Function public-access window for worker zip publishing, with automatic restore to the locked-down value.
-- Bearer-authenticated database bootstrap through the deployed Web App, with JSON `ok:true` response validation.
-- Bicep deployment ergonomics for soft-deleted Key Vault names and transient Azure SQL logical-server provisioning timeouts.
-- Validated Terraform and Bicep worker-backed PaaS refresh through Function App Easy Auth with persisted SQL results.
+- Removed `@babel/standalone` runtime JSX transpiler; the React app is now pre-compiled at deploy time using `esbuild`.
+- Added `npm run build:react` script to `package.json`; `deploy-web-app.ps1` runs it automatically before every deployment, eliminating CDN-drift outage risk.
+- Added `/api/app-meta` endpoint returning current version, repository URL, and (for admins) latest GitHub release check with a 1-hour server-side cache.
+- Added top-bar version chip and GitHub Repo link visible to all users.
+- Admin-only: GitHub release check, "Update available" link, and "Last checked" timestamp in the top bar.
+- Pinned React CDN references to `react@18.3.1` in `react/index.html` to prevent future CDN version drift.
 
-Release history is tracked in `docs/RELEASE-NOTES.md`. Git tags should use the same version string as the release, for example `v1.0.0-poc`, so others can retrieve the exact code behind a deployed version.
+Previous release: `v1.0.3` — App Service Easy Auth hardening for Bicep and Terraform.
+
+Release history is tracked in `docs/RELEASE-NOTES.md`. Git tags should use the same version string as the release, for example `v1.0.4`, so others can retrieve the exact code behind a deployed version.
 
 <img width="1877" height="911" alt="image" src="https://github.com/user-attachments/assets/cda87cd7-220f-41ac-86b3-73ec0a6d6408" />
 

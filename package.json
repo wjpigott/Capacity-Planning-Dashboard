@@ -1,6 +1,6 @@
 {
   "name": "capacity-planning-dashboard",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "private": true,
   "description": "Native Azure capacity and quota planning dashboard: VM SKU availability, live placement scoring, quota movement orchestration, and analytics.",
   "author": "wjpigott and Capacity Dashboard contributors",
@@ -25,6 +25,7 @@
     "start": "node server.js",
     "dev": "node server.js",
     "test": "node --test",
+    "build:react": "esbuild react/main.js --loader:.js=jsx --outfile=react/main.compiled.js --minify --sourcemap --jsx-factory=React.createElement --jsx-fragment=React.Fragment",
     "bench:placement-score": "node scripts/benchmark-placement-score.js"
   },
   "dependencies": {
@@ -37,5 +38,8 @@
     "express": "^4.19.2",
     "express-session": "^1.18.1",
     "mssql": "^11.0.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1"
   }
 }

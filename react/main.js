@@ -67,6 +67,18 @@ const REPORT_VIEWS = [
   { key: 'quota-workbench', label: 'Quota Workbench', adminOnly: true, navGroup: 'admin' }
 ];
 
+const DEFAULT_APP_META = {
+  currentVersion: '0.0.0',
+  repositoryUrl: 'https://github.com/wjpigott/Capacity-Planning-Dashboard',
+  currentReleaseUrl: 'https://github.com/wjpigott/Capacity-Planning-Dashboard/blob/main/README.md#current-release',
+  canViewReleaseCheck: false,
+  latestVersion: null,
+  latestReleaseUrl: 'https://github.com/wjpigott/Capacity-Planning-Dashboard/releases',
+  updateAvailable: false,
+  latestCheckError: null,
+  latestCheckedAtUtc: null
+};
+
 const baseRegionPresets = {
   USEastWest: ['eastus', 'eastus2', 'westus', 'westus2'],
   USCentral: ['centralus', 'northcentralus', 'southcentralus', 'westcentralus'],
@@ -1432,8 +1444,8 @@ function compareSortValues(a, b) {
   const aDate = Date.parse(a);
   const bDate = Date.parse(b);
   if (!Number.isNaN(aDate) && !Number.isNaN(bDate)
-      && typeof a === 'string' && typeof b === 'string'
-      && /\d{4}-\d{2}-\d{2}/.test(a) && /\d{4}-\d{2}-\d{2}/.test(b)) {
+    && typeof a === 'string' && typeof b === 'string'
+    && /\d{4}-\d{2}-\d{2}/.test(a) && /\d{4}-\d{2}-\d{2}/.test(b)) {
     return aDate - bDate;
   }
   return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
@@ -2850,9 +2862,9 @@ function QuotaMovementView(props) {
     ? 'Pick a recipient in Quota Discovery first.'
     : selectedMoveCandidate.mode === 'donor'
       ? 'This move is scoped from the selected donor row into the group quota pool.'
-    : (donorOptions.length > 0
-      ? `${formatNumber(donorOptions.length)} donor subscription(s) available for this region and quota family.`
-      : 'No donor subscriptions found for the selected region and quota family in the current candidate set.');
+      : (donorOptions.length > 0
+        ? `${formatNumber(donorOptions.length)} donor subscription(s) available for this region and quota family.`
+        : 'No donor subscriptions found for the selected region and quota family in the current candidate set.');
 
   return (
     <div className="rx-view-stack">
@@ -3243,6 +3255,7 @@ function App() {
   const [uiSettingsBusy, setUiSettingsBusy] = useState(false);
   const [selectedExportOption, setSelectedExportOption] = useState('server:xlsx:report');
   const [skuCatalogVersion, setSkuCatalogVersion] = useState(0);
+  const [appMeta, setAppMeta] = useState(DEFAULT_APP_META);
 
   useEffect(() => {
     let cancelled = false;
@@ -3277,6 +3290,30 @@ function App() {
       .catch(() => { /* non-fatal */ });
     return () => { cancelled = true; };
   }, [activeView]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    fetch('/api/app-meta', { credentials: 'same-origin' })
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload) => {
+        if (cancelled || !payload?.meta) {
+          return;
+        }
+
+        setAppMeta((current) => ({
+          ...current,
+          ...payload.meta
+        }));
+      })
+      .catch(() => {
+        // Keep default metadata when app meta endpoint is unavailable.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const queryFilters = useMemo(() => {
     const next = {
@@ -3580,252 +3617,294 @@ function App() {
     }
 
     if (activeView === 'region-health') {
-      return [{ value: 'client:region-health', label: 'CSV Export', type: 'client', filenameBase: 'region-health', rows: regionHealth, columns: [
-        { label: 'Region', value: (row) => row.region },
-        { label: 'Observed Capacity', value: (row) => row.totalRows },
-        { label: 'Deployable Capacity', value: (row) => row.deployableRows },
-        { label: 'Constrained Capacity', value: (row) => row.constrainedRows },
-        { label: 'Quota Headroom', value: (row) => Math.round(Number(row.totalQuotaHeadroom || 0)) },
-        { label: 'Deployable Families', value: (row) => row.deployableFamilyCount },
-        { label: 'Subscriptions With Capacity', value: (row) => row.deployableSubscriptionCount },
-        { label: 'Providers', value: (row) => Array.isArray(row.providers) ? row.providers.join(', ') : '' },
-        { label: 'Most Constrained Families', value: (row) => Array.isArray(row.topConstrainedFamilies) ? row.topConstrainedFamilies.join(', ') : '' }
-      ] }];
+      return [{
+        value: 'client:region-health', label: 'CSV Export', type: 'client', filenameBase: 'region-health', rows: regionHealth, columns: [
+          { label: 'Region', value: (row) => row.region },
+          { label: 'Observed Capacity', value: (row) => row.totalRows },
+          { label: 'Deployable Capacity', value: (row) => row.deployableRows },
+          { label: 'Constrained Capacity', value: (row) => row.constrainedRows },
+          { label: 'Quota Headroom', value: (row) => Math.round(Number(row.totalQuotaHeadroom || 0)) },
+          { label: 'Deployable Families', value: (row) => row.deployableFamilyCount },
+          { label: 'Subscriptions With Capacity', value: (row) => row.deployableSubscriptionCount },
+          { label: 'Providers', value: (row) => Array.isArray(row.providers) ? row.providers.join(', ') : '' },
+          { label: 'Most Constrained Families', value: (row) => Array.isArray(row.topConstrainedFamilies) ? row.topConstrainedFamilies.join(', ') : '' }
+        ]
+      }];
     }
 
     if (activeView === 'recommender') {
-      return [{ value: 'client:recommender', label: 'CSV Export', type: 'client', filenameBase: 'capacity-recommender', rows: recommendationRows, columns: [
-        { label: 'Rank', value: (row) => row.rank },
-        { label: 'SKU', value: (row) => normalizeSkuName(row.sku) || '' },
-        { label: 'Region', value: (row) => row.region },
-        { label: 'vCPU', value: (row) => row.vCPU },
-        { label: 'MemGB', value: (row) => row.memGiB },
-        { label: 'Score', value: (row) => row.score },
-        { label: 'CPU', value: (row) => row.cpu },
-        { label: 'Disk', value: (row) => row.disk },
-        { label: 'Type', value: (row) => row.purpose },
-        { label: 'Capacity', value: (row) => row.capacity },
-        { label: 'Zones', value: (row) => row.zonesOK },
-        { label: 'PriceHr', value: (row) => row.priceHr },
-        { label: 'PriceMo', value: (row) => row.priceMo }
-      ] }];
+      return [{
+        value: 'client:recommender', label: 'CSV Export', type: 'client', filenameBase: 'capacity-recommender', rows: recommendationRows, columns: [
+          { label: 'Rank', value: (row) => row.rank },
+          { label: 'SKU', value: (row) => normalizeSkuName(row.sku) || '' },
+          { label: 'Region', value: (row) => row.region },
+          { label: 'vCPU', value: (row) => row.vCPU },
+          { label: 'MemGB', value: (row) => row.memGiB },
+          { label: 'Score', value: (row) => row.score },
+          { label: 'CPU', value: (row) => row.cpu },
+          { label: 'Disk', value: (row) => row.disk },
+          { label: 'Type', value: (row) => row.purpose },
+          { label: 'Capacity', value: (row) => row.capacity },
+          { label: 'Zones', value: (row) => row.zonesOK },
+          { label: 'PriceHr', value: (row) => row.priceHr },
+          { label: 'PriceMo', value: (row) => row.priceMo }
+        ]
+      }];
     }
 
     if (activeView === 'paas-availability') {
-      return [{ value: 'client:paas-rows', label: 'CSV Export', type: 'client', filenameBase: 'paas-availability', rows: filteredPaaSRows, columns: [
-        { label: 'Service', value: (row) => row.service },
-        { label: 'Region', value: (row) => row.region },
-        { label: 'Category', value: (row) => row.category },
-        { label: 'Name', value: (row) => row.displayName || row.name || '' },
-        { label: 'Edition', value: (row) => row.edition || '' },
-        { label: 'Tier', value: (row) => row.tier || '' },
-        { label: 'Status', value: (row) => row.status || (row.available ? 'Available' : 'Unknown') },
-        { label: 'Quota Used', value: (row) => row.quotaCurrent },
-        { label: 'Quota Limit', value: (row) => row.quotaLimit },
-        { label: 'Metric', value: (row) => formatPaaSMetric(row) }
-      ] }];
+      return [{
+        value: 'client:paas-rows', label: 'CSV Export', type: 'client', filenameBase: 'paas-availability', rows: filteredPaaSRows, columns: [
+          { label: 'Service', value: (row) => row.service },
+          { label: 'Region', value: (row) => row.region },
+          { label: 'Category', value: (row) => row.category },
+          { label: 'Name', value: (row) => row.displayName || row.name || '' },
+          { label: 'Edition', value: (row) => row.edition || '' },
+          { label: 'Tier', value: (row) => row.tier || '' },
+          { label: 'Status', value: (row) => row.status || (row.available ? 'Available' : 'Unknown') },
+          { label: 'Quota Used', value: (row) => row.quotaCurrent },
+          { label: 'Quota Limit', value: (row) => row.quotaLimit },
+          { label: 'Metric', value: (row) => formatPaaSMetric(row) }
+        ]
+      }];
     }
 
     if (activeView === 'paas-db-quota') {
-      return [{ value: 'client:paas-db-quota', label: 'CSV Export', type: 'client', filenameBase: 'paas-db-quota', rows: filteredPaaSDbQuotaRows, columns: [
-        { label: 'Dataset', value: (row) => row.dataset },
-        { label: 'Subscription', value: (row) => row.subscriptionName || '' },
-        { label: 'Subscription Id', value: (row) => row.subscriptionId || '' },
-        { label: 'Service', value: (row) => row.service },
-        { label: 'Region', value: (row) => row.region },
-        { label: 'Metric', value: (row) => row.metric },
-        { label: 'Current Usage', value: (row) => row.currentUsage },
-        { label: 'Limit', value: (row) => row.limit },
-        { label: 'Available', value: (row) => row.available },
-        { label: 'Percent Used', value: (row) => row.percentUsed },
-        { label: 'Region Access', value: (row) => formatPaaSDatabaseAccess(row.accessAllowedForRegion) },
-        { label: 'AZ Access', value: (row) => formatPaaSDatabaseAccess(row.accessAllowedForAZ) },
-        { label: 'Notes', value: (row) => row.notes || '' }
-      ] }];
+      return [{
+        value: 'client:paas-db-quota', label: 'CSV Export', type: 'client', filenameBase: 'paas-db-quota', rows: filteredPaaSDbQuotaRows, columns: [
+          { label: 'Dataset', value: (row) => row.dataset },
+          { label: 'Subscription', value: (row) => row.subscriptionName || '' },
+          { label: 'Subscription Id', value: (row) => row.subscriptionId || '' },
+          { label: 'Service', value: (row) => row.service },
+          { label: 'Region', value: (row) => row.region },
+          { label: 'Metric', value: (row) => row.metric },
+          { label: 'Current Usage', value: (row) => row.currentUsage },
+          { label: 'Limit', value: (row) => row.limit },
+          { label: 'Available', value: (row) => row.available },
+          { label: 'Percent Used', value: (row) => row.percentUsed },
+          { label: 'Region Access', value: (row) => formatPaaSDatabaseAccess(row.accessAllowedForRegion) },
+          { label: 'AZ Access', value: (row) => formatPaaSDatabaseAccess(row.accessAllowedForAZ) },
+          { label: 'Notes', value: (row) => row.notes || '' }
+        ]
+      }];
     }
 
     if (activeView === 'shareable-quota-report') {
-      return [{ value: 'client:shareable-quota', label: 'CSV Export', type: 'client', filenameBase: 'shareable-quota-report', rows: quotaState.shareableReport.rows, columns: [
-        { label: 'Subscription Id', value: (row) => row.subscriptionId },
-        { label: 'Region', value: (row) => row.region },
-        { label: 'Quota SKU / Family', value: (row) => row.displayName || row.resourceName || '' },
-        { label: 'Resource Name', value: (row) => row.resourceName || '' },
-        { label: 'Quota Group', value: (row) => row.shareableQuota },
-        { label: 'Assigned Quota', value: (row) => row.quotaLimit }
-      ] }];
-    }
-
-    if (activeView === 'sku-chart') {
-      return [{ value: 'client:top-skus', label: 'CSV Export', type: 'client', filenameBase: 'top-skus', rows: topSkus, columns: [
-        { label: 'SKU', value: (row) => row.sku },
-        { label: 'Available Quota', value: (row) => row.available }
-      ] }];
-    }
-
-    if (activeView === 'capacity-score') {
-      return [
-        { value: 'client:capacity-score', label: 'CSV Export: Score Rows', type: 'client', filenameBase: 'capacity-score', rows: capacityScores.rows, columns: [
-          { label: 'Region', value: (row) => row.region },
-          { label: 'SKU', value: (row) => normalizeSkuName(row.sku) || '' },
-          { label: 'Family', value: (row) => formatFamilyLabel(row.family) || row.family || '' },
-          { label: 'Azure Placement', value: (row) => row.livePlacementScore || '' },
-          { label: 'Regional Availability', value: (row) => getRegionalAvailabilityLabel(row) },
-          { label: 'Quota Health', value: (row) => getQuotaHealthLabel(row) },
-          { label: 'Checked', value: (row) => formatTimestamp(row.liveCheckedAtUtc) },
-          { label: 'Subscriptions', value: (row) => row.subscriptionCount },
-          { label: 'Quota OK', value: (row) => row.okRows },
-          { label: 'Quota Limited', value: (row) => row.limitedRows },
-          { label: 'Quota Blocked', value: (row) => row.constrainedRows },
-          { label: 'Quota vCPU', value: (row) => row.totalQuotaAvailable },
-          { label: 'Reason', value: (row) => row.reason || '' }
-        ] },
-        { value: 'client:capacity-score-subscriptions', label: 'CSV Export: Subscription Summary', type: 'client', filenameBase: 'capacity-score-subscriptions', rows: capacityScores.subscriptionSummary, columns: [
-          { label: 'Subscription Key', value: (row) => row.subscriptionKey },
-          { label: 'SKU Observations', value: (row) => row.skuObservations || row.totalRows },
-          { label: 'Constrained Observations', value: (row) => row.constrainedObservations || row.constrainedRows },
-          { label: 'Quota Available', value: (row) => row.totalQuotaAvailable }
-        ] }
-      ];
-    }
-
-    if (activeView === 'family-summary') {
-      return [{ value: 'client:family-summary', label: 'CSV Export', type: 'client', filenameBase: 'family-summary', rows: familySummaryRows, columns: [
-        { label: 'Family', value: (row) => row.family },
-        { label: 'SKUs', value: (row) => row.skus },
-        { label: 'OK SKUs', value: (row) => row.ok },
-        { label: 'Largest', value: (row) => row.largest },
-        { label: 'Zones', value: (row) => row.zones },
-        { label: 'Status', value: (row) => row.status },
-        { label: 'Quota', value: (row) => row.quota }
-      ] }];
-    }
-
-    if (activeView === 'region-matrix') {
-      return [{ value: 'client:region-matrix', label: 'CSV Export', type: 'client', filenameBase: 'region-matrix', rows: matrix.rows, columns: [
-        { label: 'Family', value: (row) => row.family },
-        { label: 'Key', value: (row) => row.rowStatus },
-        { label: 'Ready', value: (row) => row.readyRegionCount },
-        ...matrix.regions.map((region) => ({ label: region, value: (row) => {
-          const cell = row.regionMap[region];
-          const status = matrix.resolveCellStatus(cell);
-          const zones = formatMatrixCellZones(cell);
-          return `${status} (${zones})`;
-        } }))
-      ] }];
-    }
-
-    if (activeView === 'trend') {
-      return [{ value: 'client:trend', label: 'CSV Export', type: 'client', filenameBase: 'trend-history', rows: trendRows, columns: [
-        { label: 'Day', value: (row) => row.day },
-        { label: 'Total Rows', value: (row) => row.totalRows },
-        { label: 'Constrained Rows', value: (row) => row.constrainedRows },
-        { label: 'Total Quota Available', value: (row) => row.totalQuotaAvailable },
-        { label: 'Daily Peak Utilization Pct', value: (row) => row.peakUtilizationPct },
-        { label: 'Rolling 7 Day Peak Utilization Pct', value: (row) => row.rolling7DayPeakUtilizationPct },
-        { label: 'Rolling 14 Day Peak Utilization Pct', value: (row) => row.rolling14DayPeakUtilizationPct }
-      ] }];
-    }
-
-    if (activeView === 'ai-summary-report') {
-      return [{ value: 'client:ai-summary', label: 'CSV Export', type: 'client', filenameBase: 'ai-summary-report', rows: aiSummaryMatrixExport.rows, columns: [
-        { label: 'Provider', value: (row) => row.provider },
-        ...aiSummaryMatrixExport.regionOrder.map((region) => ({ label: region, value: (row) => row[region] })),
-        { label: 'Covered Regions', value: (row) => row.coveredRegions }
-      ] }];
-    }
-
-    if (activeView === 'ai-model-availability') {
-      return [{ value: 'client:ai-model-availability', label: 'CSV Export', type: 'client', filenameBase: 'ai-model-availability', rows: aiModelRows, columns: [
-        { label: 'Provider', value: (row) => getAIModelProviderLabel(row) },
-        { label: 'Model', value: (row) => row.modelName },
-        { label: 'Version', value: (row) => row.modelVersion },
-        { label: 'Region', value: (row) => row.region },
-        { label: 'Deployment Types', value: (row) => row.deploymentTypes || '' },
-        { label: 'Fine-Tuning', value: (row) => row.finetuneCapable },
-        { label: 'Default', value: (row) => row.isDefault },
-        { label: 'Format', value: (row) => row.modelFormat },
-        { label: 'SKU', value: (row) => row.skuName },
-        { label: 'Deprecation', value: (row) => formatDateValue(row.deprecationDate) },
-        { label: 'Updated', value: (row) => formatTimestamp(row.capturedAtUtc) }
-      ] }];
-    }
-
-    if (activeView === 'quota-workbench') {
-      return [
-        { value: 'client:quota-workbench-shareable', label: 'CSV Export: Allocation Report', type: 'client', filenameBase: 'quota-workbench-allocation-report', rows: quotaState.shareableReport.rows, columns: [
+      return [{
+        value: 'client:shareable-quota', label: 'CSV Export', type: 'client', filenameBase: 'shareable-quota-report', rows: quotaState.shareableReport.rows, columns: [
           { label: 'Subscription Id', value: (row) => row.subscriptionId },
           { label: 'Region', value: (row) => row.region },
           { label: 'Quota SKU / Family', value: (row) => row.displayName || row.resourceName || '' },
           { label: 'Resource Name', value: (row) => row.resourceName || '' },
           { label: 'Quota Group', value: (row) => row.shareableQuota },
           { label: 'Assigned Quota', value: (row) => row.quotaLimit }
-        ] },
-        { value: 'client:quota-workbench-candidates', label: 'CSV Export: Candidates', type: 'client', filenameBase: 'quota-workbench-candidates', rows: filteredQuotaCandidateRows, columns: [
-          { label: 'Subscription Name', value: (row) => row.subscriptionName || row.subscriptionId },
-          { label: 'Subscription Id', value: (row) => row.subscriptionId },
-          { label: 'Region', value: (row) => row.region },
+        ]
+      }];
+    }
+
+    if (activeView === 'sku-chart') {
+      return [{
+        value: 'client:top-skus', label: 'CSV Export', type: 'client', filenameBase: 'top-skus', rows: topSkus, columns: [
+          { label: 'SKU', value: (row) => row.sku },
+          { label: 'Available Quota', value: (row) => row.available }
+        ]
+      }];
+    }
+
+    if (activeView === 'capacity-score') {
+      return [
+        {
+          value: 'client:capacity-score', label: 'CSV Export: Score Rows', type: 'client', filenameBase: 'capacity-score', rows: capacityScores.rows, columns: [
+            { label: 'Region', value: (row) => row.region },
+            { label: 'SKU', value: (row) => normalizeSkuName(row.sku) || '' },
+            { label: 'Family', value: (row) => formatFamilyLabel(row.family) || row.family || '' },
+            { label: 'Azure Placement', value: (row) => row.livePlacementScore || '' },
+            { label: 'Regional Availability', value: (row) => getRegionalAvailabilityLabel(row) },
+            { label: 'Quota Health', value: (row) => getQuotaHealthLabel(row) },
+            { label: 'Checked', value: (row) => formatTimestamp(row.liveCheckedAtUtc) },
+            { label: 'Subscriptions', value: (row) => row.subscriptionCount },
+            { label: 'Quota OK', value: (row) => row.okRows },
+            { label: 'Quota Limited', value: (row) => row.limitedRows },
+            { label: 'Quota Blocked', value: (row) => row.constrainedRows },
+            { label: 'Quota vCPU', value: (row) => row.totalQuotaAvailable },
+            { label: 'Reason', value: (row) => row.reason || '' }
+          ]
+        },
+        {
+          value: 'client:capacity-score-subscriptions', label: 'CSV Export: Subscription Summary', type: 'client', filenameBase: 'capacity-score-subscriptions', rows: capacityScores.subscriptionSummary, columns: [
+            { label: 'Subscription Key', value: (row) => row.subscriptionKey },
+            { label: 'SKU Observations', value: (row) => row.skuObservations || row.totalRows },
+            { label: 'Constrained Observations', value: (row) => row.constrainedObservations || row.constrainedRows },
+            { label: 'Quota Available', value: (row) => row.totalQuotaAvailable }
+          ]
+        }
+      ];
+    }
+
+    if (activeView === 'family-summary') {
+      return [{
+        value: 'client:family-summary', label: 'CSV Export', type: 'client', filenameBase: 'family-summary', rows: familySummaryRows, columns: [
           { label: 'Family', value: (row) => row.family },
-          { label: 'SKUs', value: (row) => formatSkuList(row) },
-          { label: 'Availability', value: (row) => row.availability },
-          { label: 'Current', value: (row) => row.quotaCurrent },
-          { label: 'Limit', value: (row) => row.quotaLimit },
-          { label: 'Available', value: (row) => row.quotaAvailable },
-          { label: 'Need', value: (row) => getQuotaRecipientNeed(row) },
-          { label: 'Movable', value: (row) => row.movableQuota || row.suggestedMovable },
-          { label: 'Status', value: (row) => row.status || row.candidateStatus }
-        ] },
-        { value: 'client:quota-workbench-runs', label: 'CSV Export: Captured Runs', type: 'client', filenameBase: 'quota-workbench-runs', rows: quotaState.quotaRuns, columns: [
-          { label: 'Run ID', value: (row) => row.analysisRunId },
-          { label: 'Captured At', value: (row) => row.capturedAtUtc },
-          { label: 'Rows', value: (row) => row.rowCount || row.candidateCount || 0 },
-          { label: 'Subscriptions', value: (row) => row.subscriptionCount || 0 },
-          { label: 'Movable Rows', value: (row) => row.movableCandidateCount || 0 }
-        ] },
-        { value: 'client:quota-workbench-plan', label: 'CSV Export: Planned Moves', type: 'client', filenameBase: 'quota-workbench-plan', rows: quotaState.planRows, columns: [
-          { label: 'Region', value: (row) => row.region },
-          { label: 'Quota Family', value: (row) => row.quotaName },
-          { label: 'Selected SKU', value: (row) => row.selectedSku || '' },
-          { label: 'SKUs In Scope', value: (row) => formatSkuList(row) },
-          { label: 'Donor', value: (row) => row.donorSubscriptionName },
-          { label: 'Recipient', value: (row) => row.recipientSubscriptionName },
-          { label: 'Transfer', value: (row) => row.transferAmount },
-          { label: 'Donor Before', value: (row) => row.donorAvailableBefore },
-          { label: 'Donor Left', value: (row) => row.donorRemainingMovable },
-          { label: 'Recipient Need', value: (row) => row.recipientNeededQuota },
-          { label: 'Need Left', value: (row) => row.recipientRemainingNeed },
-          { label: 'Recipient State', value: (row) => row.recipientAvailabilityState }
-        ] },
-        { value: 'client:quota-workbench-simulation', label: 'CSV Export: Simulation Impact', type: 'client', filenameBase: 'quota-workbench-simulation', rows: quotaState.impactRows, columns: [
-          { label: 'Role', value: (row) => row.role },
-          { label: 'Subscription', value: (row) => row.subscriptionName },
-          { label: 'Region', value: (row) => row.region },
-          { label: 'Quota Family', value: (row) => row.quotaName },
-          { label: 'SKUs In Scope', value: (row) => formatSkuList(row) },
-          { label: 'Delta', value: (row) => row.delta },
-          { label: 'Before', value: (row) => row.quotaAvailableBefore },
-          { label: 'After', value: (row) => row.quotaAvailableAfter },
-          { label: 'Gap Before', value: (row) => row.gapBefore },
-          { label: 'Gap After', value: (row) => row.gapAfter },
-          { label: 'Projected', value: (row) => row.projectedState }
-        ] },
-        { value: 'client:quota-workbench-apply', label: 'CSV Export: Apply Results', type: 'client', filenameBase: 'quota-workbench-apply-results', rows: quotaState.applyResults, columns: [
-          { label: 'Subscription Id', value: (row) => row.subscriptionId },
-          { label: 'Region', value: (row) => row.region },
-          { label: 'Quota Family', value: (row) => row.quotaName },
-          { label: 'Rows', value: (row) => row.rowsSubmitted },
-          { label: 'Requested Cores', value: (row) => row.requestedCores },
+          { label: 'SKUs', value: (row) => row.skus },
+          { label: 'OK SKUs', value: (row) => row.ok },
+          { label: 'Largest', value: (row) => row.largest },
+          { label: 'Zones', value: (row) => row.zones },
           { label: 'Status', value: (row) => row.status },
-          { label: 'Error', value: (row) => row.error || '' }
-        ] }
+          { label: 'Quota', value: (row) => row.quota }
+        ]
+      }];
+    }
+
+    if (activeView === 'region-matrix') {
+      return [{
+        value: 'client:region-matrix', label: 'CSV Export', type: 'client', filenameBase: 'region-matrix', rows: matrix.rows, columns: [
+          { label: 'Family', value: (row) => row.family },
+          { label: 'Key', value: (row) => row.rowStatus },
+          { label: 'Ready', value: (row) => row.readyRegionCount },
+          ...matrix.regions.map((region) => ({
+            label: region, value: (row) => {
+              const cell = row.regionMap[region];
+              const status = matrix.resolveCellStatus(cell);
+              const zones = formatMatrixCellZones(cell);
+              return `${status} (${zones})`;
+            }
+          }))
+        ]
+      }];
+    }
+
+    if (activeView === 'trend') {
+      return [{
+        value: 'client:trend', label: 'CSV Export', type: 'client', filenameBase: 'trend-history', rows: trendRows, columns: [
+          { label: 'Day', value: (row) => row.day },
+          { label: 'Total Rows', value: (row) => row.totalRows },
+          { label: 'Constrained Rows', value: (row) => row.constrainedRows },
+          { label: 'Total Quota Available', value: (row) => row.totalQuotaAvailable },
+          { label: 'Daily Peak Utilization Pct', value: (row) => row.peakUtilizationPct },
+          { label: 'Rolling 7 Day Peak Utilization Pct', value: (row) => row.rolling7DayPeakUtilizationPct },
+          { label: 'Rolling 14 Day Peak Utilization Pct', value: (row) => row.rolling14DayPeakUtilizationPct }
+        ]
+      }];
+    }
+
+    if (activeView === 'ai-summary-report') {
+      return [{
+        value: 'client:ai-summary', label: 'CSV Export', type: 'client', filenameBase: 'ai-summary-report', rows: aiSummaryMatrixExport.rows, columns: [
+          { label: 'Provider', value: (row) => row.provider },
+          ...aiSummaryMatrixExport.regionOrder.map((region) => ({ label: region, value: (row) => row[region] })),
+          { label: 'Covered Regions', value: (row) => row.coveredRegions }
+        ]
+      }];
+    }
+
+    if (activeView === 'ai-model-availability') {
+      return [{
+        value: 'client:ai-model-availability', label: 'CSV Export', type: 'client', filenameBase: 'ai-model-availability', rows: aiModelRows, columns: [
+          { label: 'Provider', value: (row) => getAIModelProviderLabel(row) },
+          { label: 'Model', value: (row) => row.modelName },
+          { label: 'Version', value: (row) => row.modelVersion },
+          { label: 'Region', value: (row) => row.region },
+          { label: 'Deployment Types', value: (row) => row.deploymentTypes || '' },
+          { label: 'Fine-Tuning', value: (row) => row.finetuneCapable },
+          { label: 'Default', value: (row) => row.isDefault },
+          { label: 'Format', value: (row) => row.modelFormat },
+          { label: 'SKU', value: (row) => row.skuName },
+          { label: 'Deprecation', value: (row) => formatDateValue(row.deprecationDate) },
+          { label: 'Updated', value: (row) => formatTimestamp(row.capturedAtUtc) }
+        ]
+      }];
+    }
+
+    if (activeView === 'quota-workbench') {
+      return [
+        {
+          value: 'client:quota-workbench-shareable', label: 'CSV Export: Allocation Report', type: 'client', filenameBase: 'quota-workbench-allocation-report', rows: quotaState.shareableReport.rows, columns: [
+            { label: 'Subscription Id', value: (row) => row.subscriptionId },
+            { label: 'Region', value: (row) => row.region },
+            { label: 'Quota SKU / Family', value: (row) => row.displayName || row.resourceName || '' },
+            { label: 'Resource Name', value: (row) => row.resourceName || '' },
+            { label: 'Quota Group', value: (row) => row.shareableQuota },
+            { label: 'Assigned Quota', value: (row) => row.quotaLimit }
+          ]
+        },
+        {
+          value: 'client:quota-workbench-candidates', label: 'CSV Export: Candidates', type: 'client', filenameBase: 'quota-workbench-candidates', rows: filteredQuotaCandidateRows, columns: [
+            { label: 'Subscription Name', value: (row) => row.subscriptionName || row.subscriptionId },
+            { label: 'Subscription Id', value: (row) => row.subscriptionId },
+            { label: 'Region', value: (row) => row.region },
+            { label: 'Family', value: (row) => row.family },
+            { label: 'SKUs', value: (row) => formatSkuList(row) },
+            { label: 'Availability', value: (row) => row.availability },
+            { label: 'Current', value: (row) => row.quotaCurrent },
+            { label: 'Limit', value: (row) => row.quotaLimit },
+            { label: 'Available', value: (row) => row.quotaAvailable },
+            { label: 'Need', value: (row) => getQuotaRecipientNeed(row) },
+            { label: 'Movable', value: (row) => row.movableQuota || row.suggestedMovable },
+            { label: 'Status', value: (row) => row.status || row.candidateStatus }
+          ]
+        },
+        {
+          value: 'client:quota-workbench-runs', label: 'CSV Export: Captured Runs', type: 'client', filenameBase: 'quota-workbench-runs', rows: quotaState.quotaRuns, columns: [
+            { label: 'Run ID', value: (row) => row.analysisRunId },
+            { label: 'Captured At', value: (row) => row.capturedAtUtc },
+            { label: 'Rows', value: (row) => row.rowCount || row.candidateCount || 0 },
+            { label: 'Subscriptions', value: (row) => row.subscriptionCount || 0 },
+            { label: 'Movable Rows', value: (row) => row.movableCandidateCount || 0 }
+          ]
+        },
+        {
+          value: 'client:quota-workbench-plan', label: 'CSV Export: Planned Moves', type: 'client', filenameBase: 'quota-workbench-plan', rows: quotaState.planRows, columns: [
+            { label: 'Region', value: (row) => row.region },
+            { label: 'Quota Family', value: (row) => row.quotaName },
+            { label: 'Selected SKU', value: (row) => row.selectedSku || '' },
+            { label: 'SKUs In Scope', value: (row) => formatSkuList(row) },
+            { label: 'Donor', value: (row) => row.donorSubscriptionName },
+            { label: 'Recipient', value: (row) => row.recipientSubscriptionName },
+            { label: 'Transfer', value: (row) => row.transferAmount },
+            { label: 'Donor Before', value: (row) => row.donorAvailableBefore },
+            { label: 'Donor Left', value: (row) => row.donorRemainingMovable },
+            { label: 'Recipient Need', value: (row) => row.recipientNeededQuota },
+            { label: 'Need Left', value: (row) => row.recipientRemainingNeed },
+            { label: 'Recipient State', value: (row) => row.recipientAvailabilityState }
+          ]
+        },
+        {
+          value: 'client:quota-workbench-simulation', label: 'CSV Export: Simulation Impact', type: 'client', filenameBase: 'quota-workbench-simulation', rows: quotaState.impactRows, columns: [
+            { label: 'Role', value: (row) => row.role },
+            { label: 'Subscription', value: (row) => row.subscriptionName },
+            { label: 'Region', value: (row) => row.region },
+            { label: 'Quota Family', value: (row) => row.quotaName },
+            { label: 'SKUs In Scope', value: (row) => formatSkuList(row) },
+            { label: 'Delta', value: (row) => row.delta },
+            { label: 'Before', value: (row) => row.quotaAvailableBefore },
+            { label: 'After', value: (row) => row.quotaAvailableAfter },
+            { label: 'Gap Before', value: (row) => row.gapBefore },
+            { label: 'Gap After', value: (row) => row.gapAfter },
+            { label: 'Projected', value: (row) => row.projectedState }
+          ]
+        },
+        {
+          value: 'client:quota-workbench-apply', label: 'CSV Export: Apply Results', type: 'client', filenameBase: 'quota-workbench-apply-results', rows: quotaState.applyResults, columns: [
+            { label: 'Subscription Id', value: (row) => row.subscriptionId },
+            { label: 'Region', value: (row) => row.region },
+            { label: 'Quota Family', value: (row) => row.quotaName },
+            { label: 'Rows', value: (row) => row.rowsSubmitted },
+            { label: 'Requested Cores', value: (row) => row.requestedCores },
+            { label: 'Status', value: (row) => row.status },
+            { label: 'Error', value: (row) => row.error || '' }
+          ]
+        }
       ];
     }
 
     if (activeView === 'admin') {
-      return [{ value: 'client:admin-status', label: 'CSV Export', type: 'client', filenameBase: 'admin-ingestion-status', rows: adminExportRows, columns: [
-        { label: 'Section', value: (row) => row.section },
-        { label: 'Metric', value: (row) => row.metric },
-        { label: 'Value', value: (row) => row.value }
-      ] }];
+      return [{
+        value: 'client:admin-status', label: 'CSV Export', type: 'client', filenameBase: 'admin-ingestion-status', rows: adminExportRows, columns: [
+          { label: 'Section', value: (row) => row.section },
+          { label: 'Metric', value: (row) => row.metric },
+          { label: 'Value', value: (row) => row.value }
+        ]
+      }];
     }
 
     return [];
@@ -5386,6 +5465,16 @@ function App() {
           <div className="rx-topbar__intro">
             <div className="rx-topbar__environment-row">
               <div className="rx-kicker">{deploymentEnvironment.label}</div>
+              <div className="rx-build-meta">
+                <span className="rx-build-chip">Version {appMeta.currentVersion || 'n/a'}</span>
+                <a className="rx-build-link" href={appMeta.repositoryUrl || DEFAULT_APP_META.repositoryUrl} target="_blank" rel="noreferrer">GitHub Repo</a>
+                {auth?.canAccessAdmin && appMeta.canViewReleaseCheck && appMeta.updateAvailable
+                  ? <a className="rx-build-link rx-build-link--warn" href={appMeta.latestReleaseUrl || DEFAULT_APP_META.latestReleaseUrl} target="_blank" rel="noreferrer">Update available: {appMeta.latestVersion}</a>
+                  : null}
+                {auth?.canAccessAdmin && appMeta.canViewReleaseCheck && appMeta.latestCheckedAtUtc
+                  ? <span className="rx-build-checked">Last checked {formatTimestamp(appMeta.latestCheckedAtUtc)}</span>
+                  : null}
+              </div>
               <strong className="rx-capacity-reminder">REMEMBER: QUOTA DOES NOT EQUAL CAPACITY. AZURE PLACEMENT SPOT SCORE IS A CONFIDENCE SIGNAL, NOT A RESERVATION OR DEPLOYMENT GUARANTEE.</strong>
             </div>
           </div>

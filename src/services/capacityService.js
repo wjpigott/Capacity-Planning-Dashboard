@@ -316,6 +316,10 @@ function buildCapacityAnalyticsSqlFilters(filters, request) {
   return where;
 }
 
+function buildCapacityRowSqlFilters(filters, request) {
+  return buildCapacityAnalyticsSqlFilters(filters, request);
+}
+
 function sortCapacityAnalyticsSkuRows(rows = []) {
   return [...rows].sort((left, right) => {
     if (Number(right.available || 0) !== Number(left.available || 0)) {
@@ -479,18 +483,11 @@ function buildCapacitySnapshotRawSelect(columns, tableAlias = '') {
 
 function buildLatestSnapshotBatchCte() {
   return `
-    WITH ReportingSnapshotBatches AS (
-      SELECT
-        capturedAtUtc,
-        COUNT(1) AS [rowCount]
+    WITH LatestBatch AS (
+      SELECT TOP (1) capturedAtUtc
       FROM dbo.CapacitySnapshot
       WHERE ISNULL(sourceType, 'live-azure-ingest') <> 'live-placement-refresh'
-      GROUP BY capturedAtUtc
-    ),
-    LatestBatch AS (
-      SELECT TOP (1) capturedAtUtc
-      FROM ReportingSnapshotBatches
-      ORDER BY [rowCount] DESC, capturedAtUtc DESC
+      ORDER BY capturedAtUtc DESC
     )
   `;
 }
@@ -591,10 +588,9 @@ function appendCommonSqlFilters(filters, request, options = {}) {
     where += ` AND CONVERT(nvarchar(64), subscriptionId) IN (${subParams.join(',')})`;
   }
 
-  // NOTE: resourceType filtering is applied in-memory after SQL retrieval
-  // to ensure consistency with getRowResourceType() classification logic.
-  // SQL LIKE patterns were insufficient to match the full classification logic
-  // (which checks both family and sku properties with prefix/suffix matching).
+  // Resource type and provider filters are appended separately so callers can
+  // choose between the lighter common SQL filters and the fuller row-classifier
+  // expression used by report endpoints.
 
   return where;
 }
@@ -615,7 +611,7 @@ async function getCapacityRows(filters) {
     WHERE snapshot.capturedAtUtc = latestBatch.capturedAtUtc
   `;
 
-  query += appendCommonSqlFilters(filters, request);
+  query += buildCapacityRowSqlFilters(filters, request);
 
   const result = await request.query(query);
   const rows = result.recordset.map((r) => normalizeCapacityRow({
@@ -636,8 +632,7 @@ async function getCapacityRows(filters) {
     zonesCsv: r.zonesCsv || ''
   }));
   
-  // Apply in-memory filters (including resourceType) for consistency with client classification
-  return applyFilters(applyRegionPreset(rows, filters.regionPreset), filters);
+  return rows;
 }
 
 /**
@@ -672,57 +667,113 @@ async function getCapacityRowsPaginated(filters) {
   }
 
   const capacitySnapshotColumns = await getCapacitySnapshotColumnSet(pool);
-  const request = pool.request();
-  let query = `${buildLatestSnapshotBatchCte()}
-    SELECT
-      ${buildCapacityLatestSelect(capacitySnapshotColumns, 'snapshot')}
-    FROM dbo.CapacitySnapshot snapshot
-    CROSS JOIN LatestBatch latestBatch
-    WHERE snapshot.capturedAtUtc = latestBatch.capturedAtUtc
-  `;
 
-  query += appendCommonSqlFilters(filters, request);
-  query += `
-    ORDER BY snapshot.region ASC, snapshot.skuFamily ASC, snapshot.skuName ASC
-  `;
+  const buildRowsRequest = () => {
+    const request = pool.request();
+    request.input('offsetRows', sql.Int, offset);
+    request.input('pageSizeRows', sql.Int, pageSize);
+    let query = `${buildLatestSnapshotBatchCte()}
+      SELECT
+        ${buildCapacityLatestSelect(capacitySnapshotColumns, 'snapshot')}
+      FROM dbo.CapacitySnapshot snapshot
+      CROSS JOIN LatestBatch latestBatch
+      WHERE snapshot.capturedAtUtc = latestBatch.capturedAtUtc
+    `;
 
-  const result = await request.query(query);
-  
-  // Apply in-memory filters (including resourceType) for accuracy
-  const allRows = applyFilters(
-    result.recordset.map((r) => normalizeCapacityRow({
-      capturedAtUtc: r.capturedAtUtc,
-      sourceType: r.sourceType || null,
-      subscriptionKey: r.subscriptionKey || 'legacy-data',
-      subscriptionId: r.subscriptionId || 'legacy-data',
-      subscriptionName: r.subscriptionName || 'Legacy data',
-      region: r.region,
-      sku: r.sku,
-      family: r.family,
-      availability: r.availability,
-      quotaCurrent: Number(r.quotaCurrent || 0),
-      quotaLimit: Number(r.quotaLimit || 0),
-      monthlyCost: Number(r.monthlyCost || 0),
-      vCpu: Number(r.vCpu || 0),
-      memoryGB: Number(r.memoryGB || 0),
-      zonesCsv: r.zonesCsv || ''
-    })),
-    filters
-  );
-  
-  const filteredRows = applyRegionPreset(allRows, filters.regionPreset);
-  const total = filteredRows.length;
-  const pagedRows = filteredRows.slice(offset, offset + pageSize);
-  
+    query += buildCapacityRowSqlFilters(filters, request);
+    query += `
+      ORDER BY snapshot.region ASC, snapshot.skuFamily ASC, snapshot.skuName ASC
+      OFFSET @offsetRows ROWS FETCH NEXT @pageSizeRows ROWS ONLY
+    `;
+
+    return request.query(query);
+  };
+
+  const buildCountRequest = () => {
+    const request = pool.request();
+    let query = `${buildLatestSnapshotBatchCte()}
+      SELECT COUNT(1) AS total
+      FROM dbo.CapacitySnapshot snapshot
+      CROSS JOIN LatestBatch latestBatch
+      WHERE snapshot.capturedAtUtc = latestBatch.capturedAtUtc
+    `;
+
+    query += buildCapacityRowSqlFilters(filters, request);
+    return request.query(query);
+  };
+
+  const buildSummaryRequest = () => {
+    const request = pool.request();
+    let query = `${buildLatestSnapshotBatchCte()}
+      SELECT
+        SUM(CASE WHEN snapshot.availabilityState IN ('CONSTRAINED', 'RESTRICTED') THEN 1 ELSE 0 END) AS constrainedRows,
+        SUM(COALESCE(snapshot.quotaLimit, 0) - COALESCE(snapshot.quotaCurrent, 0)) AS availableQuota,
+        SUM(COALESCE(snapshot.monthlyCostEstimate, 0)) AS monthlyCost
+      FROM dbo.CapacitySnapshot snapshot
+      CROSS JOIN LatestBatch latestBatch
+      WHERE snapshot.capturedAtUtc = latestBatch.capturedAtUtc
+    `;
+
+    query += buildCapacityRowSqlFilters(filters, request);
+    return request.query(query);
+  };
+
+  const buildFacetRequest = (columnName, aliasName) => {
+    const request = pool.request();
+    let query = `${buildLatestSnapshotBatchCte()}
+      SELECT DISTINCT snapshot.${columnName} AS ${aliasName}
+      FROM dbo.CapacitySnapshot snapshot
+      CROSS JOIN LatestBatch latestBatch
+      WHERE snapshot.capturedAtUtc = latestBatch.capturedAtUtc
+    `;
+
+    query += buildCapacityRowSqlFilters(filters, request);
+    query += `
+      AND snapshot.${columnName} IS NOT NULL
+      ORDER BY snapshot.${columnName} ASC
+    `;
+
+    return request.query(query);
+  };
+
+  const [rowsResult, countResult, summaryResult, regionsResult, familiesResult, skusResult] = await Promise.all([
+    buildRowsRequest(),
+    buildCountRequest(),
+    buildSummaryRequest(),
+    buildFacetRequest('region', 'region'),
+    buildFacetRequest('skuFamily', 'family'),
+    buildFacetRequest('skuName', 'sku')
+  ]);
+
+  const pagedRows = rowsResult.recordset.map((r) => normalizeCapacityRow({
+    capturedAtUtc: r.capturedAtUtc,
+    sourceType: r.sourceType || null,
+    subscriptionKey: r.subscriptionKey || 'legacy-data',
+    subscriptionId: r.subscriptionId || 'legacy-data',
+    subscriptionName: r.subscriptionName || 'Legacy data',
+    region: r.region,
+    sku: r.sku,
+    family: r.family,
+    availability: r.availability,
+    quotaCurrent: Number(r.quotaCurrent || 0),
+    quotaLimit: Number(r.quotaLimit || 0),
+    monthlyCost: Number(r.monthlyCost || 0),
+    vCpu: Number(r.vCpu || 0),
+    memoryGB: Number(r.memoryGB || 0),
+    zonesCsv: r.zonesCsv || ''
+  }));
+  const total = Number(countResult.recordset?.[0]?.total || 0);
+  const summaryRow = summaryResult.recordset?.[0] || {};
+
   const facets = {
-    regions: [...new Set(filteredRows.map((row) => row.region).filter(Boolean))].sort(),
-    families: [...new Set(filteredRows.map((row) => row.family).filter(Boolean))].sort(),
-    skus: [...new Set(filteredRows.map((row) => row.sku).filter(Boolean))].sort()
+    regions: (regionsResult.recordset || []).map((row) => row.region).filter(Boolean),
+    families: [...new Set((familiesResult.recordset || []).map((row) => normalizeFamilyName(row.family)).filter(Boolean))].sort(),
+    skus: [...new Set((skusResult.recordset || []).map((row) => normalizeSkuName(row.sku)).filter(Boolean))].sort((a, b) => String(a || '').localeCompare(String(b || '')))
   };
   const summary = {
-    constrainedRows: filteredRows.filter((row) => isBlockedAvailability(row.availability)).length,
-    availableQuota: filteredRows.reduce((acc, row) => acc + (Number(row.quotaLimit || 0) - Number(row.quotaCurrent || 0)), 0),
-    monthlyCost: filteredRows.reduce((acc, row) => acc + Number(row.monthlyCost || 0), 0)
+    constrainedRows: Number(summaryRow.constrainedRows || 0),
+    availableQuota: Number(summaryRow.availableQuota || 0),
+    monthlyCost: Number(summaryRow.monthlyCost || 0)
   };
 
   return {

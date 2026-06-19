@@ -126,6 +126,19 @@ Troubleshooting `Report access is not enabled for your account`:
 7. Save the app registration change, then restart the App Service so new sessions use the current configuration.
 8. Have the affected user visit `/auth/logout`, close the browser or use an InPrivate window, sign in again, and recheck `/api/auth/me`. A working token should show `groupClaimPresent: true` and `isReportViewer: true` for members of `CapacityReportViewers`.
 
+##### Session persistence configuration
+
+**`SESSION_STORE_SQL_ENABLED` must always be `true`** for production deployments and any environment with authentication enabled. This setting is hardcoded to `true` in both Bicep and Terraform infrastructure templates by default.
+
+When `SESSION_STORE_SQL_ENABLED=true`, Express sessions are persisted in Azure SQL. This ensures:
+- OAuth state and session data survive across app instance restarts and scale-out scenarios
+- Multi-instance deployments do not lose authentication state during traffic routing
+- Sign-in flows complete successfully without getting stuck in redirect loops
+
+Without SQL-backed sessions (memory-only storage), authentication state becomes ephemeral and instance-specific, causing sign-in loops in scaled or restarted environments. The infrastructure templates apply this setting automatically, but manual deployments or non-standard configurations should verify `SESSION_STORE_SQL_ENABLED=true` is set on all App Service instances hosting the dashboard.
+
+See [infra/README.md](infra/README.md) for additional session and VNet configuration details.
+
 #### Live ingestion pipeline
 
 - [x] Managed identity token flow for ARM ingestion

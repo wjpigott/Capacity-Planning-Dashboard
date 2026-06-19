@@ -62,6 +62,7 @@ Both implementations can also reuse existing shared platform dependencies instea
 - Function App host storage should use identity-based `AzureWebJobsStorage` settings with storage data-plane RBAC instead of shared-key auth.
 - Worker Function App runs on its own dedicated App Service plan instead of Flex Consumption.
 - Web App and Function App set `WEBSITE_DNS_SERVER=168.63.129.16` and `WEBSITE_VNET_ROUTE_ALL=1` for private endpoint name resolution and routing.
+- Web App sets `SESSION_STORE_SQL_ENABLED=true` to persist sessions in SQL. This ensures OAuth and authentication state survive across app instances and restarts (required for production deployments and recommended for all environments).
 - SQL defaults to private-access mode (`sqlPublicNetworkAccess = 'Disabled'`) and is reachable from App Service/Function App via VNet integration and private endpoint.
 - Key Vault defaults to private-access mode (`keyVaultPublicNetworkAccess = 'Disabled'`) and is reachable from App Service/Function App via VNet integration and private endpoint.
 - Function App worker ingress defaults to private-access mode (`functionPublicNetworkAccess = 'Disabled'`) and is reachable from the dashboard Web App through `privatelink.azurewebsites.net` when the Function private endpoint is created.

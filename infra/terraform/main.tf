@@ -313,7 +313,7 @@ resource "azurerm_windows_web_app" "web" {
     "AUTH_REDIRECT_URI"                     = local.effective_auth_redirect_uri
     "ADMIN_GROUP_ID"                        = var.admin_group_id
     "REPORT_VIEWER_GROUP_IDS"               = var.report_viewer_group_ids
-    "SESSION_STORE_SQL_ENABLED"             = var.auth_enabled ? "true" : "false"
+    "SESSION_STORE_SQL_ENABLED"             = "true"
     "SCM_DO_BUILD_DURING_DEPLOYMENT"        = "true"
   }
 

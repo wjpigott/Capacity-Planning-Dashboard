@@ -590,7 +590,7 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
         }
         {
           name: 'SESSION_STORE_SQL_ENABLED'
-          value: authEnabled ? 'true' : 'false'
+          value: 'true'
         }
         {
           name: 'WEBSITE_DNS_SERVER'

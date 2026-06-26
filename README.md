@@ -5,22 +5,19 @@ This repository contains the initial platform scaffold for a native Azure capaci
 
 ## Current Release
 
-Current version: `v1.0.4`
+Current version: `v1.0.5`
 
-This version removes the runtime Babel/JSX compiler from the frontend, introduces a build-time esbuild precompile step, and adds operational observability metadata to the top bar.
+This version fixes Report Matrix filtering for West US 3 and keeps Family Base filters switchable after choosing a D/E/N/H/etc. SKU base.
 
-Key additions in `v1.0.4`:
+Key fixes in `v1.0.5`:
 
-- Removed `@babel/standalone` runtime JSX transpiler; the React app is now pre-compiled at deploy time using `esbuild`.
-- Added `npm run build:react` script to `package.json`; `deploy-web-app.ps1` runs it automatically before every deployment, eliminating CDN-drift outage risk.
-- Added `/api/app-meta` endpoint returning current version, repository URL, and (for admins) latest GitHub release check with a 1-hour server-side cache.
-- Added top-bar version chip and GitHub Repo link visible to all users.
-- Admin-only: GitHub release check, "Update available" link, and "Last checked" timestamp in the top bar.
-- Pinned React CDN references to `react@18.3.1` in `react/index.html` to prevent future CDN version drift.
+- Added West US 3 (`westus3`) to the East/West and US Major report presets so it appears in the Report Matrix without switching to Global.
+- Kept the Family Base dropdown populated from the broader report scope so selecting `D` does not trap the filter and prevent switching to `E` or another base.
+- Added a regression test that locks West US 3 into the US reporting presets.
 
-Previous release: `v1.0.3` — App Service Easy Auth hardening for Bicep and Terraform.
+Previous release: `v1.0.4` — build-time React compilation and top-bar release metadata.
 
-Release history is tracked in `docs/RELEASE-NOTES.md`. Git tags should use the same version string as the release, for example `v1.0.4`, so others can retrieve the exact code behind a deployed version.
+Release history is tracked in `docs/RELEASE-NOTES.md`. Git tags should use the same version string as the release, for example `v1.0.5`, so others can retrieve the exact code behind a deployed version.
 
 <img width="1877" height="911" alt="image" src="https://github.com/user-attachments/assets/cda87cd7-220f-41ac-86b3-73ec0a6d6408" />
 

@@ -4,6 +4,22 @@
 
 No unreleased changes.
 
+## v1.0.5 - 2026-06-26
+
+This patch release fixes two Report Matrix filter issues found during West US 3 validation.
+
+Highlights:
+
+- Added West US 3 (`westus3`) to the East/West and US Major region presets in both backend and frontend preset definitions.
+- Rebuilt the React bundle so the deployed Report Matrix offers West US 3 under East/West and US Major scopes.
+- Added a regression test that verifies the US reporting presets include West US 3.
+- Fixed the Family Base filter dropdown so selecting a base such as `D` does not shrink the available base choices and block switching to `E` or another base.
+
+Operational notes:
+
+- Capacity ingestion must run after deployment for newly added regions to show persisted compute rows in the matrix.
+- Use a Git tag named `v1.0.5` on this release commit.
+
 ## v1.0.4 - 2026-06-17
 
 This patch release removes the runtime Babel/JSX compiler from the frontend, introduces a build-time esbuild precompile step, and adds operational observability metadata to the top bar.

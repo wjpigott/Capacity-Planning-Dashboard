@@ -2,6 +2,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { deriveCapacityTrendRows, deriveCapacityScoreRows } = require('../src/services/capacityService');
+const { getRegionsForPreset } = require('../src/config/regionPresets');
+
+test('US reporting presets include West US 3', () => {
+  assert.ok(getRegionsForPreset('USEastWest').includes('westus3'));
+  assert.ok(getRegionsForPreset('USMajor').includes('westus3'));
+});
 
 test('deriveCapacityTrendRows calculates daily and rolling peak utilization percentages', () => {
   const rows = deriveCapacityTrendRows([

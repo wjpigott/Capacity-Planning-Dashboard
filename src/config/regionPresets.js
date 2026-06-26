@@ -1,7 +1,7 @@
 const baseRegionPresets = {
-  USEastWest: ['eastus', 'eastus2', 'westus', 'westus2'],
+  USEastWest: ['eastus', 'eastus2', 'westus', 'westus2', 'westus3'],
   USCentral: ['centralus', 'northcentralus', 'southcentralus', 'westcentralus'],
-  USMajor: ['eastus', 'eastus2', 'centralus', 'westus', 'westus2'],
+  USMajor: ['eastus', 'eastus2', 'centralus', 'westus', 'westus2', 'westus3'],
   Europe: ['westeurope', 'northeurope', 'uksouth', 'francecentral', 'germanywestcentral'],
   AsiaPacific: ['eastasia', 'southeastasia', 'japaneast', 'australiaeast', 'koreacentral'],
   USGov: ['usgovvirginia', 'usgovtexas', 'usgovarizona'],

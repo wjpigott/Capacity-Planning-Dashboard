@@ -80,9 +80,9 @@ const DEFAULT_APP_META = {
 };
 
 const baseRegionPresets = {
-  USEastWest: ['eastus', 'eastus2', 'westus', 'westus2'],
+  USEastWest: ['eastus', 'eastus2', 'westus', 'westus2', 'westus3'],
   USCentral: ['centralus', 'northcentralus', 'southcentralus', 'westcentralus'],
-  USMajor: ['eastus', 'eastus2', 'centralus', 'westus', 'westus2'],
+  USMajor: ['eastus', 'eastus2', 'centralus', 'westus', 'westus2', 'westus3'],
   Europe: ['westeurope', 'northeurope', 'uksouth', 'francecentral', 'germanywestcentral'],
   AsiaPacific: ['eastasia', 'southeastasia', 'japaneast', 'australiaeast', 'koreacentral'],
   USGov: ['usgovvirginia', 'usgovtexas', 'usgovarizona'],
@@ -3237,6 +3237,7 @@ function App() {
   const [livePlacementFamily, setLivePlacementFamily] = useState('');
   const [filters, setFilters] = useState({ regionPreset: 'USMajor', region: 'all', familyBase: 'all', family: 'all', sku: 'all', availability: 'all', resourceType: 'all', provider: 'all' });
   const [capacityData, setCapacityData] = useState({ rows: [], summary: null, facets: { regions: [], families: [], skus: [] }, pagination: { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false } });
+  const [filterFacetFamilies, setFilterFacetFamilies] = useState([]);
   const [capacityAnalytics, setCapacityAnalytics] = useState({ regionHealth: [], topSkus: [], matrix: { regions: [], rows: [] }, recommendedTargetSku: '', aiQuotaProviderOptions: [] });
   const [trendRows, setTrendRows] = useState([]);
   const [trendGranularity, setTrendGranularity] = useState('daily');
@@ -3332,9 +3333,9 @@ function App() {
     return next;
   }, [filters, selectedSubscriptionIds]);
   const fullFamilyOptions = useMemo(() => {
-    const source = capacityData.facets.families;
+    const source = filterFacetFamilies.length > 0 ? filterFacetFamilies : capacityData.facets.families;
     return buildFamilyOptions(source).map((option) => option.value);
-  }, [capacityData.facets.families]);
+  }, [capacityData.facets.families, filterFacetFamilies]);
   const familyBaseOptions = useMemo(() => buildFamilyBaseOptions(fullFamilyOptions), [fullFamilyOptions]);
   const filteredFamilyOptions = useMemo(() => {
     if (!filters.familyBase || filters.familyBase === 'all') {
@@ -4245,6 +4246,11 @@ function App() {
         const sanitizedSkus = (Array.isArray(payload.facets && payload.facets.skus) ? payload.facets.skus : [])
           .map((sku) => normalizeSkuName(sku))
           .filter((sku) => sku && !isAggregateSkuName(sku));
+        const hasScopedFamilyFilter = [queryFilters.familyBase, queryFilters.family, queryFilters.sku]
+          .some((value) => value && value !== 'all');
+        if (!hasScopedFamilyFilter) {
+          setFilterFacetFamilies(canonicalFamilies);
+        }
         setCapacityData({
           rows: Array.isArray(payload.data) ? payload.data.map((row) => ({ ...row, sku: normalizeSkuName(row.sku) })) : [],
           summary: payload.summary || null,

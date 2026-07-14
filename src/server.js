@@ -42,6 +42,7 @@ const { buildSqlPreviewForView } = require('./services/sqlPreviewService');
 const {
   getLivePlacementScoreRows,
   getCapacityRecommendations,
+  getCapacityReportSnapshot,
   getRecommendationDiagnostics,
   seedVmSkuCatalogIfEmpty
 } = require('./services/livePlacementService');
@@ -89,6 +90,17 @@ const { getRegionsForPreset } = require('./config/regionPresets');
 
 const app = express();
 const port = process.env.PORT || 3000;
+const DEPLOYMENT_PROFILE = String(process.env.CAPACITY_DEPLOYMENT_PROFILE || 'full').trim().toLowerCase();
+const IS_LITE_DEPLOYMENT = DEPLOYMENT_PROFILE === 'lite';
+const LITE_API_PATHS = new Set([
+  '/auth/me',
+  '/app-meta',
+  '/sku-catalog/families',
+  '/capacity/scores/live',
+  '/capacity/report-snapshot',
+  '/capacity/report-scope',
+  '/capacity/recommendations'
+]);
 const QUOTA_APPLY_JOB_TTL_MS = 6 * 60 * 60 * 1000;
 const INGEST_JOB_TTL_MS = 6 * 60 * 60 * 1000;
 const quotaApplyJobs = new Map();
@@ -1696,7 +1708,7 @@ function shouldUseSqlSessionStore() {
   const sqlDatabase = process.env.SQL_DATABASE;
   const rawSetting = String(process.env.SESSION_STORE_SQL_ENABLED || '').toLowerCase();
 
-  if (!sqlServer || !sqlDatabase || process.env.NODE_ENV !== 'production') {
+  if (IS_LITE_DEPLOYMENT || !sqlServer || !sqlDatabase || process.env.NODE_ENV !== 'production') {
     return false;
   }
 
@@ -1827,6 +1839,18 @@ app.use('/api', (req, res, next) => {
   if (req.path === '/auth/me') return next();
   if (req.path === '/sku-catalog/families') return next();
   return requireReportAccess(req, res, next);
+});
+
+app.use('/api', (req, res, next) => {
+  if (!IS_LITE_DEPLOYMENT || LITE_API_PATHS.has(req.path)) {
+    return next();
+  }
+
+  return res.status(404).json({
+    ok: false,
+    error: 'This API is unavailable in the Lite deployment profile.',
+    deploymentProfile: 'lite'
+  });
 });
 
 function isReactPrototypeHostAllowed(hostname = '') {
@@ -2267,7 +2291,7 @@ async function ensureDatabasePrincipalAccess(pool, principalName, roles = []) {
 }
 
 app.get('/healthz', (_, res) => {
-  res.json({ status: 'ok', service: 'capacity-dashboard-api' });
+  res.json({ status: 'ok', service: 'capacity-dashboard-api', deploymentProfile: IS_LITE_DEPLOYMENT ? 'lite' : 'full' });
 });
 
 app.get('/api/auth/me', (req, res) => {
@@ -2322,6 +2346,8 @@ app.get('/api/app-meta', async (req, res) => {
   res.json({
     ok: true,
     meta: {
+      deploymentProfile: IS_LITE_DEPLOYMENT ? 'lite' : 'full',
+      productName: IS_LITE_DEPLOYMENT ? 'Capacity Dashboard Lite' : 'Capacity Dashboard',
       currentVersion,
       repositoryUrl,
       homepageUrl: appPackageMetadata.homepage,
@@ -2735,6 +2761,38 @@ app.post('/api/capacity/scores/live', async (req, res) => {
     const status = err.statusCode
       || (err.message.includes('not found') || err.message.includes('not configured') ? 503 : 500);
     sendErrorResponse(res, { status, clientMessage: 'Failed to retrieve live placement scores.', err, scope: 'api/capacity/scores/live', extra: { rows: [] } });
+  }
+});
+
+app.get('/api/capacity/report-snapshot', async (_req, res) => {
+  try {
+    res.json({ ok: true, snapshot: await getCapacityReportSnapshot() });
+  } catch (err) {
+    sendErrorResponse(res, { status: 503, clientMessage: 'Failed to retrieve the current capacity report snapshot.', err, scope: 'api/capacity/report-snapshot:get', extra: { snapshot: null } });
+  }
+});
+
+app.get('/api/capacity/report-scope', requireAdmin, async (_req, res) => {
+  try {
+    res.json({ ok: true, scope: await require('./services/livePlacementService').getCapacityReportScope() });
+  } catch (err) {
+    sendErrorResponse(res, { status: 503, clientMessage: 'Failed to retrieve the Lite report scope.', err, scope: 'api/capacity/report-scope:get', extra: { scope: null } });
+  }
+});
+
+app.put('/api/capacity/report-scope', requireAdmin, async (req, res) => {
+  try {
+    res.json({ ok: true, scope: await require('./services/livePlacementService').saveCapacityReportScope(req.body || {}) });
+  } catch (err) {
+    sendErrorResponse(res, { status: 503, clientMessage: 'Failed to save the Lite report scope.', err, scope: 'api/capacity/report-scope:save', extra: { scope: null } });
+  }
+});
+
+app.post('/api/capacity/report-snapshot', requireAdmin, async (_req, res) => {
+  try {
+    res.json({ ok: true, snapshot: await getCapacityReportSnapshot({ refresh: true }) });
+  } catch (err) {
+    sendErrorResponse(res, { status: 503, clientMessage: 'Failed to refresh the capacity report snapshot.', err, scope: 'api/capacity/report-snapshot:refresh', extra: { snapshot: null } });
   }
 });
 
@@ -3794,6 +3852,11 @@ app.get('*', (req, res) => {
 });
 
 async function runStartupWarmup() {
+  if (IS_LITE_DEPLOYMENT) {
+    console.log('[startup] Lite deployment profile enabled; SQL schema, scheduler, and catalog persistence warm-up are disabled.');
+    return;
+  }
+
   try {
     await ensureSessionStoreSchema();
     if (shouldUseSqlSessionStore()) {

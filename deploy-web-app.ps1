@@ -3,6 +3,7 @@ param(
     [string]$ResourceGroup = $env:AZURE_RESOURCE_GROUP,
     [string]$AppName = $env:AZURE_WEBAPP_NAME,
     [string]$SourcePath = (Resolve-Path "$PSScriptRoot"),
+    [string]$SubscriptionId = $env:AZURE_SUBSCRIPTION_ID,
     [switch]$SkipTests
 )
 
@@ -26,10 +27,14 @@ function Invoke-NativeCommandAllowStderr([scriptblock]$Command) {
     }
 }
 
-function Test-LatestWebDeploymentSucceeded([string]$ResourceGroup, [string]$AppName) {
-    for ($attempt = 1; $attempt -le 6; $attempt++) {
+function Test-LatestWebDeploymentSucceeded([string]$ResourceGroup, [string]$AppName, [string]$SubscriptionId) {
+    for ($attempt = 1; $attempt -le 36; $attempt++) {
+        $deploymentListArgs = @('webapp', 'log', 'deployment', 'list', '--resource-group', $ResourceGroup, '--name', $AppName, '--query', '[0]', '--output', 'json')
+        if (-not [string]::IsNullOrWhiteSpace($SubscriptionId)) {
+            $deploymentListArgs += @('--subscription', $SubscriptionId)
+        }
         $latestDeploymentJson = Invoke-NativeCommandAllowStderr {
-            az webapp log deployment list --resource-group $ResourceGroup --name $AppName --query '[0]' --output json 2>$null
+            az @deploymentListArgs 2>$null
         }
 
         if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($latestDeploymentJson)) {
@@ -148,6 +153,18 @@ foreach ($dir in $dirsToCopy) {
     }
 }
 
+Write-Host "Installing production dependencies in staging: npm ci --omit=dev"
+Push-Location $stagingPath
+try {
+    & npm ci --omit=dev
+    if ($LASTEXITCODE -ne 0) {
+        throw "Production dependency installation failed; deployment aborted. npm ci --omit=dev exited with code $LASTEXITCODE."
+    }
+}
+finally {
+    Pop-Location
+}
+
 # Verify tools directory
 $toolsCheck = Join-Path $stagingPath 'tools\Get-AzVMAvailability\Get-AzVMAvailability.ps1'
 if (Test-Path $toolsCheck) {
@@ -182,7 +199,10 @@ $zipPath = "$env:TEMP\webpackage-capdash-verified-$(Get-Date -Format 'yyyyMMdd-H
 Write-Host "Creating zip package: $zipPath"
 
 Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
-Compress-Archive -Path "$stagingPath\*" -DestinationPath $zipPath -Force
+& tar.exe -a -c -f $zipPath -C $stagingPath .
+if ($LASTEXITCODE -ne 0) {
+    throw "Deployment package creation failed. tar.exe exited with code $LASTEXITCODE."
+}
 
 $zipSize = [math]::Round((Get-Item $zipPath).Length / 1MB, 2)
 Write-Host "Package created: $zipSize MB"
@@ -190,7 +210,7 @@ Write-Host "Package created: $zipSize MB"
 # Verify zip contents
 Write-Host "Verifying zip contents..."
 $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
-$zipEntryNames = @($zip.Entries | ForEach-Object { $_.FullName -replace '\\', '/' })
+$zipEntryNames = @($zip.Entries | ForEach-Object { ($_.FullName -replace '\\', '/') -replace '^\./', '' })
 $zip.Dispose()
 $hasTools = $zipEntryNames -contains 'tools/Get-AzVMAvailability/Get-AzVMAvailability.ps1'
 $hasPaaSTools = $zipEntryNames -contains 'tools/Get-AzPaaSAvailability/Get-AzPaaSAvailability.ps1'
@@ -240,9 +260,14 @@ $deployArgs = @(
     '--timeout', '300'
 )
 
-$deployResult = Invoke-NativeCommandAllowStderr { az @deployArgs 2>&1 }
+if (-not [string]::IsNullOrWhiteSpace($SubscriptionId)) {
+    $deployArgs += @('--subscription', $SubscriptionId)
+}
 
-if ($LASTEXITCODE -eq 0) {
+$deployResult = Invoke-NativeCommandAllowStderr { az @deployArgs 2>&1 }
+$deployExitCode = $LASTEXITCODE
+
+if ($deployExitCode -eq 0) {
     Write-Host "Deployment command accepted"
     Write-Host "Parsing result..."
     try {
@@ -262,9 +287,9 @@ if ($LASTEXITCODE -eq 0) {
     }
 }
 else {
-    Write-Host "Deployment failed with exit code $LASTEXITCODE"
+    Write-Host "Deployment command returned exit code $deployExitCode. Checking Kudu deployment status for up to six minutes..."
     Write-Host "Output: $deployResult"
-    if (Test-LatestWebDeploymentSucceeded -ResourceGroup $ResourceGroup -AppName $AppName) {
+    if (Test-LatestWebDeploymentSucceeded -ResourceGroup $ResourceGroup -AppName $AppName -SubscriptionId $SubscriptionId) {
         Write-Warning "Azure CLI returned a deployment error, but Kudu reports the latest deployment succeeded. Continuing."
         Write-Host ""
         Write-Host "Deployment complete!"
@@ -272,7 +297,7 @@ else {
         return
     }
 
-    throw "Azure App Service zip deployment failed with exit code $LASTEXITCODE."
+    throw "Azure App Service zip deployment failed with exit code $deployExitCode."
 }
 
 Write-Host ""

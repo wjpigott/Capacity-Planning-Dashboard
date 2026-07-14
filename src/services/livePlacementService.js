@@ -667,6 +667,59 @@ async function runRemoteRecommendationLookup({ targetSku, regions, topN, minScor
   }
 }
 
+async function getCapacityReportSnapshot({ refresh = false } = {}) {
+  const baseUrl = resolveWorkerBaseUrl();
+  if (!baseUrl) {
+    throw new Error('Capacity report snapshots require a configured Function worker.');
+  }
+
+  const controller = new AbortController();
+  const timeoutMs = refresh ? 600000 : Math.max(Number(process.env.CAPACITY_WORKER_TIMEOUT_MS || DEFAULT_WORKER_TIMEOUT_MS), 1000);
+  const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(`${baseUrl}/api/report-snapshot`, {
+      method: refresh ? 'POST' : 'GET',
+      headers: await getWorkerAuthHeaders(),
+      signal: controller.signal
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload?.ok === false) {
+      throw new Error(payload?.detail || payload?.error || `Capacity report worker failed with status ${response.status}.`);
+    }
+    return payload?.snapshot || null;
+  } catch (error) {
+    const prefix = error?.name === 'AbortError'
+      ? `Capacity report snapshot timed out after ${timeoutMs}ms`
+      : 'Capacity report snapshot request failed';
+    throw new Error(`${prefix}: ${error.message}`);
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
+
+async function getCapacityReportScope() {
+  const baseUrl = resolveWorkerBaseUrl();
+  if (!baseUrl) throw new Error('Capacity report scope requires a configured Function worker.');
+  const response = await fetch(`${baseUrl}/api/report-snapshot?action=scope`, { headers: await getWorkerAuthHeaders() });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.ok === false) throw new Error(payload?.detail || payload?.error || 'Failed to retrieve capacity report scope.');
+  return payload.scope || null;
+}
+
+async function saveCapacityReportScope(scope) {
+  const baseUrl = resolveWorkerBaseUrl();
+  if (!baseUrl) throw new Error('Capacity report scope requires a configured Function worker.');
+  const response = await fetch(`${baseUrl}/api/report-snapshot`, {
+    method: 'POST',
+    headers: { ...(await getWorkerAuthHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'saveScope', scope })
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.ok === false) throw new Error(payload?.detail || payload?.error || 'Failed to save capacity report scope.');
+  return payload.scope || null;
+}
+
 function httpsGetJson(url) {
   return new Promise((resolve, reject) => {
     const request = https.get(url, {
@@ -2389,19 +2442,22 @@ async function getLivePlacementScoreRows(filters = {}) {
     warnings.push('Desired Placement Count is capped at 1000 for the live placement API.');
   }
 
-  let liveCapacityRefresh = null;
-  try {
-    liveCapacityRefresh = await refreshLiveCapacitySnapshotForPlacement({ filters, selectedSubscriptionIds });
-  } catch (err) {
-    liveCapacityRefresh = {
-      attempted: true,
-      skipped: false,
-      error: err.message
-    };
-    warnings.push(`Live capacity snapshot refresh failed before placement scoring: ${err.message}. Placement scoring will continue using the latest saved capacity scope.`);
+  const isLiteDeployment = String(process.env.CAPACITY_DEPLOYMENT_PROFILE || '').trim().toLowerCase() === 'lite';
+  let liveCapacityRefresh = { attempted: false, skipped: isLiteDeployment, reason: isLiteDeployment ? 'lite-profile' : null };
+  if (!isLiteDeployment) {
+    try {
+      liveCapacityRefresh = await refreshLiveCapacitySnapshotForPlacement({ filters, selectedSubscriptionIds });
+    } catch (err) {
+      liveCapacityRefresh = {
+        attempted: true,
+        skipped: false,
+        error: err.message
+      };
+      warnings.push(`Live capacity snapshot refresh failed before placement scoring: ${err.message}. Placement scoring will continue using the latest saved capacity scope.`);
+    }
   }
 
-  const currentRows = await getCapacityScoreSummary(filters);
+  const currentRows = isLiteDeployment ? [] : await getCapacityScoreSummary(filters);
   const targetRegions = resolveTargetRegions(filters, currentRows);
 
   let workingRows = Array.isArray(currentRows) ? [...currentRows] : [];
@@ -2614,7 +2670,7 @@ async function getLivePlacementScoreRows(filters = {}) {
       };
     });
 
-  if (snapshotsToSave.length > 0) {
+  if (!isLiteDeployment && snapshotsToSave.length > 0) {
     saveLivePlacementSnapshots(snapshotsToSave).catch((saveErr) => {
       console.warn('Failed to persist live placement snapshots:', saveErr.message);
       // Silently fail — don't break the response
@@ -2673,6 +2729,9 @@ async function seedVmSkuCatalogIfEmpty({ region = process.env.SKU_CATALOG_SEED_R
 module.exports = {
   getLivePlacementScoreRows,
   getCapacityRecommendations,
+  getCapacityReportSnapshot,
+  getCapacityReportScope,
+  saveCapacityReportScope,
   getRecommendationDiagnostics,
   getPowerShellCommands,
   ensureAzPlacementModules,

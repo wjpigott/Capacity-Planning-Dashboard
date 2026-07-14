@@ -12,7 +12,11 @@ param(
     [switch]$PreflightOnly,
 
     [Parameter(Mandatory = $false)]
-    [switch]$NonInteractive
+    [switch]$NonInteractive,
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet('Full', 'Lite')]
+    [string]$DeploymentProfile
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,6 +27,7 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $deployScript = Join-Path $repoRoot 'scripts\deploy-infra.ps1'
+$deployLiteScript = Join-Path $repoRoot 'scripts\deploy-lite-web-app.ps1'
 
 if (-not (Test-Path $deployScript)) {
     throw "Deployment engine not found: $deployScript"
@@ -740,7 +745,7 @@ function Save-AnswerFile([string]$Path) {
 $answers = Read-AnswersFile -Path $AnswersFile
 
 Write-Host 'Capacity Dashboard deployment wizard' -ForegroundColor Cyan
-Write-Host 'This script collects answers, previews the deployment command, then calls scripts/deploy-infra.ps1.'
+Write-Host 'This script collects answers, previews the deployment command, then deploys the selected profile.'
 Write-Host 'Secrets entered here are not written to saved answer files.' -ForegroundColor Yellow
 Write-Host ''
 
@@ -752,7 +757,16 @@ else {
     Write-Host "Current Azure context: $($azAccount.name) / $($azAccount.id)" -ForegroundColor Green
 }
 
-$provider = Prompt-Choice -Name 'Provider' -Question 'Which infrastructure provider should be used?' -Choices @('Bicep', 'Terraform') -DefaultValue 'Bicep'
+$deploymentProfile = if ([string]::IsNullOrWhiteSpace($DeploymentProfile)) {
+    Prompt-Choice -Name 'DeploymentProfile' -Question 'Which dashboard profile should be deployed?' -Choices @('Full', 'Lite') -DefaultValue 'Full'
+}
+else {
+    Set-Answer -Name 'DeploymentProfile' -Value $DeploymentProfile
+}
+$provider = 'Bicep'
+if ($deploymentProfile -eq 'Full') {
+    $provider = Prompt-Choice -Name 'Provider' -Question 'Which infrastructure provider should be used?' -Choices @('Bicep', 'Terraform') -DefaultValue 'Bicep'
+}
 if ($provider -eq 'Terraform' -and -not (Test-CommandAvailable 'terraform')) {
     Write-Warning 'Terraform was selected but terraform.exe was not found on PATH. The final deploy will fail until Terraform is installed.'
 }
@@ -770,7 +784,7 @@ $expectedAuthRedirectUri = "https://$expectedWebAppName.azurewebsites.net/auth/c
 $randomizeNames = Prompt-YesNo -Name 'RandomizeWorkloadSuffixOnNameConflict' -Question 'Randomize the workload suffix if an App Service host name is already taken?' -DefaultValue $true
 
 $defaultParameterFile = ''
-if ($provider -eq 'Bicep') {
+if ($deploymentProfile -eq 'Full' -and $provider -eq 'Bicep') {
     $candidateParameterFile = Join-Path $repoRoot 'infra\bicep\main.bicepparam'
     if (Test-Path $candidateParameterFile) {
         $useBicepParameterFile = Prompt-YesNo -Name 'UseBicepParameterFile' -Question 'Use infra/bicep/main.bicepparam as a parameter file?' -DefaultValue $false
@@ -779,13 +793,13 @@ if ($provider -eq 'Bicep') {
         }
     }
 }
-else {
+elseif ($deploymentProfile -eq 'Full') {
     $candidateTfvars = Join-Path $repoRoot 'infra\terraform\terraform.tfvars'
     if (Test-Path $candidateTfvars) {
         $defaultParameterFile = './infra/terraform/terraform.tfvars'
     }
 }
-$parameterFile = Prompt-String -Name 'ParameterFile' -Question 'Optional parameter/tfvars file path' -DefaultValue $defaultParameterFile
+$parameterFile = if ($deploymentProfile -eq 'Full') { Prompt-String -Name 'ParameterFile' -Question 'Optional parameter/tfvars file path' -DefaultValue $defaultParameterFile } else { '' }
 
 $authEnabled = Prompt-YesNo -Name 'AuthEnabled' -Question 'Enable Entra sign-in for the dashboard?' -DefaultValue $true
 $entraTenantId = ''
@@ -811,7 +825,9 @@ if ($authEnabled) {
         $manageEntraWebRedirectUri = Prompt-YesNo -Name 'ManageEntraWebRedirectUri' -Question 'Allow Terraform wrapper to add the generated callback URI to the app registration?' -DefaultValue $false
     }
 
-    $webEasyAuthEnabled = Prompt-YesNo -Name 'WebEasyAuthEnabled' -Question 'Enable App Service Authentication / Easy Auth on the Web App?' -DefaultValue $false
+    if ($deploymentProfile -eq 'Full') {
+        $webEasyAuthEnabled = Prompt-YesNo -Name 'WebEasyAuthEnabled' -Question 'Enable App Service Authentication / Easy Auth on the Web App?' -DefaultValue $false
+    }
     if ($webEasyAuthEnabled) {
         $webEasyAuthUnauthenticatedAction = Prompt-Choice -Name 'WebEasyAuthUnauthenticatedAction' -Question 'Web Easy Auth behavior for unauthenticated browser requests?' -Choices @('RedirectToLoginPage', 'Return401') -DefaultValue 'RedirectToLoginPage'
         $webEasyAuthAllowedClientApplications = Prompt-List -Name 'WebEasyAuthAllowedClientApplications' -Question 'Optional Web Easy Auth allowed client application IDs for bearer automation (comma-separated)'
@@ -872,6 +888,68 @@ if ($authEnabled) {
 
         break
     }
+}
+
+if ($deploymentProfile -eq 'Lite') {
+    if (-not (Test-Path $deployLiteScript)) {
+        throw "Lite deployment engine not found: $deployLiteScript"
+    }
+
+    $managementGroupNames = Prompt-List -Name 'ManagementGroupNames' -Question 'Management group names for worker report scope (comma-separated; optional)'
+    $sessionSecret = if ($authEnabled) { Prompt-Secret -Name 'SessionSecret' -Question 'Session secret for Lite application authentication' -Required } else { '' }
+    $skipLiteTests = [bool](Resolve-WebPackageTestGate -DeployWebApp $true -SkipWebAppTests $false)
+    $liteParameters = @{
+        ResourceGroupName = $resourceGroupName
+        AppName = $expectedWebAppName
+        Location = $location
+        AuthEnabled = $authEnabled
+        SubscriptionId = $subscriptionId
+        ManagementGroupNames = ($managementGroupNames -join ',')
+        SkipTests = $skipLiteTests
+    }
+    if ($authEnabled) {
+        $liteParameters.EntraTenantId = $entraTenantId
+        $liteParameters.EntraClientId = $entraClientId
+        $liteParameters.EntraClientSecret = $entraClientSecret
+        $liteParameters.SessionSecret = $sessionSecret
+        $liteParameters.AuthRedirectUri = $authRedirectUri
+        $liteParameters.AdminGroupId = $adminGroupId
+        $liteParameters.ReportViewerGroupIds = $reportViewerGroupIds
+    }
+
+    Show-Plan -Plan ([ordered]@{
+        DeploymentProfile = 'Lite'
+        Subscription = $subscriptionId
+        ResourceGroup = $resourceGroupName
+        Location = $location
+        ExpectedWebAppName = $expectedWebAppName
+        ExpectedFunctionAppName = ($expectedWebAppName -replace '^app-', 'func-')
+        ManagementGroups = if ($managementGroupNames.Count -gt 0) { $managementGroupNames -join ', ' } else { '(none; configure scope after deployment)' }
+        AzureSql = 'Not deployed'
+        KeyVault = 'Not deployed'
+        SkipWebAppTests = $skipLiteTests
+    })
+    Write-Host 'Lite deployment uses CAPACITY_DEPLOYMENT_PROFILE=lite and deploys the shared web package without SQL resources.' -ForegroundColor Green
+    Save-AnswerFile -Path $SaveAnswers
+
+    if ($PlanOnly) {
+        Write-Host 'PlanOnly was specified; deployment was not started.' -ForegroundColor Yellow
+        return
+    }
+
+    Test-AzureDeploymentPreflight -SubscriptionId $subscriptionId -AuthEnabled $authEnabled -AccessGroupMode (Get-Answer -Name 'AccessGroupMode' -DefaultValue '') -AdminGroupId $adminGroupId -ReportViewerGroupIds $reportViewerGroupIds -AdminGroupDisplayName 'CapacityAdmin' -ReportViewerGroupDisplayName 'CapacityReportViewers' -ExpectedWebAppName $expectedWebAppName -ExpectedFunctionAppName ($expectedWebAppName -replace '^app-', 'func-')
+    if ($PreflightOnly) {
+        Write-Host 'PreflightOnly was specified; deployment was not started.' -ForegroundColor Yellow
+        return
+    }
+    if (-not $NonInteractive -and -not (Prompt-YesNo -Name 'ProceedWithDeployment' -Question 'Proceed with Lite deployment now?' -DefaultValue $false)) {
+        Write-Host 'Deployment cancelled by operator.' -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host 'Starting Lite deployment...' -ForegroundColor Cyan
+    & $deployLiteScript @liteParameters
+    return
 }
 
 $useCurrentUserForSqlAdmin = $false

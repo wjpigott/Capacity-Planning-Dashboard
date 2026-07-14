@@ -68,6 +68,8 @@ const REPORT_VIEWS = [
 ];
 
 const DEFAULT_APP_META = {
+  deploymentProfile: 'full',
+  productName: 'Capacity Dashboard',
   currentVersion: '0.0.0',
   repositoryUrl: 'https://github.com/wjpigott/Capacity-Planning-Dashboard',
   currentReleaseUrl: 'https://github.com/wjpigott/Capacity-Planning-Dashboard/blob/main/README.md#current-release',
@@ -491,6 +493,16 @@ function normalizeFamilyLabel(rawFamily, skuName) {
   return formatFamilyLabel(value);
 }
 
+function deriveSkuSeriesFamily(skuName, fallbackFamily) {
+  const normalizedSku = normalizeSkuName(skuName);
+  const seriesMatch = normalizedSku.match(/^(?:Standard|Basic)_([A-Za-z]+)\d+([A-Za-z]*)/i);
+  const versionMatch = normalizedSku.match(/_v(\d+)(?:_|$)/i);
+  if (seriesMatch && versionMatch) {
+    return `${seriesMatch[1]}${seriesMatch[2]}V${versionMatch[1]}`.toUpperCase();
+  }
+  return normalizeFamilyLabel(fallbackFamily, normalizedSku) || String(fallbackFamily || 'Uncategorized').trim();
+}
+
 function getRowResourceType(row) {
   const sourceType = String((row && row.sourceType) || '').toLowerCase();
   const family = String((row && row.family) || '').toLowerCase();
@@ -843,6 +855,14 @@ function regionMatrixRows(rows, selectedRegion, presetRegions) {
 }
 
 function formatMatrixCellZones(cell) {
+  const zoneStatuses = cell && cell.zoneStatuses instanceof Set
+    ? [...cell.zoneStatuses]
+    : (Array.isArray(cell && cell.zoneStatuses) ? cell.zoneStatuses : []);
+  const normalizedZoneStatuses = zoneStatuses.map((zoneStatus) => String(zoneStatus || '').trim()).filter(Boolean);
+  if (normalizedZoneStatuses.length > 0) {
+    return normalizedZoneStatuses.sort((left, right) => left.localeCompare(right)).join(' | ');
+  }
+
   const zones = cell && cell.zones instanceof Set
     ? [...cell.zones]
     : (Array.isArray(cell && cell.zones)
@@ -1237,6 +1257,12 @@ function normalizeSkuList(value) {
   return raw.filter(isDisplayableSku);
 }
 
+function normalizeStringList(value) {
+  return (Array.isArray(value) ? value : [value])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
+}
+
 function normalizeDesiredPlacementCount(value) {
   const numeric = Number(value || 1);
   return Math.max(1, Math.min(Number.isFinite(numeric) ? numeric : 1, 1000));
@@ -1601,10 +1627,21 @@ function SortableMatrixTable({
   dynamicColumns,
   rows,
   emptyMessage,
-  rowKey,
-  getRowClassName,
-  renderDynamicCell,
-  getDynamicSortValue,
+  rowKey = (row) => row?.family || row?.id || JSON.stringify(row),
+  getRowClassName = () => '',
+  renderDynamicCell = (row, region) => {
+    const cell = row?.regionMap?.[region];
+    if (!cell) return 'BLOCKED';
+    if (cell.status) return cell.status;
+    if (Number(cell.okCount || 0) > 0) return Number(cell.limitedCount || 0) > 0 || Number(cell.constrainedCount || 0) > 0 ? 'PARTIAL' : 'OK';
+    if (Number(cell.limitedCount || 0) > 0) return 'LIMITED';
+    if (Number(cell.constrainedCount || 0) > 0) return 'CONSTRAINED';
+    return 'BLOCKED';
+  },
+  getDynamicSortValue = (row, region) => {
+    const cell = row?.regionMap?.[region];
+    return cell?.status || `${cell?.okCount || 0}:${cell?.limitedCount || 0}:${cell?.constrainedCount || 0}`;
+  },
   tableClassName
 }) {
   const [sort, setSort] = useState({ key: primaryColumn.key, direction: 'asc' });
@@ -3235,10 +3272,13 @@ function App() {
   const [selectedSubscriptionIds, setSelectedSubscriptionIds] = useState([]);
   const [livePlacementSubscriptionId, setLivePlacementSubscriptionId] = useState('');
   const [livePlacementFamily, setLivePlacementFamily] = useState('');
+  const [livePlacementSku, setLivePlacementSku] = useState('');
   const [filters, setFilters] = useState({ regionPreset: 'USMajor', region: 'all', familyBase: 'all', family: 'all', sku: 'all', availability: 'all', resourceType: 'all', provider: 'all' });
   const [capacityData, setCapacityData] = useState({ rows: [], summary: null, facets: { regions: [], families: [], skus: [] }, pagination: { pageNumber: 1, pageSize: 50, total: 0, pageCount: 1, hasNext: false, hasPrev: false } });
   const [filterFacetFamilies, setFilterFacetFamilies] = useState([]);
   const [capacityAnalytics, setCapacityAnalytics] = useState({ regionHealth: [], topSkus: [], matrix: { regions: [], rows: [] }, recommendedTargetSku: '', aiQuotaProviderOptions: [] });
+  const [liteReportSnapshot, setLiteReportSnapshot] = useState({ snapshot: null, loading: false, refreshing: false, status: { tone: 'info', message: 'Loading the latest capacity report snapshot...' } });
+  const [liteScope, setLiteScope] = useState({ subscriptionIds: '', managementGroupNames: '', loading: false, saving: false, status: { tone: 'info', message: 'Configure the Azure scope used by Lite report snapshots.' } });
   const [trendRows, setTrendRows] = useState([]);
   const [trendGranularity, setTrendGranularity] = useState('daily');
   const [familyRows, setFamilyRows] = useState([]);
@@ -3257,6 +3297,8 @@ function App() {
   const [selectedExportOption, setSelectedExportOption] = useState('server:xlsx:report');
   const [skuCatalogVersion, setSkuCatalogVersion] = useState(0);
   const [appMeta, setAppMeta] = useState(DEFAULT_APP_META);
+  const [appMetaResolved, setAppMetaResolved] = useState(false);
+  const isLiteDeployment = appMeta.deploymentProfile === 'lite';
 
   useEffect(() => {
     let cancelled = false;
@@ -3306,9 +3348,17 @@ function App() {
           ...current,
           ...payload.meta
         }));
+        if (payload.meta.deploymentProfile === 'lite') {
+          setActiveView((current) => ['capacity-grid', 'region-matrix', 'capacity-score', 'recommender', 'admin'].includes(current) ? current : 'capacity-grid');
+        }
       })
       .catch(() => {
         // Keep default metadata when app meta endpoint is unavailable.
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setAppMetaResolved(true);
+        }
       });
 
     return () => {
@@ -3332,10 +3382,17 @@ function App() {
     }
     return next;
   }, [filters, selectedSubscriptionIds]);
+  const liteSnapshotDetails = useMemo(() => (
+    Array.isArray(liteReportSnapshot.snapshot?.details) ? liteReportSnapshot.snapshot.details : []
+  ), [liteReportSnapshot.snapshot]);
   const fullFamilyOptions = useMemo(() => {
-    const source = filterFacetFamilies.length > 0 ? filterFacetFamilies : capacityData.facets.families;
+    const source = isLiteDeployment
+      ? liteSnapshotDetails
+        .map((row) => deriveSkuSeriesFamily(row.SKU || row.sku, row.Family || row.family))
+        .filter(isDisplayableFamily)
+      : (filterFacetFamilies.length > 0 ? filterFacetFamilies : capacityData.facets.families);
     return buildFamilyOptions(source).map((option) => option.value);
-  }, [capacityData.facets.families, filterFacetFamilies]);
+  }, [capacityData.facets.families, filterFacetFamilies, isLiteDeployment, liteSnapshotDetails]);
   const familyBaseOptions = useMemo(() => buildFamilyBaseOptions(fullFamilyOptions), [fullFamilyOptions]);
   const filteredFamilyOptions = useMemo(() => {
     if (!filters.familyBase || filters.familyBase === 'all') {
@@ -3344,12 +3401,6 @@ function App() {
     return fullFamilyOptions.filter((family) => extractFamilyBase(family) === filters.familyBase);
   }, [filters.familyBase, fullFamilyOptions]);
   const livePlacementFamilyOptions = useMemo(() => filteredFamilyOptions.length > 0 ? filteredFamilyOptions : fullFamilyOptions, [filteredFamilyOptions, fullFamilyOptions]);
-  const scopedSkuOptions = useMemo(() => {
-    return (Array.isArray(capacityData.facets.skus) ? capacityData.facets.skus : [])
-      .map((sku) => normalizeSkuName(sku))
-      .filter((sku) => sku && !isAggregateSkuName(sku))
-      .sort((left, right) => compareSkuValues(left, right));
-  }, [capacityData.facets.skus]);
   const livePlacementSelectedSubscription = useMemo(() => (
     subscriptionOptions.find((option) => option.subscriptionId === livePlacementSubscriptionId) || null
   ), [livePlacementSubscriptionId, subscriptionOptions]);
@@ -3376,15 +3427,22 @@ function App() {
     }
     return parts.join(', ');
   }, [filters.availability, filters.sku, livePlacementRegionScopeLabel]);
-  const canRefreshLivePlacement = Boolean(livePlacementSubscriptionId && livePlacementFamily && livePlacementFamily !== 'all');
+  const canRefreshLivePlacement = Boolean(livePlacementSubscriptionId && (isLiteDeployment ? livePlacementSku : livePlacementFamily) && (isLiteDeployment ? livePlacementSku : livePlacementFamily) !== 'all');
   const livePlacementScopeMessage = canRefreshLivePlacement
-    ? `Live placement refresh will run for ${livePlacementSelectedSubscription?.subscriptionName || livePlacementSelectedSubscription?.subscriptionId || selectedSubscriptionIds[0]} in ${livePlacementSelectedFamilyLabel}, using current reporting scope: ${livePlacementFilterScopeLabel}.`
+    ? (isLiteDeployment
+      ? `Live placement refresh will run for ${normalizeSkuName(livePlacementSku)} using the configured snapshot subscription and ${livePlacementFilterScopeLabel}.`
+      : `Live placement refresh will run for ${livePlacementSelectedSubscription?.subscriptionName || livePlacementSelectedSubscription?.subscriptionId || selectedSubscriptionIds[0]} in ${livePlacementSelectedFamilyLabel}, using current reporting scope: ${livePlacementFilterScopeLabel}.`)
     : (!livePlacementSubscriptionId
       ? 'Select the target subscription for live placement refresh.'
-      : 'Select the target family for live placement refresh.');
+      : (isLiteDeployment ? 'Select the target SKU for live placement refresh.' : 'Select the target family for live placement refresh.'));
 
   const canUseReportApis = Boolean(auth?.canAccessReports && reportScopeResolved);
-  const visibleViews = useMemo(() => REPORT_VIEWS.filter((view) => !view.adminOnly || auth?.canAccessAdmin), [auth]);
+  const visibleViews = useMemo(() => REPORT_VIEWS.filter((view) => {
+    if (isLiteDeployment && view.key !== 'recommender' && view.key !== 'capacity-grid' && view.key !== 'region-matrix' && view.key !== 'capacity-score' && view.key !== 'admin') {
+      return false;
+    }
+    return !view.adminOnly || auth?.canAccessAdmin;
+  }), [auth, isLiteDeployment]);
   const reportingViews = useMemo(() => visibleViews.filter((view) => view.navGroup !== 'admin').sort((left, right) => left.label.localeCompare(right.label)), [visibleViews]);
   const adminViews = useMemo(() => visibleViews.filter((view) => view.navGroup === 'admin').sort((left, right) => left.label.localeCompare(right.label)), [visibleViews]);
 
@@ -3452,21 +3510,140 @@ function App() {
   }, [activeView, capacityAnalytics.recommendedTargetSku, fastRecommendedTargetSku, filters.family, selectedScopedSku]);
   const recommendedRegions = useMemo(() => defaultRecommendRegionsFromFilters(filters, capacityData.facets.regions, []), [filters, capacityData.facets.regions]);
   const scopedRegionOptions = useMemo(() => {
-    const baseOptions = activeView === 'ai-model-availability' || activeView === 'ai-summary-report'
+    const baseOptions = isLiteDeployment
+      ? liteSnapshotDetails.map((row) => row.Region || row.region).filter(isDisplayableRegion)
+      : (activeView === 'ai-model-availability' || activeView === 'ai-summary-report'
       ? (Array.isArray(aiModelState.regions) ? aiModelState.regions : [])
-      : (Array.isArray(capacityData.facets.regions) ? capacityData.facets.regions : []);
+      : (Array.isArray(capacityData.facets.regions) ? capacityData.facets.regions : []));
     const presetRegions = regionPresets[filters.regionPreset] || [];
     if (presetRegions.length > 0) {
       return [...new Set(presetRegions.map((region) => String(region || '').trim().toLowerCase()).filter(Boolean))];
     }
     return [...new Set(baseOptions.map((region) => String(region || '').trim().toLowerCase()).filter(Boolean))];
-  }, [activeView, aiModelState.regions, filters.regionPreset, capacityData.facets.regions]);
+  }, [activeView, aiModelState.regions, capacityData.facets.regions, filters.regionPreset, isLiteDeployment, liteSnapshotDetails]);
   const regionHealth = useMemo(() => (Array.isArray(capacityAnalytics.regionHealth) ? capacityAnalytics.regionHealth : []), [capacityAnalytics.regionHealth]);
   const topSkus = useMemo(() => (Array.isArray(capacityAnalytics.topSkus) ? capacityAnalytics.topSkus : []), [capacityAnalytics.topSkus]);
   const familySummaryRows = useMemo(() => (familyRows.length > 0 ? familyRows : []), [familyRows]);
   const recommendationRows = useMemo(() => (Array.isArray(recommendState.result?.recommendations) ? recommendState.result.recommendations : []), [recommendState.result]);
+  const liteReportRows = useMemo(() => liteSnapshotDetails.map((row) => ({
+    subscriptionName: row.Subscription || row.subscription || 'n/a',
+    region: String(row.Region || row.region || '').trim().toLowerCase(),
+    family: deriveSkuSeriesFamily(row.SKU || row.sku, row.Family || row.family),
+    sku: normalizeSkuName(row.SKU || row.sku),
+    availability: row.Capacity || row.capacity || 'UNKNOWN',
+    quotaCurrent: row.QuotaCurrent ?? row.quotaCurrent ?? null,
+    quotaLimit: row.QuotaLimit ?? row.quotaLimit ?? null,
+    quotaAvailable: row.QuotaAvail ?? row.quotaAvail ?? null,
+    zonesOK: row.ZoneStatus || row.zonesOK || 'n/a',
+    reason: row.Reason || row.reason || ''
+  })), [liteSnapshotDetails]);
+  const litePlacementSubscriptionOptions = useMemo(() => {
+    const subscriptionNames = [...new Set(liteReportRows.map((row) => row.subscriptionName).filter(Boolean))];
+    const rawSubscriptionIds = liteReportSnapshot.snapshot?.snapshotSubscriptionIds;
+    const subscriptionIds = (Array.isArray(rawSubscriptionIds) ? rawSubscriptionIds : [rawSubscriptionIds])
+      .map((subscriptionId) => String(subscriptionId || '').trim())
+      .filter(Boolean);
+    return subscriptionIds.map((subscriptionId, index) => ({
+      subscriptionId: String(subscriptionId),
+      subscriptionName: subscriptionNames[index] || subscriptionNames[0] || String(subscriptionId)
+    }));
+  }, [liteReportRows, liteReportSnapshot.snapshot]);
+  const selectedLitePlacementFamily = useMemo(() => (
+    liteReportRows.find((row) => normalizeSkuName(row.sku) === normalizeSkuName(livePlacementSku))?.family || ''
+  ), [liteReportRows, livePlacementSku]);
+  const filteredLiteReportRows = useMemo(() => liteReportRows.filter((row) => {
+    const region = String(row.region || '').trim().toLowerCase();
+    const family = String(row.family || '').trim();
+    const sku = normalizeSkuName(row.sku);
+    const availability = String(row.availability || '').trim().toUpperCase();
+    const scopedRegions = regionPresets[filters.regionPreset] || [];
+    const inPreset = scopedRegions.length === 0 || scopedRegions.includes(region);
+    const inRegion = filters.region === 'all' || region === String(filters.region || '').trim().toLowerCase();
+    const inFamilyBase = filters.familyBase === 'all' || extractFamilyBase(family) === filters.familyBase;
+    const inFamily = filters.family === 'all' || family === filters.family;
+    const inSku = filters.sku === 'all' || sku === normalizeSkuName(filters.sku);
+    const inAvailability = filters.availability === 'all' || availability === String(filters.availability || '').trim().toUpperCase();
+    return inPreset && inRegion && inFamilyBase && inFamily && inSku && inAvailability;
+  }), [filters, liteReportRows]);
+  const scopedSkuOptions = useMemo(() => {
+    const source = isLiteDeployment
+      ? filteredLiteReportRows.map((row) => row.sku)
+      : (Array.isArray(capacityData.facets.skus) ? capacityData.facets.skus : []);
+    return [...new Set(source
+      .map((sku) => normalizeSkuName(sku))
+      .filter((sku) => sku && !isAggregateSkuName(sku)))]
+      .sort((left, right) => compareSkuValues(left, right));
+  }, [capacityData.facets.skus, filteredLiteReportRows, isLiteDeployment]);
+  const liteCapacityScoreRows = useMemo(() => {
+    const groupedRows = new Map();
+    filteredLiteReportRows.forEach((reportRow) => {
+      const region = String(reportRow.region || '').trim().toLowerCase();
+      const family = String(reportRow.family || 'Uncategorized').trim() || 'Uncategorized';
+      if (!region) return;
+
+      const key = `${region}|${family}`;
+      const current = groupedRows.get(key) || {
+        region,
+        family,
+        sku: 'Snapshot aggregate',
+        livePlacementScore: 'N/A',
+        score: 'HIGH',
+        subscriptionCount: 0,
+        okRows: 0,
+        limitedRows: 0,
+        constrainedRows: 0,
+        totalQuotaAvailable: 0,
+        reason: 'Worker-generated capacity snapshot'
+      };
+      const availability = String(reportRow.availability || '').toUpperCase();
+      if (/(CONSTRAINED|RESTRICTED|BLOCKED|UNAVAILABLE)/.test(availability)) {
+        current.constrainedRows += 1;
+        current.score = 'LOW';
+      } else if (/LIMITED/.test(availability)) {
+        current.limitedRows += 1;
+        if (current.score !== 'LOW') current.score = 'MEDIUM';
+      } else {
+        current.okRows += 1;
+      }
+      const quotaAvailable = Number(reportRow.quotaAvailable);
+      if (Number.isFinite(quotaAvailable)) current.totalQuotaAvailable += quotaAvailable;
+      current.subscriptionCount = Math.max(current.subscriptionCount, 1);
+      groupedRows.set(key, current);
+    });
+
+    return [...groupedRows.values()].sort((left, right) => left.region.localeCompare(right.region) || left.family.localeCompare(right.family));
+  }, [filteredLiteReportRows]);
   const matrix = useMemo(() => {
-    const source = capacityAnalytics.matrix || { regions: [], rows: [] };
+    const liteMatrix = filteredLiteReportRows.reduce((source, reportRow) => {
+      const family = String(reportRow?.family || 'Uncategorized').trim() || 'Uncategorized';
+      const region = String(reportRow?.region || '').trim().toLowerCase();
+      if (!region) return source;
+
+      if (!source.rowsByFamily.has(family)) {
+        source.rowsByFamily.set(family, { family, regionMap: {} });
+      }
+
+      const row = source.rowsByFamily.get(family);
+      const cell = row.regionMap[region] || { okCount: 0, limitedCount: 0, constrainedCount: 0, zoneStatuses: new Set() };
+      const capacity = String(reportRow?.availability || '').toUpperCase();
+      if (/(CONSTRAINED|RESTRICTED|BLOCKED)/.test(capacity)) {
+        cell.constrainedCount += 1;
+      } else if (/LIMITED/.test(capacity)) {
+        cell.limitedCount += 1;
+      } else {
+        cell.okCount += 1;
+      }
+      const zoneStatus = String(reportRow?.zonesOK || '').trim();
+      if (zoneStatus && zoneStatus.toLowerCase() !== 'n/a') {
+        cell.zoneStatuses.add(zoneStatus);
+      }
+      row.regionMap[region] = cell;
+      source.regions.add(region);
+      return source;
+    }, { regions: new Set(), rowsByFamily: new Map() });
+    const source = isLiteDeployment
+      ? { regions: [...liteMatrix.regions], rows: [...liteMatrix.rowsByFamily.values()] }
+      : (capacityAnalytics.matrix || { regions: [], rows: [] });
     const availableRegions = new Set((Array.isArray(source.regions) ? source.regions : []).map((region) => String(region || '').trim().toLowerCase()).filter(Boolean));
     const resolveCellStatus = (cell) => {
       if (!cell) return 'BLOCKED';
@@ -3508,7 +3685,7 @@ function App() {
       }),
       resolveCellStatus
     };
-  }, [capacityAnalytics.matrix, filters.region, scopedRegionOptions]);
+  }, [capacityAnalytics.matrix, filters.region, filteredLiteReportRows, isLiteDeployment, scopedRegionOptions]);
   const aiDeploymentTypeOptions = useMemo(() => [...new Set((aiModelState.rows || [])
     .flatMap((row) => String(row.deploymentTypes || '')
       .split(',')
@@ -3610,6 +3787,22 @@ function App() {
   }, [adminState.job, adminState.runtime.aiModelCatalog.intervalMinutes, adminState.runtime.ingest.intervalMinutes, adminState.schedule.aiModelCatalog.intervalMinutes, adminState.schedule.ingest.familyFilters, adminState.schedule.ingest.intervalMinutes, adminState.schedule.ingest.managementGroupNames, adminState.schedule.ingest.regionPreset, adminState.schedule.ingest.runOnStartup, adminState.schedule.ingest.subscriptionIds, adminState.status]);
   const activeReportExportOptions = useMemo(() => {
     if (activeView === 'capacity-grid') {
+      if (isLiteDeployment) {
+        return [{
+          value: 'client:lite-capacity-grid', label: 'CSV Export', type: 'client', filenameBase: 'capacity-grid', rows: filteredLiteReportRows, columns: [
+            { label: 'Subscription', value: (row) => row.subscriptionName },
+            { label: 'Region', value: (row) => row.region },
+            { label: 'SKU', value: (row) => normalizeSkuName(row.sku) || '' },
+            { label: 'Family', value: (row) => formatFamilyLabel(row.family) || row.family || '' },
+            { label: 'Capacity', value: (row) => row.availability || '' },
+            { label: 'Quota Current', value: (row) => row.quotaCurrent },
+            { label: 'Quota Limit', value: (row) => row.quotaLimit },
+            { label: 'Quota Available', value: (row) => row.quotaAvailable },
+            { label: 'Zones', value: (row) => row.zonesOK || '' },
+            { label: 'Reason', value: (row) => row.reason || '' }
+          ]
+        }];
+      }
       return [
         { value: 'server:csv:grid', label: 'CSV Export', type: 'server', format: 'csv', variant: 'grid' },
         { value: 'server:xlsx:grid', label: 'Grid XLSX', type: 'server', format: 'xlsx', variant: 'grid' },
@@ -3713,9 +3906,12 @@ function App() {
     }
 
     if (activeView === 'capacity-score') {
+      const scoreRows = isLiteDeployment && capacityScores.rows.length === 0
+        ? liteCapacityScoreRows
+        : capacityScores.rows;
       return [
         {
-          value: 'client:capacity-score', label: 'CSV Export: Score Rows', type: 'client', filenameBase: 'capacity-score', rows: capacityScores.rows, columns: [
+          value: 'client:capacity-score', label: 'CSV Export: Score Rows', type: 'client', filenameBase: 'capacity-score', rows: scoreRows, columns: [
             { label: 'Region', value: (row) => row.region },
             { label: 'SKU', value: (row) => normalizeSkuName(row.sku) || '' },
             { label: 'Family', value: (row) => formatFamilyLabel(row.family) || row.family || '' },
@@ -3909,9 +4105,12 @@ function App() {
     }
 
     return [];
-  }, [activeView, adminExportRows, aiModelRows, aiSummaryMatrixExport.regionOrder, aiSummaryMatrixExport.rows, capacityScores.rows, capacityScores.subscriptionSummary, filteredPaaSDbQuotaRows, filteredPaaSRows, filteredQuotaCandidateRows, familySummaryRows, matrix.regions, matrix.resolveCellStatus, matrix.rows, quotaState.applyResults, quotaState.impactRows, quotaState.planRows, quotaState.quotaRuns, quotaState.shareableReport.rows, recommendationRows, regionHealth, scopedRegionOptions, topSkus, trendRows]);
+  }, [activeView, adminExportRows, aiModelRows, aiSummaryMatrixExport.regionOrder, aiSummaryMatrixExport.rows, capacityScores.rows, capacityScores.subscriptionSummary, filteredLiteReportRows, filteredPaaSDbQuotaRows, filteredPaaSRows, filteredQuotaCandidateRows, familySummaryRows, isLiteDeployment, liteCapacityScoreRows, matrix.regions, matrix.resolveCellStatus, matrix.rows, quotaState.applyResults, quotaState.impactRows, quotaState.planRows, quotaState.quotaRuns, quotaState.shareableReport.rows, recommendationRows, regionHealth, scopedRegionOptions, topSkus, trendRows]);
 
   useEffect(() => {
+    if (isLiteDeployment) {
+      return;
+    }
     if (!Array.isArray(subscriptionOptions) || subscriptionOptions.length === 0) {
       if (livePlacementSubscriptionId) {
         setLivePlacementSubscriptionId('');
@@ -3930,7 +4129,7 @@ function App() {
     }
 
     setLivePlacementSubscriptionId('');
-  }, [livePlacementSubscriptionId, selectedSubscriptionIds, subscriptionOptions]);
+  }, [isLiteDeployment, livePlacementSubscriptionId, selectedSubscriptionIds, subscriptionOptions]);
 
   useEffect(() => {
     const familyOptions = Array.isArray(livePlacementFamilyOptions) ? livePlacementFamilyOptions : [];
@@ -3952,6 +4151,74 @@ function App() {
       setLivePlacementFamily('');
     }
   }, [filters.family, livePlacementFamily, livePlacementFamilyOptions]);
+
+  useEffect(() => {
+    if (!authResolved || !canUseReportApis || !isLiteDeployment || (activeView !== 'capacity-grid' && activeView !== 'region-matrix')) {
+      return;
+    }
+
+    let cancelled = false;
+    setLiteReportSnapshot((current) => ({ ...current, loading: true }));
+    fetchJson('/api/capacity/report-snapshot')
+      .then((payload) => {
+        if (!cancelled) {
+          setLiteReportSnapshot({ snapshot: payload.snapshot || null, loading: false, refreshing: false, status: { tone: payload.snapshot ? 'success' : 'info', message: payload.snapshot ? 'Loaded the latest capacity report snapshot.' : 'No capacity report snapshot has been captured yet.' } });
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setLiteReportSnapshot((current) => ({ ...current, loading: false, status: { tone: 'error', message: error.message || 'Failed to load the capacity report snapshot.' } }));
+        }
+      });
+
+    return () => { cancelled = true; };
+  }, [activeView, authResolved, canUseReportApis, isLiteDeployment]);
+
+  useEffect(() => {
+    if (!isLiteDeployment || activeView !== 'admin' || !auth?.canAccessAdmin) return;
+    let cancelled = false;
+    setLiteScope((current) => ({ ...current, loading: true }));
+    fetchJson('/api/capacity/report-scope').then((payload) => {
+      if (!cancelled) setLiteScope((current) => ({ ...current, subscriptionIds: normalizeStringList(payload.scope?.subscriptionIds).join(','), managementGroupNames: normalizeStringList(payload.scope?.managementGroupNames).join(','), loading: false, status: { tone: 'info', message: `Scope loaded from ${payload.scope?.source || 'worker configuration'}.` } }));
+    }).catch((error) => {
+      if (!cancelled) setLiteScope((current) => ({ ...current, loading: false, status: { tone: 'error', message: error.message || 'Failed to load Lite report scope.' } }));
+    });
+    return () => { cancelled = true; };
+  }, [activeView, auth?.canAccessAdmin, isLiteDeployment]);
+
+  useEffect(() => {
+    if (!isLiteDeployment || litePlacementSubscriptionOptions.length === 0) {
+      return;
+    }
+    if (litePlacementSubscriptionOptions.some((option) => option.subscriptionId === livePlacementSubscriptionId)) {
+      return;
+    }
+    setLivePlacementSubscriptionId(litePlacementSubscriptionOptions[0].subscriptionId);
+  }, [isLiteDeployment, litePlacementSubscriptionOptions, livePlacementSubscriptionId]);
+
+  useEffect(() => {
+    if (!isLiteDeployment) {
+      return;
+    }
+
+    const snapshotSubscriptionIds = litePlacementSubscriptionOptions.map((option) => option.subscriptionId).filter(Boolean);
+    if (snapshotSubscriptionIds.length === 0) {
+      return;
+    }
+
+    setSubscriptionOptions((current) => {
+      const currentIds = current.map((option) => option.subscriptionId).filter(Boolean);
+      if (currentIds.length === snapshotSubscriptionIds.length && currentIds.every((subscriptionId, index) => subscriptionId === snapshotSubscriptionIds[index])) {
+        return current;
+      }
+      return litePlacementSubscriptionOptions;
+    });
+    setSelectedSubscriptionIds((current) => (
+      current.length === snapshotSubscriptionIds.length && current.every((subscriptionId, index) => subscriptionId === snapshotSubscriptionIds[index])
+        ? current
+        : snapshotSubscriptionIds
+    ));
+  }, [isLiteDeployment, litePlacementSubscriptionOptions]);
 
   useEffect(() => {
     if (activeReportExportOptions.length === 0) {
@@ -4044,11 +4311,22 @@ function App() {
   }, [deploymentEnvironment]);
 
   useEffect(() => {
+    if (!appMetaResolved) {
+      return;
+    }
+
     async function initialize() {
       try {
         const authPayload = await fetchJson('/api/auth/me');
         const authContext = authPayload.auth;
         setAuth(authContext);
+
+        if (isLiteDeployment) {
+          setAppStatus({ tone: 'info', message: '' });
+          setReportScopeResolved(true);
+          setAuthResolved(true);
+          return;
+        }
 
         if (!authContext?.isAuthenticated || !authContext.canAccessReports) {
           setAppStatus({ tone: 'info', message: '' });
@@ -4076,7 +4354,7 @@ function App() {
       }
     }
     initialize();
-  }, []);
+  }, [appMetaResolved, isLiteDeployment]);
 
   useEffect(() => {
     if (!authResolved || !canUseReportApis || activeView !== 'paas-availability') {
@@ -4226,7 +4504,7 @@ function App() {
   }
 
   useEffect(() => {
-    if (!authResolved || !canUseReportApis || activeView !== 'capacity-grid') {
+    if (!authResolved || !canUseReportApis || isLiteDeployment || activeView !== 'capacity-grid') {
       return;
     }
 
@@ -4266,7 +4544,7 @@ function App() {
       }
     }
     loadCapacityGrid();
-  }, [activeView, authResolved, canUseReportApis, queryFilters, capacityData.pagination.pageNumber, capacityData.pagination.pageSize]);
+  }, [activeView, authResolved, canUseReportApis, isLiteDeployment, queryFilters, capacityData.pagination.pageNumber, capacityData.pagination.pageSize]);
 
   useEffect(() => {
     // Server paging must restart at page 1 when the sidebar query scope changes,
@@ -4308,7 +4586,7 @@ function App() {
 
     async function loadAnalytics() {
       const needsCapacityAnalytics = activeView === 'region-health'
-        || activeView === 'region-matrix'
+        || (!isLiteDeployment && activeView === 'region-matrix')
         || activeView === 'sku-chart';
       const needsFamilySummary = activeView === 'family-summary';
       const needsTrendRows = activeView === 'trend';
@@ -4379,12 +4657,12 @@ function App() {
       }
     }
     loadAnalytics();
-  }, [activeView, authResolved, canUseReportApis, queryFilters, trendGranularity]);
+  }, [activeView, authResolved, canUseReportApis, isLiteDeployment, queryFilters, trendGranularity]);
 
   useEffect(() => {
     const requestId = capacityScoreRequestRef.current + 1;
     capacityScoreRequestRef.current = requestId;
-    if (!authResolved || !canUseReportApis || activeView !== 'capacity-score') {
+    if (!authResolved || !canUseReportApis || isLiteDeployment || activeView !== 'capacity-score') {
       setCapacityScores((current) => ({ ...current, busy: false }));
       return;
     }
@@ -4439,7 +4717,7 @@ function App() {
     }
 
     loadCapacityScores();
-  }, [activeView, authResolved, canUseReportApis, queryFilters, capacityScores.desiredCount, capacityScores.pagination.pageNumber, capacityScores.pagination.pageSize]);
+  }, [activeView, authResolved, canUseReportApis, isLiteDeployment, queryFilters, capacityScores.desiredCount, capacityScores.pagination.pageNumber, capacityScores.pagination.pageSize]);
 
   useEffect(() => {
     const needsQuotaScope = activeView === 'quota-workbench' || activeView === 'shareable-quota-report';
@@ -4759,6 +5037,17 @@ function App() {
     }
   }
 
+  async function refreshLiteReportSnapshot() {
+    setLiteReportSnapshot((current) => ({ ...current, refreshing: true, status: { tone: 'info', message: 'Refreshing the capacity report snapshot from Azure...' } }));
+    try {
+      const payload = await fetchJson('/api/capacity/report-snapshot', { method: 'POST' });
+      const snapshot = payload.snapshot || null;
+      setLiteReportSnapshot({ snapshot, loading: false, refreshing: false, status: { tone: 'success', message: `Capacity report snapshot refreshed${snapshot?.snapshotCapturedAtUtc ? ` at ${formatTimestamp(snapshot.snapshotCapturedAtUtc)}` : ''}.` } });
+    } catch (error) {
+      setLiteReportSnapshot((current) => ({ ...current, refreshing: false, status: { tone: 'error', message: error.message || 'Failed to refresh the capacity report snapshot.' } }));
+    }
+  }
+
   async function refreshPaaSAvailability() {
     const requestService = paasState.filters.service || 'All';
     const requestRegion = filters.region && filters.region !== 'all' ? filters.region : null;
@@ -4859,12 +5148,14 @@ function App() {
     }
 
     const desiredCount = normalizeDesiredPlacementCount(capacityScores.desiredCount);
+    const selectedFamily = isLiteDeployment ? selectedLitePlacementFamily : livePlacementFamily;
+    const selectedSku = isLiteDeployment ? normalizeSkuName(livePlacementSku) : '';
     const filtersPayload = {
       ...queryFilters,
       subscriptionIds: livePlacementSubscriptionId,
-      family: livePlacementFamily,
+      family: selectedFamily,
       desiredCount,
-      extraSkus: getFamilyExtraSkus(livePlacementFamily)
+      extraSkus: isLiteDeployment ? [selectedSku] : getFamilyExtraSkus(livePlacementFamily)
     };
 
     setCapacityScores((current) => ({
@@ -5265,6 +5556,31 @@ function App() {
 
   const viewContent = (() => {
     if (activeView === 'capacity-grid') {
+      if (isLiteDeployment) {
+        if (filteredLiteReportRows.length === 0) {
+          return <section className="rx-panel rx-panel--compact"><div className="rx-panel__header"><div><h2>Capacity Grid</h2><p>Capacity Grid is populated from the latest captured Azure report snapshot.</p></div></div><Banner tone={liteReportSnapshot.status.tone} message={liteReportSnapshot.loading ? 'Loading the capacity report snapshot...' : liteReportSnapshot.status.message} /><div className="rx-inline-actions"><span className="rx-selected-count">No report snapshot is available yet.</span>{auth?.canAccessAdmin ? <button className="rx-button" type="button" disabled={liteReportSnapshot.refreshing} onClick={refreshLiteReportSnapshot}>{liteReportSnapshot.refreshing ? 'Refreshing...' : 'Refresh Report Data'}</button> : null}</div></section>;
+        }
+        return (
+          <DataTable
+            key="capacity-grid-lite"
+            title="Capacity Grid"
+            subtitle={`Captured Azure capacity report${liteReportSnapshot.snapshot?.snapshotCapturedAtUtc ? ` at ${formatTimestamp(liteReportSnapshot.snapshot.snapshotCapturedAtUtc)}` : ''}.`}
+            columns={[
+              { key: 'subscriptionName', label: 'Subscription' },
+              { key: 'region', label: 'Region' },
+              { key: 'sku', label: 'SKU', render: (row) => normalizeSkuName(row.sku) || 'n/a' },
+              { key: 'family', label: 'Family', render: (row) => formatFamilyLabel(row.family) || 'n/a' },
+              { key: 'availability', label: 'Capacity', render: (row) => <StatusPill value={row.availability || 'UNKNOWN'} /> },
+              { key: 'quotaCurrent', label: 'Current', render: (row) => formatNullableNumber(row.quotaCurrent) },
+              { key: 'quotaLimit', label: 'Limit', render: (row) => formatNullableNumber(row.quotaLimit) },
+              { key: 'quotaAvailable', label: 'Available', render: (row) => formatNullableNumber(row.quotaAvailable) },
+              { key: 'zonesOK', label: 'Zones', render: (row) => row.zonesOK || 'n/a' }
+            ]}
+            rows={filteredLiteReportRows}
+            emptyMessage="No rows match the current filters in the capacity report snapshot."
+          />
+        );
+      }
       return <div className="rx-view-stack"><DataTable key="capacity-grid" title="Capacity Grid" subtitle="Server-paged capacity observations using the shared API contract." columns={[{ key: 'subscriptionName', label: 'Subscription', headerClassName: 'rx-capacity-grid__subscription', cellClassName: 'rx-capacity-grid__subscription' }, { key: 'region', label: 'Region' }, { key: 'sku', label: 'SKU', render: (row) => normalizeSkuName(row.sku) || 'n/a' }, { key: 'family', label: 'Family', render: (row) => formatFamilyLabel(row.family) || 'n/a' }, ...(filters.resourceType === 'AI' ? [{ key: 'provider', label: 'AI Provider', render: (row) => getAIQuotaProviderDisplay(row), sortValue: (row) => getAIQuotaProviderLabel(row) }] : []), { key: 'availability', label: 'Availability', render: (row) => <StatusPill value={row.availability} /> }, { key: 'quotaCurrent', label: 'Current', render: (row) => formatNumber(row.quotaCurrent) }, { key: 'quotaLimit', label: 'Limit', render: (row) => formatNumber(row.quotaLimit) }, { key: 'available', label: 'Available', render: (row) => formatNumber(Number(row.quotaLimit || 0) - Number(row.quotaCurrent || 0)) }]} rows={capacityData.rows} emptyMessage="No capacity rows returned for the current filters." /><ServerPagination pagination={capacityData.pagination} onPageChange={(pageNumber) => setCapacityData((current) => ({ ...current, pagination: { ...current.pagination, pageNumber: Math.max(1, pageNumber) } }))} onPageSizeChange={(pageSize) => setCapacityData((current) => ({ ...current, pagination: { ...current.pagination, pageNumber: 1, pageSize: Math.max(1, pageSize) } }))} /></div>;
     }
     if (activeView === 'region-health') {
@@ -5324,6 +5640,13 @@ function App() {
       return <AIModelAvailabilityView rows={aiModelRows} status={aiModelState.status} loading={aiModelState.loading} filters={aiModelFilters} />;
     }
     if (activeView === 'capacity-score') {
+      if (isLiteDeployment) {
+        if (liteCapacityScoreRows.length === 0) {
+          return <section className="rx-panel rx-panel--compact"><div className="rx-panel__header"><div><h2>Regional SKU Capacity Spot Score</h2><p>This Lite report is populated from the latest worker-generated Azure capacity snapshot.</p></div></div><Banner tone={liteReportSnapshot.status.tone} message={liteReportSnapshot.loading ? 'Loading the capacity report snapshot...' : liteReportSnapshot.status.message} /></section>;
+        }
+        const liveRows = capacityScores.rows.length > 0 ? capacityScores.rows : liteCapacityScoreRows;
+        return <div className="rx-view-stack"><section className="rx-panel rx-panel--compact"><div className="rx-panel__header"><div><h2>Regional SKU Capacity Spot Score</h2><p>Choose a VM SKU and desired VM count to request a live Azure Spot Placement Score. Snapshot availability remains visible alongside the live result.</p></div></div><div className="rx-field-grid rx-field-grid--filters"><label className="rx-field"><span>Desired Placement Count</span><input className="rx-input" type="number" min="1" max="1000" value={capacityScores.desiredCount} onChange={(event) => setCapacityScores((current) => ({ ...current, desiredCount: String(normalizeDesiredPlacementCount(event.target.value)) }))} /></label><label className="rx-field rx-field--wide"><span>Live Placement Subscription</span><select value={livePlacementSubscriptionId} onChange={(event) => setLivePlacementSubscriptionId(event.target.value)}><option value="">Select subscription</option>{litePlacementSubscriptionOptions.map((option) => <option key={option.subscriptionId} value={option.subscriptionId}>{option.subscriptionName} ({option.subscriptionId})</option>)}</select></label><label className="rx-field rx-field--wide"><span>Live Placement SKU</span><select value={livePlacementSku} onChange={(event) => setLivePlacementSku(normalizeSkuName(event.target.value))}><option value="">Select SKU</option>{scopedSkuOptions.map((sku) => <option key={sku} value={sku}>{sku}</option>)}</select></label></div><div className="rx-inline-actions"><span className="rx-selected-count">{livePlacementScopeMessage}</span><button className="rx-button" type="button" disabled={capacityScores.busy || !canRefreshLivePlacement} onClick={refreshLivePlacement}>{capacityScores.busy ? 'Refreshing...' : 'Refresh Live Placement'}</button></div><Banner tone={capacityScores.status.tone} message={capacityScores.status.message} detail={capacityScores.status.detail} /></section><section className="rx-panel rx-panel--compact rx-panel--muted"><div className="rx-panel__header"><div><h2>Capacity Spot Score Key</h2><p>Regional Availability comes from the worker snapshot; Azure Placement is evaluated live for the selected VM size and requested count.</p></div></div><div className="rx-capacity-score-key"><h3>Azure Placement</h3><table className="rx-capacity-score-key__table" aria-label="Azure placement score key"><tbody>{livePlacementLegendItems().map((item) => <tr key={item.value}><th scope="row"><StatusPill value={item.value} /></th><td>{item.description}</td></tr>)}<tr><th scope="row">Snapshot</th><td>Regional availability and quota data captured by the scheduled worker scan.</td></tr></tbody></table><p className="rx-capacity-score-key__note">A live placement score is a planning signal, not a capacity reservation or deployment guarantee.</p></div></section><DataTable title="Capacity Spot Score" subtitle="Latest snapshot signals with live Azure placement results for the selected SKU." tableClassName="rx-table--dense rx-capacity-score-table" sectionClassName="rx-panel--compact" columns={[{ key: 'region', label: 'Region' }, { key: 'sku', label: 'SKU', render: (row) => normalizeSkuName(row.sku) || 'Snapshot aggregate' }, { key: 'family', label: 'Family', render: (row) => formatFamilyLabel(row.family) || row.family }, { key: 'livePlacementScore', label: 'Azure Placement', render: (row) => <StatusPill value={normalizeLivePlacementStatus(row)} label={getLivePlacementLabel(row)} /> }, { key: 'score', label: 'Regional Availability', render: (row) => <StatusPill value={normalizeCapacityScoreStatus(row)} label={getRegionalAvailabilityLabel(row)} /> }, { key: 'totalQuotaAvailable', label: 'Quota vCPU', render: (row) => formatNumber(row.totalQuotaAvailable) }, { key: 'reason', label: 'Source / Reason' }]} rows={liveRows} emptyMessage="No score rows are available in the current capacity report snapshot." /></div>;
+      }
       return (
         <div className="rx-view-stack">
           <section className="rx-panel rx-panel--compact">
@@ -5414,6 +5737,12 @@ function App() {
     if (activeView === 'family-summary') {
       return <DataTable key="family-summary" title="Family Summary" subtitle="Compute-family rollup optimized for quota planning conversations." columns={[{ key: 'family', label: 'Family' }, { key: 'skus', label: 'SKUs', render: (row) => formatNumber(row.skus) }, { key: 'ok', label: 'OK SKUs', render: (row) => formatNumber(row.ok) }, { key: 'largest', label: 'Largest' }, { key: 'zones', label: 'Zones' }, { key: 'status', label: 'Status', render: (row) => <StatusPill value={row.status} /> }, { key: 'quota', label: 'Quota', render: (row) => formatNumber(row.quota) }]} rows={familySummaryRows} emptyMessage="No family summary rows available." />;
     }
+    if (activeView === 'region-matrix' && isLiteDeployment) {
+      if (liteReportRows.length === 0) {
+        return <section className="rx-panel rx-panel--compact"><div className="rx-panel__header"><div><h2>Report Matrix</h2><p>Report Matrix is populated from the latest captured Azure report snapshot.</p></div></div><Banner tone={liteReportSnapshot.status.tone} message={liteReportSnapshot.loading ? 'Loading the capacity report snapshot...' : liteReportSnapshot.status.message} /><div className="rx-inline-actions"><span className="rx-selected-count">No report snapshot is available yet.</span>{auth?.canAccessAdmin ? <button className="rx-button" type="button" disabled={liteReportSnapshot.refreshing} onClick={refreshLiteReportSnapshot}>{liteReportSnapshot.refreshing ? 'Refreshing...' : 'Refresh Report Data'}</button> : null}</div></section>;
+      }
+      return <div className="rx-view-stack"><Banner tone={liteReportSnapshot.status.tone} message={liteReportSnapshot.status.message} detail={liteReportSnapshot.snapshot?.snapshotCapturedAtUtc ? `Captured ${formatTimestamp(liteReportSnapshot.snapshot.snapshotCapturedAtUtc)} from Azure.` : null} /><section className="rx-panel rx-panel--compact rx-panel--muted"><div className="rx-panel__header"><div><h2>Region Matrix</h2><p>Family-by-region ARM and quota eligibility from the latest worker snapshot. Use Azure Placement for a live confidence check on a selected VM size.</p></div></div><div className="rx-matrix-key"><div className="rx-matrix-key__group"><h3>Row Color</h3><div className="rx-matrix-key__item"><span className="rx-row-swatch rx-row-swatch--ok"></span><div><strong>Green</strong><p>At least one SKU in this family has no saved blocker.</p></div></div><div className="rx-matrix-key__item"><span className="rx-row-swatch rx-row-swatch--caution"></span><div><strong>Yellow</strong><p>Some SKUs are unblocked while others show quota or ARM restriction signals.</p></div></div><div className="rx-matrix-key__item"><span className="rx-row-swatch rx-row-swatch--blocked"></span><div><strong>Gray</strong><p>No unblocked saved SKU signal in the scanned regions.</p></div></div></div><div className="rx-matrix-key__group"><h3>Cell Status</h3>{['OK', 'CONSTRAINED', 'LIMITED', 'PARTIAL', 'BLOCKED'].map((status) => { const meta = matrixStatusMeta(status); return <div key={status} className="rx-matrix-key__item"><StatusPill value={status} /><div><strong>{meta.short}</strong><p>{meta.description}</p></div></div>; })}</div></div></section><div className="rx-inline-actions">{auth?.canAccessAdmin ? <button className="rx-button" type="button" disabled={liteReportSnapshot.refreshing} onClick={refreshLiteReportSnapshot}>{liteReportSnapshot.refreshing ? 'Refreshing...' : 'Refresh Report Data'}</button> : null}</div><SortableMatrixTable title="Region Matrix Report" subtitle="Rows are highlighted by saved ARM/quota eligibility across the selected region scope." tableClassName="rx-matrix-table" primaryColumn={{ key: 'family', label: 'Family' }} statusColumn={{ key: 'rowStatus', label: 'Key', render: (row) => <StatusPill value={row.rowStatus === 'CAUTION' ? 'PARTIAL' : row.rowStatus} />, sortValue: (row) => getStatusSortValue(row.rowStatus) }} readyColumn={{ key: 'readyRegionCount', label: 'Unblocked', render: (row) => formatNumber(row.readyRegionCount) }} dynamicColumns={matrix.regions.map((region) => ({ key: region, label: region }))} rows={matrix.rows} emptyMessage="No rows are available in the current capacity report snapshot." getRowClassName={(row) => row.rowStatus === 'OK' ? 'rx-matrix-row--ok' : (row.rowStatus === 'CAUTION' ? 'rx-matrix-row--caution' : 'rx-matrix-row--blocked')} getDynamicSortValue={(row, region) => { const cell = row.regionMap[region]; return getStatusSortValue(matrix.resolveCellStatus(cell), Number(cell?.okCount || 0)); }} renderDynamicCell={(row, region) => { const cell = row.regionMap[region]; const status = matrix.resolveCellStatus(cell); return <><StatusPill value={status} /><small>{formatMatrixCellZones(cell)}</small></>; }} /></div>;
+    }
     if (activeView === 'region-matrix') {
       return <div className="rx-view-stack"><section className="rx-panel rx-panel--compact rx-panel--muted"><div className="rx-panel__header"><div><h2>Region Matrix</h2><p>Family-by-region ARM/quota eligibility with row rollups. Use Azure Placement for live capacity confidence.</p></div></div><div className="rx-matrix-key"><div className="rx-matrix-key__group"><h3>Row Color</h3><div className="rx-matrix-key__item"><span className="rx-row-swatch rx-row-swatch--ok"></span><div><strong>Green</strong><p>At least one SKU in this family has no saved blocker.</p></div></div><div className="rx-matrix-key__item"><span className="rx-row-swatch rx-row-swatch--caution"></span><div><strong>Yellow</strong><p>Some SKUs are unblocked while others show quota or ARM restriction signals.</p></div></div><div className="rx-matrix-key__item"><span className="rx-row-swatch rx-row-swatch--blocked"></span><div><strong>Gray</strong><p>No unblocked saved SKU signal in the scanned regions.</p></div></div></div><div className="rx-matrix-key__group"><h3>Cell Status</h3>{['OK', 'CONSTRAINED', 'LIMITED', 'PARTIAL', 'BLOCKED'].map((status) => { const meta = matrixStatusMeta(status); return <div key={status} className="rx-matrix-key__item"><StatusPill value={status} /><div><strong>{meta.short}</strong><p>{meta.description}</p></div></div>; })}</div></div></section><SortableMatrixTable title="Region Matrix Report" subtitle="Rows are highlighted by saved ARM/quota eligibility across the selected region scope." tableClassName="rx-matrix-table" primaryColumn={{ key: 'family', label: 'Family' }} statusColumn={{ key: 'rowStatus', label: 'Key', render: (row) => <StatusPill value={row.rowStatus === 'CAUTION' ? 'PARTIAL' : row.rowStatus} />, sortValue: (row) => getStatusSortValue(row.rowStatus) }} readyColumn={{ key: 'readyRegionCount', label: 'Unblocked', render: (row) => formatNumber(row.readyRegionCount) }} dynamicColumns={matrix.regions.map((region) => ({ key: region, label: region }))} rows={matrix.rows} emptyMessage="No matrix rows available." rowKey={(row) => row.family} getRowClassName={(row) => `rx-matrix-row rx-matrix-row--${String(row.rowStatus || 'blocked').toLowerCase()}`} getDynamicSortValue={(row, region) => getStatusSortValue(matrix.resolveCellStatus(row.regionMap[region]))} renderDynamicCell={(row, region) => { const cell = row.regionMap[region]; const status = matrix.resolveCellStatus(cell); const meta = matrixStatusMeta(status); const zones = formatMatrixCellZones(cell); const zoneDisplay = zones === 'No zone data' ? 'Zones n/a' : zones; return <div className="rx-matrix-cell rx-matrix-cell--stacked" title={`${meta.description} ${zones}.`}><StatusPill value={status} /><span className="rx-matrix-cell__zones">{zoneDisplay}</span></div>; }} /></div>;
     }
@@ -5429,6 +5758,39 @@ function App() {
     if (activeView === 'shareable-quota-report') {
       return <ShareableQuotaReportView managementGroups={quotaState.managementGroups} selectedManagementGroup={quotaState.selectedManagementGroup} onManagementGroupChange={(value) => setQuotaState({ ...quotaState, selectedManagementGroup: value, selectedQuotaGroup: 'all', shareableReport: { rows: [], summary: { rowCount: 0, subscriptionCount: 0, regionCount: 0, skuCount: 0, totalShareableQuota: 0 }, generatedAtUtc: null }, selectedAnalysisRunId: '', selectedDonorSubscriptionId: '', selectedMoveCandidate: null, requestedTransferAmount: 0, planRows: [], impactRows: [], applyResults: [], planSummary: {} })} quotaGroups={quotaState.quotaGroups} selectedQuotaGroup={quotaState.selectedQuotaGroup} onQuotaGroupChange={(value) => setQuotaState({ ...quotaState, selectedQuotaGroup: value, shareableReport: { rows: [], summary: { rowCount: 0, subscriptionCount: 0, regionCount: 0, skuCount: 0, totalShareableQuota: 0 }, generatedAtUtc: null }, selectedAnalysisRunId: '', selectedDonorSubscriptionId: '', selectedMoveCandidate: null, requestedTransferAmount: 0, planRows: [], impactRows: [], applyResults: [], planSummary: {} })} shareableReport={quotaState.shareableReport} actions={quotaActions} busy={quotaState.busy} status={quotaState.status} />;
     }
+    if (activeView === 'admin' && isLiteDeployment) {
+      return (
+        <div className="rx-view-stack">
+          <Banner
+            tone="info"
+            message="Lite administration is enabled for your CapacityAdmin role."
+            detail="Lite stores the latest worker-generated Azure report snapshot outside SQL. Use Refresh Report Data to update Capacity Grid and Report Matrix; Capacity Recommender remains a separate on-demand workflow."
+          />
+          <section className="rx-panel rx-panel--compact">
+            <div className="rx-panel__header">
+              <div>
+                <h2>Lite Data Operations</h2>
+                <p>Capacity Grid and Report Matrix use the latest worker-generated Azure report snapshot.</p>
+              </div>
+            </div>
+            <div className="rx-summary-grid rx-summary-grid--status">
+              <article className="rx-metric-card"><span>Deployment Profile</span><strong>Lite</strong></article>
+              <article className="rx-metric-card"><span>Data Source</span><strong>Worker Snapshot</strong></article>
+              <article className="rx-metric-card"><span>Snapshot Ingestion</span><strong>Enabled</strong></article>
+            </div>
+          </section>
+          <section className="rx-panel">
+            <div className="rx-panel__header"><div><h2>Lite Azure Scope</h2><p>Choose the subscriptions or management groups that the next report refresh should scan. The worker identity must already have Reader and Compute Recommendations Role at every declared scope.</p></div></div>
+            <div className="rx-field-grid rx-field-grid--filters">
+              <label className="rx-field rx-field--wide"><span>Subscription IDs</span><textarea className="rx-input" rows="3" value={liteScope.subscriptionIds} placeholder="Comma-separated subscription IDs" onChange={(event) => setLiteScope((current) => ({ ...current, subscriptionIds: event.target.value }))} /></label>
+              <label className="rx-field rx-field--wide"><span>Management Groups</span><textarea className="rx-input" rows="3" value={liteScope.managementGroupNames} placeholder="Comma-separated management group names" onChange={(event) => setLiteScope((current) => ({ ...current, managementGroupNames: event.target.value }))} /></label>
+            </div>
+            <div className="rx-inline-actions"><button className="rx-button" type="button" disabled={liteScope.saving} onClick={async () => { const subscriptionIds = normalizeStringList(liteScope.subscriptionIds); const managementGroupNames = normalizeStringList(liteScope.managementGroupNames); if (subscriptionIds.length === 0 && managementGroupNames.length === 0) { setLiteScope((current) => ({ ...current, status: { tone: 'error', message: 'Enter at least one subscription ID or management group name.' } })); return; } setLiteScope((current) => ({ ...current, saving: true, status: { tone: 'info', message: 'Saving Lite Azure scope...' } })); try { const payload = await fetchJson('/api/capacity/report-scope', { method: 'PUT', body: JSON.stringify({ subscriptionIds, managementGroupNames }) }); setLiteScope((current) => ({ ...current, saving: false, subscriptionIds: normalizeStringList(payload.scope?.subscriptionIds).join(','), managementGroupNames: normalizeStringList(payload.scope?.managementGroupNames).join(','), status: { tone: 'success', message: 'Lite Azure scope saved. Refresh Report Data to capture the updated subscriptions.' } })); } catch (error) { setLiteScope((current) => ({ ...current, saving: false, status: { tone: 'error', message: error.message || 'Failed to save Lite Azure scope.' } })); } }}>{liteScope.saving ? 'Saving...' : 'Save Azure Scope'}</button><button className="rx-button rx-button--secondary" type="button" disabled={liteReportSnapshot.refreshing} onClick={refreshLiteReportSnapshot}>{liteReportSnapshot.refreshing ? 'Refreshing...' : 'Refresh Report Data'}</button></div>
+            <Banner tone={liteScope.status.tone} message={liteScope.status.message} />
+          </section>
+        </div>
+      );
+    }
     if (activeView === 'admin') {
       return <AdminIngestionView job={adminState.job} status={adminState.status} schedule={adminState.schedule} runtime={adminState.runtime} persistence={adminState.persistence} scope={adminState.scope} smokeTest={adminState.smokeTest} actions={adminActions} onScheduleChange={(scope, field, value) => setAdminState((current) => ({ ...current, schedule: { ...current.schedule, [scope]: { ...current.schedule[scope], [field]: value } } }))} busy={adminState.busy} viewStatus={adminState.statusMessage} />;
     }
@@ -5441,7 +5803,7 @@ function App() {
         <div className="rx-sidebar__header">
           <div>
             <div className="rx-kicker">React V2</div>
-            <h1>Capacity Dashboard</h1>
+            <h1>{appMeta.productName || 'Capacity Dashboard'}</h1>
           </div>
         </div>
         <div className="rx-nav-group">Reporting</div>
@@ -5450,7 +5812,8 @@ function App() {
             <button key={view.key} className={classNames('rx-nav-item', activeView === view.key && 'is-active')} type="button" onClick={() => setActiveView(view.key)}>{view.label}</button>
           ))}
         </nav>
-        <div className="rx-nav-group">Exports</div>
+        {isLiteDeployment && auth?.canAccessAdmin ? <><div className="rx-nav-group">Admin</div><nav className="rx-nav-list">{adminViews.map((view) => <button key={view.key} className={classNames('rx-nav-item', activeView === view.key && 'is-active')} type="button" onClick={() => setActiveView(view.key)}>{view.label}</button>)}</nav></> : null}
+        <><div className="rx-nav-group">Exports</div>
         <div className="rx-export-box">
           <label className="rx-field rx-field--compact">
             <span>Export option</span>
@@ -5463,7 +5826,7 @@ function App() {
             <button className="rx-button rx-button--secondary rx-button--compact" type="button" disabled={Boolean(exportBusyFormat) || activeReportExportOptions.length === 0} onClick={runSelectedExport}>{exportBusyFormat ? 'Running...' : 'Run'}</button>
           </div>
         </div>
-        {auth && auth.canAccessAdmin ? <><div className="rx-nav-group">Admin</div><nav className="rx-nav-list">{adminViews.map((view) => <button key={view.key} className={classNames('rx-nav-item', activeView === view.key && 'is-active')} type="button" onClick={() => setActiveView(view.key)}>{view.label}</button>)}</nav></> : null}
+        {!isLiteDeployment && auth && auth.canAccessAdmin ? <><div className="rx-nav-group">Admin</div><nav className="rx-nav-list">{adminViews.map((view) => <button key={view.key} className={classNames('rx-nav-item', activeView === view.key && 'is-active')} type="button" onClick={() => setActiveView(view.key)}>{view.label}</button>)}</nav></> : null}</>
       </aside>
 
       <main className="rx-main">

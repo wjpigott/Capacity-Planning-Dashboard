@@ -24,6 +24,52 @@ Release history is tracked in `docs/RELEASE-NOTES.md`. Git tags should use the s
 
 ## What's new for deployments
 
+### Lite deployment profile
+
+Set `CAPACITY_DEPLOYMENT_PROFILE=lite` for the database-free **Capacity Dashboard Lite** edition. Lite exposes the live **Capacity Recommender** and **Capacity Spot Score** workflows, plus the Capacity Grid and Region/Report Matrix backed by a worker-generated JSON snapshot. It does not run SQL schema initialization, SQL-backed session persistence, ingestion, quota planning, history, or write operations.
+
+The dedicated Function App captures the report scan on a six-hour timer and stores the latest report at `capacity-report-snapshots/latest.json` in its storage account. The dashboard reads that snapshot through its authenticated API; report pages do not depend on a user running the Capacity Recommender first. Administrators can request an on-demand refresh from the report experience.
+
+Lite is intended for a separate App Service and must not replace an existing full dashboard deployment. It requires the same Entra and Azure RBAC prerequisites needed for the live tools, but does not require Azure SQL or database bootstrap. Configure App Service Easy Auth or run a single instance when using application-managed authentication, because Lite intentionally does not use the production SQL session store.
+
+Create and deploy a separate Lite site with:
+
+```powershell
+./scripts/deploy-lite-web-app.ps1 `
+	-ResourceGroupName "rg-capdash-lite-dev" `
+	-AppName "app-capdash-lite-dev-<unique-suffix>" `
+	-ManagementGroupNames "<customer-management-group-name>" `
+	-AuthEnabled $true `
+	-EntraTenantId "<tenant-id>" `
+	-EntraClientId "<app-client-id>" `
+	-EntraClientSecret "<app-client-secret>" `
+	-ReportViewerGroupIds "<capacity-report-viewers-group-object-id>"
+```
+
+The guided installer also supports the same SQL-free route from the shared package:
+
+```powershell
+./scripts/Start-CapacityDeployment.ps1 -DeploymentProfile Lite
+```
+
+Choose **Lite** to provision only the web app, Function worker, worker storage, required network resources, Entra configuration, and Azure RBAC. It sets `CAPACITY_DEPLOYMENT_PROFILE=lite` so the shared React bundle presents the snapshot-based Lite UI. It does not provision Azure SQL, Key Vault, SQL session storage, database schema/bootstrap, or SQL-backed scheduler and quota workflows. Choose **Full** (the default) for the existing Bicep or Terraform SQL-backed deployment path.
+
+The script creates separate web and Function App Service plans, an identity-based worker storage account, a dedicated VNet, and private endpoints plus private DNS zones for the storage Blob, Queue, Table, and File services. It then integrates the Function App with the VNet, assigns managed identities, sets `CAPACITY_DEPLOYMENT_PROFILE=lite`, and uses the normal package deployment gate. It never creates, configures, or initializes Azure SQL. The default VNet ranges are configurable through the `VirtualNetwork*` and subnet parameters when they overlap an existing network. Use `-SubscriptionId` for a known subscription list, or `-ManagementGroupNames` for a comma-separated parent scope. The script assigns the worker `Reader` and `Compute Recommendations Role` at each supplied subscription and management group; the deployment operator must be allowed to create those role assignments. Management-group scope is an operator/deployment setting, not a report-viewer control. The worker resolves descendant subscriptions into each snapshot, so they appear in the Lite filter and live-placement selector.
+
+For an existing Lite deployment, Capacity Admins can update the snapshot scope after deployment in **Admin -> Data Ingestion**. Enter one or more comma-separated subscription IDs and/or management-group names, select **Save Azure Scope**, then select **Refresh Report Data**. The saved scope is stored at `capacity-report-snapshots/scope.json`; the next snapshot populates the report and sidebar subscription filter from its captured subscriptions.
+
+Saving scope changes does not grant Azure permissions. Before scanning a newly selected subscription or management group, a platform operator must grant the worker managed identity `Reader` and `Compute Recommendations Role` at that scope. Use the bootstrap script when those app settings and role assignments need to be configured together:
+
+```powershell
+./scripts/Set-LiteCapacityScope.ps1 `
+	-ResourceGroupName "capacity-lite-dev" `
+	-FunctionAppName "func-capdash-lite-dev-cap001" `
+	-ManagementGroupNames "<customer-management-group-name>" `
+	-AzureSubscriptionId "<hosting-subscription-id>"
+```
+
+This is an operator-only action. It updates the Function App fallback scope settings and assigns its managed identity `Reader` and `Compute Recommendations Role` at the declared scope. Then use **Refresh Report Data** from Capacity Grid or Region Matrix to create the first snapshot; the subscription filter is populated from that captured report.
+
 **Recommended starting point for first-time or customer deployments:** use the guided deployment wizard. It walks the operator through the setup conversation before anything is deployed, including provider, subscription, naming, authentication, Entra group strategy, existing shared services, RBAC scope, package publishing, and database bootstrap.
 
 Run it from PowerShell 7 (`pwsh`) at the repository root:

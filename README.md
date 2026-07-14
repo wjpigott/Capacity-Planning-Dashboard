@@ -98,6 +98,8 @@ This project is licensed under the terms of the [MIT License](LICENSE).
 - Primary editable source (Draw.io): [docs/current-architecture.drawio](docs/current-architecture.drawio)
 - Current-state Mermaid source: [docs/current-architecture.mmd](docs/current-architecture.mmd)
 - Rendered PNG: [docs/current-architecture.png](docs/current-architecture.png)
+- Deployment profile comparison: [docs/deployment-profile-comparison.md](docs/deployment-profile-comparison.md)
+- Editable Lite versus Full comparison: [docs/deployment-profile-comparison.excalidraw](docs/deployment-profile-comparison.excalidraw)
 
 ![Current Capacity Dashboard architecture](docs/current-architecture.png)
 

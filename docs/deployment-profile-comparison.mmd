@@ -1,0 +1,35 @@
+flowchart TB
+    Package[Shared repository and web package\nReact UI + Express API + Function worker]
+    Profile{CAPACITY_DEPLOYMENT_PROFILE}
+    Package --> Profile
+
+    subgraph Lite[Lite: database-free reporting]
+        direction TB
+        LiteWeb[App Service\nLite UI and API]
+        LiteWorker[Function App worker\nReport snapshot + live placement]
+        LiteStorage[Storage account\nlatest.json + scope.json\nFunction host state]
+        Azure[Azure Resource Manager\nCompute and Quota APIs]
+        LiteWeb --> LiteWorker
+        LiteWorker --> LiteStorage
+        LiteWorker --> Azure
+        LiteWeb --> Azure
+        LiteNote[No Azure SQL\nNo Key Vault required\nNo scheduler, history, quota apply]
+    end
+
+    subgraph Full[Full: persistent planning platform]
+        direction TB
+        FullWeb[App Service\nFull UI and API]
+        FullWorker[Function App worker\nIngestion + live tools]
+        Sql[Azure SQL Database\nSessions, snapshots, history,\nscheduler and quota plans]
+        Vault[Key Vault\nCentralized deployment/runtime secrets]
+        AzureFull[Azure Resource Manager\nCompute, Quota, Cost APIs]
+        FullWeb --> FullWorker
+        FullWeb --> Sql
+        FullWorker --> Sql
+        FullWeb --> Vault
+        FullWorker --> AzureFull
+        FullNote[Includes ingestion scheduling, history,\nquota planning/apply, and server XLSX exports]
+    end
+
+    Profile -->|lite| LiteWeb
+    Profile -->|full| FullWeb

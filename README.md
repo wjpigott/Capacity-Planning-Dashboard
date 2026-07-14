@@ -100,8 +100,12 @@ This project is licensed under the terms of the [MIT License](LICENSE).
 - Rendered PNG: [docs/current-architecture.png](docs/current-architecture.png)
 - Deployment profile comparison: [docs/deployment-profile-comparison.md](docs/deployment-profile-comparison.md)
 - Editable Lite versus Full comparison: [docs/deployment-profile-comparison.excalidraw](docs/deployment-profile-comparison.excalidraw)
+- Lite versus Full Mermaid source: [docs/deployment-profile-comparison.mmd](docs/deployment-profile-comparison.mmd)
+- Rendered Lite versus Full PNG: [docs/deployment-profile-comparison.png](docs/deployment-profile-comparison.png)
 
 ![Current Capacity Dashboard architecture](docs/current-architecture.png)
+
+![Lite versus Full Capacity Dashboard architecture](docs/deployment-profile-comparison.png)
 
 The current-state diagram reflects what is deployed now: App Service hosting the static UI + Express API, Azure SQL with Entra-only auth, managed identity database access, Key Vault RBAC integration, Function App worker private ingress through Private Link, and App Insights/Log Analytics.
 

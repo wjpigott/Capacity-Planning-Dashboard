@@ -23,6 +23,7 @@ artifacts/
 *.secret
 secrets.*
 .last-ingest-key.txt
+functions/CapacityWorker/local.settings.json
 
 # Build outputs
 dist/

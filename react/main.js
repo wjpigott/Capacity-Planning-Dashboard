@@ -3278,7 +3278,7 @@ function App() {
   const [filterFacetFamilies, setFilterFacetFamilies] = useState([]);
   const [capacityAnalytics, setCapacityAnalytics] = useState({ regionHealth: [], topSkus: [], matrix: { regions: [], rows: [] }, recommendedTargetSku: '', aiQuotaProviderOptions: [] });
   const [liteReportSnapshot, setLiteReportSnapshot] = useState({ snapshot: null, loading: false, refreshing: false, status: { tone: 'info', message: 'Loading the latest capacity report snapshot...' } });
-  const [liteScope, setLiteScope] = useState({ subscriptionIds: '', managementGroupNames: '', loading: false, saving: false, status: { tone: 'info', message: 'Configure the Azure scope used by Lite report snapshots.' } });
+  const [liteScope, setLiteScope] = useState({ subscriptionIds: '', managementGroupNames: '', captureRegions: '', loading: false, saving: false, status: { tone: 'info', message: 'Configure the Azure scope used by Lite report snapshots.' } });
   const [trendRows, setTrendRows] = useState([]);
   const [trendGranularity, setTrendGranularity] = useState('daily');
   const [familyRows, setFamilyRows] = useState([]);
@@ -3349,7 +3349,7 @@ function App() {
           ...payload.meta
         }));
         if (payload.meta.deploymentProfile === 'lite') {
-          setActiveView((current) => ['capacity-grid', 'region-matrix', 'capacity-score', 'recommender', 'admin'].includes(current) ? current : 'capacity-grid');
+          setActiveView((current) => ['capacity-grid', 'region-matrix', 'capacity-score', 'recommender', 'paas-db-quota', 'admin'].includes(current) ? current : 'capacity-grid');
         }
       })
       .catch(() => {
@@ -3438,7 +3438,7 @@ function App() {
 
   const canUseReportApis = Boolean(auth?.canAccessReports && reportScopeResolved);
   const visibleViews = useMemo(() => REPORT_VIEWS.filter((view) => {
-    if (isLiteDeployment && view.key !== 'recommender' && view.key !== 'capacity-grid' && view.key !== 'region-matrix' && view.key !== 'capacity-score' && view.key !== 'admin') {
+    if (isLiteDeployment && view.key !== 'recommender' && view.key !== 'capacity-grid' && view.key !== 'region-matrix' && view.key !== 'capacity-score' && view.key !== 'paas-db-quota' && view.key !== 'admin') {
       return false;
     }
     return !view.adminOnly || auth?.canAccessAdmin;
@@ -3613,6 +3613,11 @@ function App() {
 
     return [...groupedRows.values()].sort((left, right) => left.region.localeCompare(right.region) || left.family.localeCompare(right.family));
   }, [filteredLiteReportRows]);
+  const liteSnapshotRegions = useMemo(() => (
+    Array.isArray(liteReportSnapshot.snapshot?.snapshotRegions)
+      ? liteReportSnapshot.snapshot.snapshotRegions
+      : []
+  ).map((region) => String(region || '').trim().toLowerCase()).filter(Boolean), [liteReportSnapshot.snapshot]);
   const matrix = useMemo(() => {
     const liteMatrix = filteredLiteReportRows.reduce((source, reportRow) => {
       const family = String(reportRow?.family || 'Uncategorized').trim() || 'Uncategorized';
@@ -3642,7 +3647,7 @@ function App() {
       return source;
     }, { regions: new Set(), rowsByFamily: new Map() });
     const source = isLiteDeployment
-      ? { regions: [...liteMatrix.regions], rows: [...liteMatrix.rowsByFamily.values()] }
+      ? { regions: [...new Set([...liteSnapshotRegions, ...liteMatrix.regions])], rows: [...liteMatrix.rowsByFamily.values()] }
       : (capacityAnalytics.matrix || { regions: [], rows: [] });
     const availableRegions = new Set((Array.isArray(source.regions) ? source.regions : []).map((region) => String(region || '').trim().toLowerCase()).filter(Boolean));
     const resolveCellStatus = (cell) => {
@@ -3685,7 +3690,7 @@ function App() {
       }),
       resolveCellStatus
     };
-  }, [capacityAnalytics.matrix, filters.region, filteredLiteReportRows, isLiteDeployment, scopedRegionOptions]);
+  }, [capacityAnalytics.matrix, filters.region, filteredLiteReportRows, isLiteDeployment, liteSnapshotRegions, scopedRegionOptions]);
   const aiDeploymentTypeOptions = useMemo(() => [...new Set((aiModelState.rows || [])
     .flatMap((row) => String(row.deploymentTypes || '')
       .split(',')
@@ -3788,20 +3793,24 @@ function App() {
   const activeReportExportOptions = useMemo(() => {
     if (activeView === 'capacity-grid') {
       if (isLiteDeployment) {
-        return [{
-          value: 'client:lite-capacity-grid', label: 'CSV Export', type: 'client', filenameBase: 'capacity-grid', rows: filteredLiteReportRows, columns: [
-            { label: 'Subscription', value: (row) => row.subscriptionName },
-            { label: 'Region', value: (row) => row.region },
-            { label: 'SKU', value: (row) => normalizeSkuName(row.sku) || '' },
-            { label: 'Family', value: (row) => formatFamilyLabel(row.family) || row.family || '' },
-            { label: 'Capacity', value: (row) => row.availability || '' },
-            { label: 'Quota Current', value: (row) => row.quotaCurrent },
-            { label: 'Quota Limit', value: (row) => row.quotaLimit },
-            { label: 'Quota Available', value: (row) => row.quotaAvailable },
-            { label: 'Zones', value: (row) => row.zonesOK || '' },
-            { label: 'Reason', value: (row) => row.reason || '' }
-          ]
-        }];
+        return [
+          {
+            value: 'client:lite-capacity-grid', label: 'CSV Export', type: 'client', filenameBase: 'capacity-grid', rows: filteredLiteReportRows, columns: [
+              { label: 'Subscription', value: (row) => row.subscriptionName },
+              { label: 'Region', value: (row) => row.region },
+              { label: 'SKU', value: (row) => normalizeSkuName(row.sku) || '' },
+              { label: 'Family', value: (row) => formatFamilyLabel(row.family) || row.family || '' },
+              { label: 'Capacity', value: (row) => row.availability || '' },
+              { label: 'Quota Current', value: (row) => row.quotaCurrent },
+              { label: 'Quota Limit', value: (row) => row.quotaLimit },
+              { label: 'Quota Available', value: (row) => row.quotaAvailable },
+              { label: 'Zones', value: (row) => row.zonesOK || '' },
+              { label: 'Reason', value: (row) => row.reason || '' }
+            ]
+          },
+          { value: 'server:xlsx:grid', label: 'Grid XLSX', type: 'server', format: 'xlsx', variant: 'grid' },
+          { value: 'server:xlsx:report', label: 'Report XLSX', type: 'server', format: 'xlsx', variant: 'report' }
+        ];
       }
       return [
         { value: 'server:csv:grid', label: 'CSV Export', type: 'server', format: 'csv', variant: 'grid' },
@@ -4179,7 +4188,7 @@ function App() {
     let cancelled = false;
     setLiteScope((current) => ({ ...current, loading: true }));
     fetchJson('/api/capacity/report-scope').then((payload) => {
-      if (!cancelled) setLiteScope((current) => ({ ...current, subscriptionIds: normalizeStringList(payload.scope?.subscriptionIds).join(','), managementGroupNames: normalizeStringList(payload.scope?.managementGroupNames).join(','), loading: false, status: { tone: 'info', message: `Scope loaded from ${payload.scope?.source || 'worker configuration'}.` } }));
+      if (!cancelled) setLiteScope((current) => ({ ...current, subscriptionIds: normalizeStringList(payload.scope?.subscriptionIds).join(','), managementGroupNames: normalizeStringList(payload.scope?.managementGroupNames).join(','), captureRegions: normalizeStringList(payload.scope?.captureRegions).join(','), loading: false, status: { tone: 'info', message: `Scope loaded from ${payload.scope?.source || 'worker configuration'}.` } }));
     }).catch((error) => {
       if (!cancelled) setLiteScope((current) => ({ ...current, loading: false, status: { tone: 'error', message: error.message || 'Failed to load Lite report scope.' } }));
     });
@@ -5095,22 +5104,27 @@ function App() {
     const requestRegion = filters.region && filters.region !== 'all' ? filters.region : null;
     const requestRegions = requestRegion ? [requestRegion] : (regionPresets[filters.regionPreset] || regionPresets.USMajor || []);
     const requestSubscriptions = selectedSubscriptionIds.length > 0 ? selectedSubscriptionIds : [];
+    const scopeDescription = isLiteDeployment
+      ? 'the saved Lite Azure scope'
+      : `${requestService}${requestRegion ? ` in ${requestRegion}` : ''}`;
 
     setPaaSDbQuotaState((current) => ({
       ...current,
       busy: { ...current.busy, refresh: true },
-      status: { tone: 'info', message: `Refreshing PaaS database quota for ${requestService}${requestRegion ? ` in ${requestRegion}` : ''}...` }
+      status: { tone: 'info', message: `Refreshing PaaS database quota for ${scopeDescription}...` }
     }));
 
     try {
       const payload = await fetchJson('/api/paas-db-quota/refresh', {
         method: 'POST',
-        body: JSON.stringify({
-          subscriptionIds: requestSubscriptions,
-          regions: requestRegions,
-          services: [requestService],
-          includeCapabilities: paasDbQuotaState.filters.includeCapabilities
-        })
+        body: JSON.stringify(isLiteDeployment
+          ? { services: [requestService], includeCapabilities: paasDbQuotaState.filters.includeCapabilities }
+          : {
+              subscriptionIds: requestSubscriptions,
+              regions: requestRegions,
+              services: [requestService],
+              includeCapabilities: paasDbQuotaState.filters.includeCapabilities
+            })
       });
 
       const rows = Array.isArray(payload.rows) ? payload.rows : [];
@@ -5617,8 +5631,8 @@ function App() {
               <label className="rx-check"><input type="checkbox" checked={paasDbQuotaState.filters.includeCapabilities} onChange={(event) => setPaaSDbQuotaState((current) => ({ ...current, filters: { ...current.filters, includeCapabilities: event.target.checked } }))} />Include capabilities</label>
             </div>
             <div className="rx-inline-actions">
-              <span className="rx-selected-count">Regional scope: {filters.region && filters.region !== 'all' ? filters.region : (filters.regionPreset || 'all preset')}</span>
-              <span className="rx-selected-count">Subscription scope: {selectedSubscriptionIds.length > 0 ? `${formatNumber(selectedSubscriptionIds.length)} selected` : 'current Azure context'}</span>
+              <span className="rx-selected-count">Regional scope: {isLiteDeployment ? (liteScope.captureRegions || 'deployment fallback') : (filters.region && filters.region !== 'all' ? filters.region : (filters.regionPreset || 'all preset'))}</span>
+              <span className="rx-selected-count">Subscription scope: {isLiteDeployment ? (liteScope.managementGroupNames || liteScope.subscriptionIds || 'deployment fallback') : (selectedSubscriptionIds.length > 0 ? `${formatNumber(selectedSubscriptionIds.length)} selected` : 'current Azure context')}</span>
               <span className="rx-selected-count">Latest run: {paasDbQuotaState.capturedAtUtc ? formatTimestamp(paasDbQuotaState.capturedAtUtc) : 'none yet'}</span>
               <button className="rx-button" type="button" disabled={paasDbQuotaState.busy.refresh} onClick={refreshPaaSDatabaseQuota}>{paasDbQuotaState.busy.refresh ? 'Refreshing...' : 'Refresh PaaS DB Quota'}</button>
             </div>
@@ -5780,12 +5794,14 @@ function App() {
             </div>
           </section>
           <section className="rx-panel">
-            <div className="rx-panel__header"><div><h2>Lite Azure Scope</h2><p>Choose the subscriptions or management groups that the next report refresh should scan. The worker identity must already have Reader and Compute Recommendations Role at every declared scope.</p></div></div>
+            <div className="rx-panel__header"><div><h2>Lite Azure Scope</h2><p>Choose the subscriptions, management groups, and Azure regions that the next report refresh should scan. The worker identity must already have Reader and Compute Recommendations Role at every declared scope.</p></div></div>
             <div className="rx-field-grid rx-field-grid--filters">
               <label className="rx-field rx-field--wide"><span>Subscription IDs</span><textarea className="rx-input" rows="3" value={liteScope.subscriptionIds} placeholder="Comma-separated subscription IDs" onChange={(event) => setLiteScope((current) => ({ ...current, subscriptionIds: event.target.value }))} /></label>
               <label className="rx-field rx-field--wide"><span>Management Groups</span><textarea className="rx-input" rows="3" value={liteScope.managementGroupNames} placeholder="Comma-separated management group names" onChange={(event) => setLiteScope((current) => ({ ...current, managementGroupNames: event.target.value }))} /></label>
+              <label className="rx-field"><span>Load Region Preset</span><select className="rx-input" defaultValue="" onChange={(event) => { const preset = event.target.value; if (preset) setLiteScope((current) => ({ ...current, captureRegions: (regionPresets[preset] || []).join(',') })); event.target.value = ''; }}><option value="">Select a preset</option>{REGION_PRESET_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+              <label className="rx-field rx-field--wide"><span>Capture Regions</span><textarea className="rx-input" rows="3" value={liteScope.captureRegions} placeholder="Comma-separated Azure region codes; blank uses deployment configuration" onChange={(event) => setLiteScope((current) => ({ ...current, captureRegions: event.target.value }))} /></label>
             </div>
-            <div className="rx-inline-actions"><button className="rx-button" type="button" disabled={liteScope.saving} onClick={async () => { const subscriptionIds = normalizeStringList(liteScope.subscriptionIds); const managementGroupNames = normalizeStringList(liteScope.managementGroupNames); if (subscriptionIds.length === 0 && managementGroupNames.length === 0) { setLiteScope((current) => ({ ...current, status: { tone: 'error', message: 'Enter at least one subscription ID or management group name.' } })); return; } setLiteScope((current) => ({ ...current, saving: true, status: { tone: 'info', message: 'Saving Lite Azure scope...' } })); try { const payload = await fetchJson('/api/capacity/report-scope', { method: 'PUT', body: JSON.stringify({ subscriptionIds, managementGroupNames }) }); setLiteScope((current) => ({ ...current, saving: false, subscriptionIds: normalizeStringList(payload.scope?.subscriptionIds).join(','), managementGroupNames: normalizeStringList(payload.scope?.managementGroupNames).join(','), status: { tone: 'success', message: 'Lite Azure scope saved. Refresh Report Data to capture the updated subscriptions.' } })); } catch (error) { setLiteScope((current) => ({ ...current, saving: false, status: { tone: 'error', message: error.message || 'Failed to save Lite Azure scope.' } })); } }}>{liteScope.saving ? 'Saving...' : 'Save Azure Scope'}</button><button className="rx-button rx-button--secondary" type="button" disabled={liteReportSnapshot.refreshing} onClick={refreshLiteReportSnapshot}>{liteReportSnapshot.refreshing ? 'Refreshing...' : 'Refresh Report Data'}</button></div>
+            <div className="rx-inline-actions"><button className="rx-button" type="button" disabled={liteScope.saving} onClick={async () => { const subscriptionIds = normalizeStringList(liteScope.subscriptionIds); const managementGroupNames = normalizeStringList(liteScope.managementGroupNames); const captureRegions = normalizeStringList(liteScope.captureRegions).map((region) => region.toLowerCase()); if (subscriptionIds.length === 0 && managementGroupNames.length === 0) { setLiteScope((current) => ({ ...current, status: { tone: 'error', message: 'Enter at least one subscription ID or management group name.' } })); return; } setLiteScope((current) => ({ ...current, saving: true, status: { tone: 'info', message: 'Saving Lite Azure scope...' } })); try { const payload = await fetchJson('/api/capacity/report-scope', { method: 'PUT', body: JSON.stringify({ subscriptionIds, managementGroupNames, captureRegions }) }); setLiteScope((current) => ({ ...current, saving: false, subscriptionIds: normalizeStringList(payload.scope?.subscriptionIds).join(','), managementGroupNames: normalizeStringList(payload.scope?.managementGroupNames).join(','), captureRegions: normalizeStringList(payload.scope?.captureRegions).join(','), status: { tone: 'success', message: 'Lite Azure scope saved. Refresh Report Data to capture the updated regions and subscriptions.' } })); } catch (error) { setLiteScope((current) => ({ ...current, saving: false, status: { tone: 'error', message: error.message || 'Failed to save Lite Azure scope.' } })); } }}>{liteScope.saving ? 'Saving...' : 'Save Azure Scope'}</button><button className="rx-button rx-button--secondary" type="button" disabled={liteReportSnapshot.refreshing} onClick={refreshLiteReportSnapshot}>{liteReportSnapshot.refreshing ? 'Refreshing...' : 'Refresh Report Data'}</button></div>
             <Banner tone={liteScope.status.tone} message={liteScope.status.message} />
           </section>
         </div>

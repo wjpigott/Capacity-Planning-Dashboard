@@ -1,0 +1,6 @@
+node_modules/
+functions/CapacityWorker/local.settings.json
+*.pfx
+*.pem
+*.key
+data/

@@ -1,0 +1,45 @@
+{
+  "name": "capacity-planning-dashboard",
+  "version": "1.0.5",
+  "private": true,
+  "description": "Native Azure capacity and quota planning dashboard: VM SKU availability, live placement scoring, quota movement orchestration, and analytics.",
+  "author": "wjpigott and Capacity Dashboard contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wjpigott/Capacity-Planning-Dashboard.git"
+  },
+  "bugs": {
+    "url": "https://github.com/wjpigott/Capacity-Planning-Dashboard/issues"
+  },
+  "homepage": "https://github.com/wjpigott/Capacity-Planning-Dashboard#readme",
+  "keywords": [
+    "azure",
+    "capacity-planning",
+    "quota",
+    "vm-sku",
+    "dashboard"
+  ],
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "node --test",
+    "build:react": "esbuild react/main.js --loader:.js=jsx --outfile=react/main.compiled.js --minify --sourcemap --jsx-factory=React.createElement --jsx-fragment=React.Fragment",
+    "bench:placement-score": "node scripts/benchmark-placement-score.js"
+  },
+  "dependencies": {
+    "@azure/identity": "^4.5.0",
+    "@azure/msal-node": "^2.16.2",
+    "connect-mssql-v2": "^6.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
+    "express": "^4.19.2",
+    "express-session": "^1.18.1",
+    "mssql": "^11.0.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1"
+  }
+}

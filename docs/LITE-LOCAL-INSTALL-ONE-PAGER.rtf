@@ -1,0 +1,31 @@
+{\rtf1\ansi\deff0
+{\fonttbl{\f0 Aptos;}{\f1 Consolas;}}
+\paperw12240\paperh15840\margl1080\margr1080\margt900\margb900
+\fs22
+\pard\sa140\b\fs32 Capacity Dashboard Lite - Local Install and Deployment\b0\fs22\par
+\pard\sa120 Capacity Dashboard Lite is the Windows-hosted, database-free edition of the dashboard. The Node dashboard, PowerShell Function worker, timer runtime, and report data run locally. Azure is contacted only for capacity, placement, quota, and pricing APIs. Capacity snapshots and saved scope are local JSON files; Lite does not require Azure SQL, App Service, Function App, or Azure Storage.\par
+
+\pard\sa120\b Prerequisites\b0\par
+\pard\li360\fi-180\sa60 - Windows with Node.js LTS, PowerShell 7, Azure Functions Core Tools v4, Azurite, and Az PowerShell modules from \f1 functions\CapacityWorker\requirements.psd1\f0 .\par
+\pard\li360\fi-180\sa60 - Azure identity with Reader and Compute Recommendations Role at the subscriptions or management groups to scan. For a laptop pilot, use interactive Az PowerShell sign-in.\par
+\pard\li360\fi-180\sa100 - A clone of this repository and access to \f1 npm\f0 .\par
+
+\pard\sa120\b Install from the repository\b0\par
+\pard\sa60 1. From the repository root, install dependencies and create local worker settings:\par
+\pard\li360\sa60\f1 npm ci\line Copy-Item functions\CapacityWorker\local.settings.sample.json functions\CapacityWorker\local.settings.json\f0\par
+\pard\sa60 2. In \f1 functions\CapacityWorker\local.settings.json\f0 , set a unique \f1 WORKER_SHARED_SECRET\f0 . Set either \f1 CAPACITY_SUBSCRIPTION_ID\f0 or \f1 CAPACITY_MANAGEMENT_GROUP_NAMES\f0 . Keep \f1 CAPACITY_SNAPSHOT_STORAGE_MODE=local\f0 and choose a protected local path for \f1 CAPACITY_SNAPSHOT_LOCAL_PATH\f0 .\par
+\pard\sa60 3. Sign in for an interactive pilot:\par
+\pard\li360\sa60\f1 Connect-AzAccount\line Set-AzContext -SubscriptionId '<subscription-id>'\f0\par
+
+\pard\sa120\b Run locally\b0\par
+\pard\sa60 Use three terminals from the repository root:\par
+\pard\li360\fi-180\sa60 1. \f1 azurite\f0  (Functions runtime/timer storage only; it does not store reports).\par
+\pard\li360\fi-180\sa60 2. \f1 Set-Location functions\CapacityWorker; func start --port 7071 --host 127.0.0.1\f0\par
+\pard\li360\fi-180\sa60 3. \f1 $env:CAPACITY_DEPLOYMENT_PROFILE='lite'; $env:CAPACITY_WORKER_BASE_URL='http://127.0.0.1:7071'; $env:CAPACITY_WORKER_AUTH_MODE='shared-secret'; $env:CAPACITY_WORKER_SHARED_SECRET='<same worker secret>'; $env:AUTH_ENABLED='false'; $env:PORT='3011'; npm start\f0\par
+\pard\sa100 Open \f1 http://127.0.0.1:3011\f0 . In Lite Admin, save the Azure scope and capture regions, then refresh Capacity Grid. Use the separate PaaS DB Quota refresh when that data is needed. Local data is written to \f1 latest.json\f0 , \f1 scope.json\f0 , and \f1 paas-db-quota.json\f0 under the configured snapshot path; back up that folder if report history matters.\par
+
+\pard\sa120\b Package for another Windows host\b0\par
+\pard\sa60 From the repository root, first build the React asset if source changed, then stage the portable Lite package:\par
+\pard\li360\sa60\f1 npm run build:react\line .\deployment\New-SelfHostedLiteBundle.ps1\f0\par
+\pard\sa60 Copy \f1 deployment\bin\app\f0 to the target host. On that host run \f1 npm ci --omit=dev\f0 in the copied app folder, create \f1 functions\CapacityWorker\local.settings.json\f0 from the sample, and run the same three processes above. For a shared server, run Azurite, the Function worker, and the dashboard as Windows services; keep the worker loopback-only and put any shared dashboard access behind HTTPS and appropriate authentication.\par
+}

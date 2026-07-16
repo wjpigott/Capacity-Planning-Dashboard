@@ -3194,6 +3194,7 @@ function New-ScanOutputContract {
         }
         families      = @($families)
         regionErrors  = @($regionErrors)
+        details       = @($FamilyDetails)
     }
 }
 

@@ -114,7 +114,7 @@ function Get-CapacityReportScope {
             return New-CapacityReportScopeResponse -Scope ([pscustomobject]@{ subscriptionIds = ConvertTo-ReportScopeList $saved.subscriptionIds; managementGroupNames = ConvertTo-ReportScopeList $saved.managementGroupNames; captureRegions = ConvertTo-ReportScopeList $saved.captureRegions | ForEach-Object { $_.ToLowerInvariant() }; updatedAtUtc = $saved.updatedAtUtc })
         }
 
-        return New-CapacityReportScopeResponse -Scope ([pscustomobject]@{ subscriptionIds = ConvertTo-ReportScopeList $env:CAPACITY_SUBSCRIPTION_ID; managementGroupNames = ConvertTo-ReportScopeList $env:CAPACITY_MANAGEMENT_GROUP_NAMES; captureRegions = @(); updatedAtUtc = $null }) -Source 'deployment-configured'
+        return New-CapacityReportScopeResponse -Scope ([pscustomobject]@{ subscriptionIds = ConvertTo-ReportScopeList $env:CAPACITY_SUBSCRIPTION_ID; managementGroupNames = ConvertTo-ReportScopeList $env:CAPACITY_MANAGEMENT_GROUP_NAMES; captureRegions = ConvertTo-ReportScopeList $env:CAPACITY_REPORT_REGIONS | ForEach-Object { $_.ToLowerInvariant() }; updatedAtUtc = $null }) -Source 'deployment-configured'
     }
 
     $caches = @{}

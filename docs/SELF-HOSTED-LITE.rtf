@@ -1,0 +1,75 @@
+{\rtf1\ansi\deff0
+{\fonttbl{\f0 Aptos;}{\f1 Consolas;}}
+\paperw12240\paperh15840\margl1080\margr1080\margt900\margb900
+\fs22
+\pard\sa160\b\fs32 Capacity Dashboard Lite Local\b0\fs22\par
+\pard\sa120 This guide installs Capacity Dashboard Lite Local on one Windows computer. The dashboard, worker, and report files stay on that computer. Azure is used only to read capacity information. Azure SQL and Azure hosting are not required.\par
+
+\pard\sa120\b Before you start\b0\par
+\pard\sa60 The Azure identity used by the operator or service account must already have Reader and Compute Recommendations Role on every subscription or management group to be scanned. This package does not grant Azure permissions.\par
+
+\pard\sa120\b Part 1: Place the folder on Windows\b0\par
+\pard\sa60 From the repository computer, copy this already-built deployment folder to the target Windows computer:\par
+\pard\li360\sa100\f1 Capacity-Planning-Dashboard\\Lite-Deployment\\bin\\CapacityDashboardLite-Local\f0\par
+\pard\sa60 Copy the CapacityDashboardLite-Local folder itself. Do not copy its parent Lite-Deployment or bin folder. On the target Windows computer, extract or copy it to this exact location:\par
+\pard\li360\sa100\f1 C:\\CapacityDashboardLite-Local\f0\par
+\pard\sa60 Do not place the files inside another extra folder. When complete, this folder should contain \f1 Install-CapacityLitePrerequisites.ps1\f0, \f1 Configure-CapacityLite.ps1\f0, and \f1 Start-CapacityLite.ps1\f0.\par
+
+\pard\sa120\b Part 2: Install the required software\b0\par
+\pard\sa60 Open Windows PowerShell. Change to the installation folder and run:\par
+\pard\li360\sa60\f1 Set-Location C:\\CapacityDashboardLite-Local\line
+.\Install-CapacityLitePrerequisites.ps1\f0\par
+\pard\sa60 The script checks or installs PowerShell 7, .NET 8 SDK, Node.js, Azure Functions Core Tools, Azurite, and the Azure PowerShell modules. It can take several minutes.\par
+\pard\sa60 If the script installs or updates any software, close every PowerShell window. Open a new PowerShell 7 window, return to the installation folder, and run the same command again. Continue only when the script says that local software prerequisites are installed or available.\par
+
+\pard\sa120\b Part 3: Install the dashboard files\b0\par
+\pard\sa60 In the same PowerShell 7 window, run:\par
+\pard\li360\sa100\f1 npm ci --omit=dev\f0\par
+\pard\sa60 Wait until the command completes. Warning messages about older npm dependencies can be ignored when the command completes successfully.\par
+
+\pard\sa120\b Part 4: Choose the Azure scope\b0\par
+\pard\sa60 Run:\par
+\pard\li360\sa100\f1 .\Configure-CapacityLite.ps1\f0\par
+\pard\sa60 Answer the prompts as follows:\par
+\pard\li360\fi-180\sa60 1. Report data folder: accept the suggested location unless your organization uses a different approved data drive.\par
+\pard\li360\fi-180\sa60 2. Azure scope type: choose subscription for one subscription, or management-group for all subscriptions beneath a management group.\par
+\pard\li360\fi-180\sa60 3. Scope name: enter the subscription ID or management group name you were given.\par
+\pard\li360\fi-180\sa60 4. Capture regions: accept the default list or enter the Azure regions your organization wants to scan.\par
+\pard\li360\fi-180\sa60 5. Azure sign-in mode: choose interactive for a person using this computer, secret or certificate only when your Azure administrator has supplied the service-account details.\par
+\pard\sa60 The script saves the setup. Do not edit \f1 local.settings.json\f0\~manually unless instructed by an administrator.\par
+
+\pard\sa120\b Part 5: Start Capacity Dashboard Lite Local\b0\par
+\pard\sa60 Run:\par
+\pard\li360\sa100\f1 .\Start-CapacityLite.ps1\f0\par
+\pard\sa60 Three PowerShell windows open: Azurite, Capacity Worker, and Capacity Dashboard. Leave all three windows open while using the dashboard.\par
+\pard\sa60 When the dashboard window says it is listening, open this address in a browser on the same computer:\par
+\pard\li360\sa100\f1 http://127.0.0.1:3000\f0\par
+
+\pard\sa120\b First use in the dashboard\b0\par
+\pard\sa60 Open Admin, then Lite Data Operations. Your configured subscription or management group and capture regions are shown in Lite Azure Scope.\par
+\pard\li360\fi-180\sa60 1. Review the scope and select Save Azure Scope if you changed anything.\par
+\pard\li360\fi-180\sa60 2. Select Refresh Report Data to run the first capacity scan.\par
+\pard\li360\fi-180\sa60 3. Wait for the scan to finish, then open Capacity Grid, Region Matrix, or Capacity Spot Score.\par
+\pard\sa60 Starting the app does not run a new capacity scan. The dashboard shows the most recently saved report until someone selects Refresh Report Data.\par
+
+\pard\sa120\b Daily use\b0\par
+\pard\sa60 To start the dashboard after a restart, open PowerShell 7 in \f1 C:\\CapacityDashboardLite-Local\f0\~and run:\par
+\pard\li360\sa100\f1 .\Start-CapacityLite.ps1\f0\par
+\pard\sa60 To stop it, close the three PowerShell windows opened by the launcher.\par
+
+\pard\sa120\b Help with common messages\b0\par
+\pard\li360\fi-180\sa60 - Dotnet is required: close all PowerShell windows, open PowerShell 7 again, run \f1 .\Install-CapacityLitePrerequisites.ps1\f0, then retry the launcher.\par
+\pard\li360\fi-180\sa60 - npm, func, or azurite is not recognized: close all PowerShell windows, open PowerShell 7 again, and rerun the prerequisite script.\par
+\pard\li360\fi-180\sa60 - The dashboard cannot save the Azure scope: confirm that the Capacity Worker window is open, then retry.\par
+\pard\li360\fi-180\sa60 - The scan fails with Azure access denied: contact the Azure administrator. The selected identity needs Reader and Compute Recommendations Role at the selected scope.\par
+
+\pard\sa120\b Keep these files safe\b0\par
+\pard\sa60 The selected scope and captured reports are stored in the report data folder chosen during setup. Back up that folder when report continuity matters. Do not copy or share \f1 functions\CapacityWorker\local.settings.json\f0, client secrets, or certificate files.\par
+
+\pard\sa120\b Official prerequisite links\b0\par
+\pard\li360\fi-180\sa60 - PowerShell 7: https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows\par
+\pard\li360\fi-180\sa60 - .NET 8 SDK: https://dotnet.microsoft.com/download/dotnet/8.0\par
+\pard\li360\fi-180\sa60 - Node.js LTS: https://nodejs.org/en/download\par
+\pard\li360\fi-180\sa60 - Azure Functions Core Tools: https://learn.microsoft.com/azure/azure-functions/functions-run-local\par
+\pard\li360\fi-180\sa100 - Azurite: https://learn.microsoft.com/azure/storage/common/storage-use-azurite\par
+}

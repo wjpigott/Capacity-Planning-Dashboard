@@ -24,11 +24,31 @@ Release history is tracked in `docs/RELEASE-NOTES.md`. Git tags should use the s
 
 ## What's new for deployments
 
+### Capacity Dashboard Lite Local (Windows, no Azure hosting or SQL)
+
+**Capacity Dashboard Lite Local** is the portable Windows deployment option. It runs the dashboard, Functions worker, Azurite, and JSON report storage on the target Windows machine. Azure is used only for the capacity APIs; it does not require Azure App Service, Azure Functions, Azure Storage, Azure SQL, or Key Vault.
+
+Build the release folder from a repository checkout:
+
+```powershell
+npm run build:react
+.\Lite-Deployment\New-SelfHostedLiteBundle.ps1
+```
+
+The folder to copy or zip is **`Lite-Deployment\bin\CapacityDashboardLite-Local`**. Extract it on the target machine as **`C:\CapacityDashboardLite-Local`**, then follow [the Lite Local operator guide](docs/SELF-HOSTED-LITE.pdf). The target-machine commands are:
+
+```powershell
+.\Install-CapacityLitePrerequisites.ps1
+npm ci --omit=dev
+.\Configure-CapacityLite.ps1
+.\Start-CapacityLite.ps1
+```
+
 ### Lite deployment profile
 
 Set `CAPACITY_DEPLOYMENT_PROFILE=lite` for the database-free **Capacity Dashboard Lite** edition. Lite exposes the live **Capacity Recommender** and **Capacity Spot Score** workflows, plus the Capacity Grid and Region/Report Matrix backed by a worker-generated JSON snapshot. It does not run SQL schema initialization, SQL-backed session persistence, ingestion, quota planning, history, or write operations.
 
-For an entirely self-hosted Windows deployment that runs the dashboard, worker, scheduler, and snapshot storage locally while using Azure only for capacity APIs, see [docs/SELF-HOSTED-LITE.md](docs/SELF-HOSTED-LITE.md).
+For an entirely self-hosted Windows deployment that runs the dashboard, worker, scheduler, and snapshot storage locally while using Azure only for capacity APIs, see [docs/SELF-HOSTED-LITE.pdf](docs/SELF-HOSTED-LITE.pdf).
 
 The dedicated Function App captures the report scan on a six-hour timer and stores the latest report at `capacity-report-snapshots/latest.json` in its storage account. The dashboard reads that snapshot through its authenticated API; report pages do not depend on a user running the Capacity Recommender first. Administrators can request an on-demand refresh from the report experience.
 

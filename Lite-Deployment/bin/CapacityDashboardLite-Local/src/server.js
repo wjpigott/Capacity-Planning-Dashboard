@@ -2801,7 +2801,14 @@ app.put('/api/capacity/report-scope', requireAdmin, async (req, res) => {
   try {
     res.json({ ok: true, scope: await require('./services/livePlacementService').saveCapacityReportScope(req.body || {}) });
   } catch (err) {
-    sendErrorResponse(res, { status: 503, clientMessage: 'Failed to save the Lite report scope.', err, scope: 'api/capacity/report-scope:save', extra: { scope: null } });
+    sendErrorResponse(res, {
+      status: 503,
+      clientMessage: 'Failed to save the Lite report scope.',
+      err,
+      scope: 'api/capacity/report-scope:save',
+      exposeMessage: IS_LITE_DEPLOYMENT,
+      extra: { scope: null }
+    });
   }
 });
 

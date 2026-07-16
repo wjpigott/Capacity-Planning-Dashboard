@@ -6,10 +6,14 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = Split-Path $PSScriptRoot -Parent
-$appPath = Join-Path $OutputPath 'app'
+$appPath = Join-Path $OutputPath 'CapacityDashboardLite-Local'
+$legacyAppPath = Join-Path $OutputPath 'app'
 
 if (Test-Path -LiteralPath $appPath) {
     Remove-Item -LiteralPath $appPath -Recurse -Force
+}
+if (Test-Path -LiteralPath $legacyAppPath) {
+    Remove-Item -LiteralPath $legacyAppPath -Recurse -Force
 }
 
 New-Item -ItemType Directory -Path $appPath -Force | Out-Null
@@ -34,12 +38,22 @@ function Copy-DeploymentItem {
     'server.js',
     'sku-catalog.js',
     'package.json',
+    'package-lock.json',
+    'Lite-Deployment\Install-CapacityLitePrerequisites.ps1',
+    'Lite-Deployment\Configure-CapacityLite.ps1',
+    'Lite-Deployment\Start-CapacityLite.ps1',
     'src',
     'react',
     'functions\CapacityWorker',
     'tools\Get-PaaSDatabaseQuotaReport.ps1',
-    'docs\SELF-HOSTED-LITE.md'
+    'docs\SELF-HOSTED-LITE.pdf'
 ) | ForEach-Object { Copy-DeploymentItem -RelativePath $_ }
+
+$packagedScriptPath = Join-Path $appPath 'Lite-Deployment'
+Move-Item -LiteralPath (Join-Path $packagedScriptPath 'Install-CapacityLitePrerequisites.ps1') -Destination (Join-Path $appPath 'Install-CapacityLitePrerequisites.ps1') -Force
+Move-Item -LiteralPath (Join-Path $packagedScriptPath 'Configure-CapacityLite.ps1') -Destination (Join-Path $appPath 'Configure-CapacityLite.ps1') -Force
+Move-Item -LiteralPath (Join-Path $packagedScriptPath 'Start-CapacityLite.ps1') -Destination (Join-Path $appPath 'Start-CapacityLite.ps1') -Force
+Remove-Item -LiteralPath $packagedScriptPath -Force
 
 Remove-Item -LiteralPath (Join-Path $appPath 'functions\CapacityWorker\local.settings.json') -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Join-Path $appPath 'react\main.js') -Force -ErrorAction SilentlyContinue
@@ -54,4 +68,4 @@ functions/CapacityWorker/local.settings.json
 data/
 '@ | Set-Content -LiteralPath (Join-Path $appPath '.gitignore') -Encoding ASCII
 
-Write-Host "Self-hosted Lite deployment bundle staged at: $appPath" -ForegroundColor Green
+Write-Host "Capacity Dashboard Lite Local bundle staged at: $appPath" -ForegroundColor Green

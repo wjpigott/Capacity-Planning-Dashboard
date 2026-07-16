@@ -111,16 +111,16 @@ Before merging this branch, validate all of the following:
 
 The isolated auth-hardening deployment uses separate app instances so the stable dev baseline is not affected:
 
-- Web App: `app-capdash-auth-dev-cap001`
-- Function App: `func-capdash-auth-dev-cap001-appsvc`
-- Worker audience: `api://95a70edd-af8d-4343-9929-414050e778c0`
-- Web App API audience: `api://003c43d4-57fa-4781-9c64-d58f34ccdd82`
+- Web App: `<isolated-web-app-name>`
+- Function App: `<isolated-function-app-name>`
+- Worker audience: `api://<worker-app-registration-client-id>`
+- Web App API audience: `api://<web-app-registration-client-id>`
 
 Validated Web App settings:
 
 - App Service Authentication enabled on the isolated Web App.
 - Unauthenticated action is `Return401`.
-- Microsoft Entra provider uses dashboard app registration `003c43d4-57fa-4781-9c64-d58f34ccdd82`.
+- Microsoft Entra provider uses the dashboard app registration `<web-app-registration-client-id>`.
 - `INGEST_EASY_AUTH_BEARER_ENABLED=true` allows internal routes to trust Easy Auth bearer-authenticated requests.
 - `INGEST_API_KEY_ENABLED=false` disables `x-ingest-key` fallback on the isolated Web App so successful internal calls require `Authorization: Bearer`.
 
@@ -128,7 +128,7 @@ Validated Function App settings:
 
 - App Service Authentication enabled on the isolated Function App.
 - Unauthenticated action is `Return401`.
-- Microsoft Entra provider uses worker app registration `95a70edd-af8d-4343-9929-414050e778c0`.
+- Microsoft Entra provider uses the worker app registration `<worker-app-registration-client-id>`.
 - Public network access is blocked by the Function private endpoint posture; direct public function calls returned `403`.
 
 Validated traffic behavior:
@@ -140,7 +140,7 @@ Validated traffic behavior:
 - Bearer-authenticated live placement succeeded with `executionMode: function-app`, `transport: arm-rest`, and 5 rows.
 - Bearer-authenticated recommendations succeeded with `executionMode: function-app` and 3 rows.
 
-The dashboard app registration was exposed as an API for isolated bearer-token validation by adding `api://003c43d4-57fa-4781-9c64-d58f34ccdd82` and a `user_impersonation` delegated scope. The isolated Web App Easy Auth policy temporarily allows the Azure CLI public client application ID `04b07795-8ddb-461a-bbee-02f9e1bf7b46` for command-line smoke tests; replace that with the intended calling clients before production rollout.
+The dashboard app registration was exposed as an API for isolated bearer-token validation by adding `api://<web-app-registration-client-id>` and a `user_impersonation` delegated scope. The isolated Web App Easy Auth policy temporarily allows the Azure CLI public client application ID `04b07795-8ddb-461a-bbee-02f9e1bf7b46` for command-line smoke tests; replace that with the intended calling clients before production rollout.
 
 ## Rollout notes
 
@@ -191,8 +191,8 @@ Still needed:
 - [x] Add Bicep `authsettingsV2` resources for the Web App and Function App.
 - [x] Add matching Terraform `auth_settings_v2` blocks/resources for the Web App and Function App, including allowed audiences and allowed client applications.
 - [x] Make one app registration the preferred Easy Auth path by defaulting the worker Function App audience/client ID to the dashboard app registration when worker-specific values are omitted.
-- [x] Validated a Bicep deployment in tenant `28ad7eb2-0ea4-40b8-99c2-cc6c124035d2`, resource group `CapacityAuthTest`, workload suffix `auth137`, with Web App Easy Auth, Function App Easy Auth, `workerAuthMode=entra`, no worker shared secrets, and worker storage private endpoints enabled.
-- [x] Verified the deployed Web App and Function App raw `authsettingsV2` resources use `Return401`, shared client ID `863b537e-b53f-4538-9c26-fbdcd40c20f3`, and the shared audience `api://863b537e-b53f-4538-9c26-fbdcd40c20f3` for the Function App.
+- [x] Validated a Bicep deployment in an isolated tenant and resource group, with Web App Easy Auth, Function App Easy Auth, `workerAuthMode=entra`, no worker shared secrets, and worker storage private endpoints enabled.
+- [x] Verified the deployed Web App and Function App raw `authsettingsV2` resources use `Return401`, the shared app registration client ID, and the matching audience for the Function App.
 - [x] Fixed Bicep wrapper empty-array parameter serialization so optional array parameters are emitted as `[]` instead of an empty value.
 - [x] Fixed Bicep wrapper single-item array serialization for Easy Auth and report-viewer parameters so Azure CLI receives valid JSON string arrays such as `["04b07795-8ddb-461a-bbee-02f9e1bf7b46"]` instead of `[04b07795-...]`.
 - [x] Confirmed anonymous Web App `/api/auth/me` returns `401`; anonymous Function `/api/ping` returns `403` because the Function App public ingress is blocked by the private endpoint posture.
@@ -204,17 +204,17 @@ Still needed:
 - [ ] Decide whether Express sessions are still required after Easy Auth becomes the browser sign-in path. If no, plan removal of `SESSION_SECRET`; if yes, keep it in Key Vault.
 - [ ] Deploy the worker storage private endpoint IaC to dev and verify Function startup, DNS resolution, PaaS refresh, live placement, recommendations, and no storage public access dependency.
 - [x] Add a practical deployment path for the Function worker package: when the target Function posture is private (`functionPublicNetworkAccess=Disabled`), the deployment wrapper can temporarily set Function public network access to `Enabled`, publish the worker zip, and lock it back down to `Disabled` in a `finally` block. This applies after both Bicep and Terraform infrastructure deployments.
-- [x] Validate the temporary Function public access publish-and-lockdown flow against `func-capdash-dev-auth137-appsvc`; worker zip deployment succeeded, public access returned to `Disabled`, and Function endpoints were visible afterward.
-- [x] Completed admin-assisted database bootstrap through Web App Easy Auth bearer authentication. Schema was applied, migrations through `20260608-add-paas-db-quota-report.sql` ran, phase-3 schema was ensured, and `app-capdash-dev-auth137` received `db_datareader` / `db_datawriter`.
+- [x] Validated the temporary Function public-access publish-and-lockdown flow against an isolated Function App; worker zip deployment succeeded, public access returned to `Disabled`, and Function endpoints were visible afterward.
+- [x] Completed admin-assisted database bootstrap through Web App Easy Auth bearer authentication. Schema was applied, migrations through `20260608-add-paas-db-quota-report.sql` ran, phase-3 schema was ensured, and the isolated Web App received `db_datareader` / `db_datawriter`.
 - [x] Authenticated API probes succeeded for `/api/auth/me`, `/api/capacity`, and `/api/paas-availability/probe`.
 - [x] Worker-backed PaaS refresh succeeded through Function App Easy Auth/private networking with `executionMode: function-app`, `rowCount: 149`, and `persistedRowCount: 149`.
-- [x] Enabled Web App Easy Auth browser login on `app-capdash-dev-auth137` by adding the App Service callback URI `/.auth/login/aad/callback`, switching Web Easy Auth unauthenticated browser handling to `RedirectToLoginPage`, and enabling ID token issuance on the app registration.
-- [x] Validated the Terraform Easy Auth path in resource group `Capacity-Terraform`, workload suffix `tfauth137`: Terraform infrastructure applied, web package deployed, worker package deployed with temporary public-access publish window and restored to `Disabled`, database bootstrap succeeded through Web App Easy Auth, browser login redirects, authenticated API probes passed, and worker-backed PaaS refresh persisted 149 rows with `executionMode: function-app`.
+- [x] Enabled Web App Easy Auth browser login on the isolated Web App by adding the App Service callback URI `/.auth/login/aad/callback`, switching Web Easy Auth unauthenticated browser handling to `RedirectToLoginPage`, and enabling ID token issuance on the app registration.
+- [x] Validated the Terraform Easy Auth path in an isolated resource group: Terraform infrastructure applied, web package deployed, worker package deployed with temporary public-access publish window and restored to `Disabled`, database bootstrap succeeded through Web App Easy Auth, browser login redirects, authenticated API probes passed, and worker-backed PaaS refresh persisted 149 rows with `executionMode: function-app`.
 - [x] Updated the deployment wrapper to patch Function Easy Auth allowed applications with the Web App managed identity application/client ID after both Bicep and Terraform infrastructure deployments.
 - [x] Destroyed and clean-redeployed the Terraform test environment after the wrapper patch. The clean run automatically patched Function Easy Auth with the Web App managed identity client ID, deployed the web package, deployed the worker package with temporary Function public access and restored `Disabled`, and completed schema bootstrap.
 - [x] Fixed the deployment wrapper to grant Web App managed identity database roles through the admin-assisted bootstrap endpoint even when the normal schema bootstrap endpoint succeeds. The clean Terraform test then returned `/api/capacity` successfully and worker-backed PaaS refresh persisted 149 rows with `executionMode: function-app`.
-- [x] Re-ran Terraform one final time after the bootstrap and array fixes. Final state: Function Easy Auth allow-list contained Web App managed identity client ID `a3678569-edde-49f1-b6cc-92e81c3beb63`, Function public access was `Disabled`, five worker functions were deployed, `/api/capacity` succeeded, and PaaS refresh persisted 149 rows with `executionMode: function-app` and no persistence warning.
-- [x] Re-ran Bicep from a deleted `CapacityAuthTest` resource group. Required purging the soft-deleted Key Vault name after resource-group deletion and retrying once after Azure SQL server provisioning timed out. Final state: Web and worker packages deployed, Function public access was `Disabled`, five worker functions were deployed, Function Easy Auth allow-list contained Web App managed identity client ID `ea92a8a2-de72-4a21-839e-7c41efa8274e`, full admin bootstrap returned `ok:true`, `/api/capacity` succeeded, and PaaS refresh persisted 149 rows with `executionMode: function-app` and no persistence warning.
+- [x] Re-ran Terraform after the bootstrap and array fixes. Final state: Function Easy Auth allow-list contained the Web App managed identity client ID, Function public access was `Disabled`, five worker functions were deployed, `/api/capacity` succeeded, and PaaS refresh persisted 149 rows with `executionMode: function-app` and no persistence warning.
+- [x] Re-ran Bicep from a deleted isolated resource group. Required purging the soft-deleted Key Vault name after resource-group deletion and retrying once after Azure SQL server provisioning timed out. Final state: Web and worker packages deployed, Function public access was `Disabled`, five worker functions were deployed, Function Easy Auth allow-list contained the Web App managed identity client ID, full admin bootstrap returned `ok:true`, `/api/capacity` succeeded, and PaaS refresh persisted 149 rows with `executionMode: function-app` and no persistence warning.
 - [x] Fixed the database bootstrap wrapper to call Web Easy Auth-protected bootstrap endpoints with a dashboard bearer token and to validate JSON `ok:true` responses instead of treating login/HTML redirects as success.
 - [x] Hardened Bicep wrapper ergonomics for repeat clean deployments: detect soft-deleted generated Key Vault names before ARM deployment, require explicit `-PurgeDeletedKeyVaultOnNameConflict $true` before purging, and retry the specific transient Azure SQL server provisioning timeout via `-BicepSqlProvisioningRetryCount`.
 - [ ] Update `docs/current-architecture.drawio` to match the Mermaid/PNG architecture update, or treat Mermaid as the branch source of truth and regenerate Draw.io later.

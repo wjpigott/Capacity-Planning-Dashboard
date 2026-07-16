@@ -77,8 +77,8 @@ Saving scope changes does not grant Azure permissions. Before scanning a newly s
 
 ```powershell
 ./scripts/Set-LiteCapacityScope.ps1 `
-	-ResourceGroupName "capacity-lite-dev" `
-	-FunctionAppName "func-capdash-lite-dev-cap001" `
+	-ResourceGroupName "<resource-group-name>" `
+	-FunctionAppName "<function-app-name>" `
 	-ManagementGroupNames "<customer-management-group-name>" `
 	-AzureSubscriptionId "<hosting-subscription-id>"
 ```

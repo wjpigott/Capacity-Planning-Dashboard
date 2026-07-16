@@ -6,6 +6,7 @@ Uses Azure credential from az cli login
 import os
 import sys
 import subprocess
+from pathlib import Path
 from urllib.parse import quote_plus
 
 def get_access_token():
@@ -48,7 +49,8 @@ def apply_indexes():
         cursor = conn.cursor()
         
         # Read and execute migration
-        with open(r"c:\repos\Capacity\dashboard\sql\migrations\20260414-add-performance-indexes.sql", "r") as f:
+        migration_path = Path(__file__).resolve().parent.parent / "sql" / "migrations" / "20260414-add-performance-indexes.sql"
+        with migration_path.open("r", encoding="utf-8") as f:
             sql_content = f.read()
         
         # Split by GO and execute batches

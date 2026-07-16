@@ -20,7 +20,7 @@ if (-not $token) {
 
 # Build connection string
 $serverFqdn = "$serverName.database.windows.net"
-$sqlFilePath = "c:\repos\Capacity\dashboard\sql\migrations\20260414-add-performance-indexes.sql"
+$sqlFilePath = Join-Path (Split-Path $PSScriptRoot -Parent) 'sql\migrations\20260414-add-performance-indexes.sql'
 
 Write-Host "Connecting to SQL Server: $serverFqdn" -ForegroundColor Cyan
 Write-Host "Database: $databaseName" -ForegroundColor Cyan

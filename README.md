@@ -32,10 +32,10 @@ Build the release folder from a repository checkout:
 
 ```powershell
 npm run build:react
-.\Lite-Deployment\New-SelfHostedLiteBundle.ps1
+.\Lite-Local-Deployment\New-SelfHostedLiteBundle.ps1
 ```
 
-The folder to copy or zip is **`Lite-Deployment\bin\CapacityDashboardLite-Local`**. Extract it on the target machine as **`C:\CapacityDashboardLite-Local`**, then follow [the Lite Local operator guide](docs/SELF-HOSTED-LITE.pdf). The target-machine commands are:
+The folder to copy or zip is **`Lite-Local-Deployment\bin\CapacityDashboardLite-Local`**. Extract it on the target machine as **`C:\CapacityDashboardLite-Local`**, then follow [the Lite Local operator guide](docs/SELF-HOSTED-LITE.pdf). The target-machine commands are:
 
 ```powershell
 .\Install-CapacityLitePrerequisites.ps1

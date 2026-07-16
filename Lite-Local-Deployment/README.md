@@ -9,8 +9,8 @@ The bundle includes the Node dashboard and the PowerShell Azure Functions worker
 From the repository root:
 
 ```powershell
-.\Lite-Deployment\New-SelfHostedLiteBundle.ps1
-Compress-Archive -Path .\Lite-Deployment\bin\CapacityDashboardLite-Local\* -DestinationPath .\Lite-Deployment\bin\CapacityDashboardLite-Local.zip -Force
+.\Lite-Local-Deployment\New-SelfHostedLiteBundle.ps1
+Compress-Archive -Path .\Lite-Local-Deployment\bin\CapacityDashboardLite-Local\* -DestinationPath .\Lite-Local-Deployment\bin\CapacityDashboardLite-Local.zip -Force
 ```
 
 ## Target configuration

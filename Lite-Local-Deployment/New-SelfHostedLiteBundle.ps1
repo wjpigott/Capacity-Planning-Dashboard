@@ -39,9 +39,9 @@ function Copy-DeploymentItem {
     'sku-catalog.js',
     'package.json',
     'package-lock.json',
-    'Lite-Deployment\Install-CapacityLitePrerequisites.ps1',
-    'Lite-Deployment\Configure-CapacityLite.ps1',
-    'Lite-Deployment\Start-CapacityLite.ps1',
+    'Lite-Local-Deployment\Install-CapacityLitePrerequisites.ps1',
+    'Lite-Local-Deployment\Configure-CapacityLite.ps1',
+    'Lite-Local-Deployment\Start-CapacityLite.ps1',
     'src',
     'react',
     'functions\CapacityWorker',
@@ -49,7 +49,7 @@ function Copy-DeploymentItem {
     'docs\SELF-HOSTED-LITE.pdf'
 ) | ForEach-Object { Copy-DeploymentItem -RelativePath $_ }
 
-$packagedScriptPath = Join-Path $appPath 'Lite-Deployment'
+$packagedScriptPath = Join-Path $appPath 'Lite-Local-Deployment'
 Move-Item -LiteralPath (Join-Path $packagedScriptPath 'Install-CapacityLitePrerequisites.ps1') -Destination (Join-Path $appPath 'Install-CapacityLitePrerequisites.ps1') -Force
 Move-Item -LiteralPath (Join-Path $packagedScriptPath 'Configure-CapacityLite.ps1') -Destination (Join-Path $appPath 'Configure-CapacityLite.ps1') -Force
 Move-Item -LiteralPath (Join-Path $packagedScriptPath 'Start-CapacityLite.ps1') -Destination (Join-Path $appPath 'Start-CapacityLite.ps1') -Force

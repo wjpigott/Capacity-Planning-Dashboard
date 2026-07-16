@@ -1,17 +1,8 @@
 # Self-Hosted Lite Deployment Bundle
 
-`bin\CapacityDashboardLite-Local` is the clean, portable installation folder for **Capacity Dashboard Lite Local**. Zip that folder's contents, not the `bin` directory itself.
+After downloading the repository, `bin\CapacityDashboardLite-Local` is the clean, portable installation folder for **Capacity Dashboard Lite Local**. Copy that folder to the target machine, or zip its contents, not the `bin` directory itself.
 
 The bundle includes the Node dashboard and the PowerShell Azure Functions worker. It deliberately excludes `node_modules`, local settings, credentials, certificates, Azurite state, and captured report data.
-
-## Create the bundle
-
-From the repository root:
-
-```powershell
-.\Lite-Local-Deployment\New-SelfHostedLiteBundle.ps1
-Compress-Archive -Path .\Lite-Local-Deployment\bin\CapacityDashboardLite-Local\* -DestinationPath .\Lite-Local-Deployment\bin\CapacityDashboardLite-Local.zip -Force
-```
 
 ## Target configuration
 

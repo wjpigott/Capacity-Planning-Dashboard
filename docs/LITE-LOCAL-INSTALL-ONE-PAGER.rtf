@@ -6,9 +6,10 @@
 \pard\sa120 Capacity Dashboard Lite is the Windows-hosted, database-free edition of the dashboard. The Node dashboard, PowerShell Function worker, timer runtime, and report data run locally. Azure is contacted only for capacity, placement, quota, and pricing APIs. Capacity snapshots and saved scope are local JSON files; Lite does not require Azure SQL, App Service, Function App, or Azure Storage.\par
 
 \pard\sa120\b Prerequisites\b0\par
-\pard\li360\fi-180\sa60 - Windows with Node.js LTS, PowerShell 7, Azure Functions Core Tools v4, Azurite, and Az PowerShell modules from \f1 functions\CapacityWorker\requirements.psd1\f0 .\par
+\pard\li360\fi-180\sa60 - Windows with Node.js LTS (\field{\*\fldinst HYPERLINK "https://nodejs.org/en/download"}{\fldrslt https://nodejs.org/en/download}), PowerShell 7 (\field{\*\fldinst HYPERLINK "https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows"}{\fldrslt https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows}), Azure Functions Core Tools v4 (\field{\*\fldinst HYPERLINK "https://learn.microsoft.com/azure/azure-functions/functions-run-local"}{\fldrslt https://learn.microsoft.com/azure/azure-functions/functions-run-local}), and Azurite (\field{\*\fldinst HYPERLINK "https://learn.microsoft.com/azure/storage/common/storage-use-azurite"}{\fldrslt https://learn.microsoft.com/azure/storage/common/storage-use-azurite}).\par
+\pard\li360\fi-180\sa60 - Az PowerShell modules listed in \f1 functions\CapacityWorker\requirements.psd1\f0 . Install PowerShell modules from the PowerShell Gallery: \field{\*\fldinst HYPERLINK "https://www.powershellgallery.com/packages/Az"}{\fldrslt https://www.powershellgallery.com/packages/Az}.\par
 \pard\li360\fi-180\sa60 - Azure identity with Reader and Compute Recommendations Role at the subscriptions or management groups to scan. For a laptop pilot, use interactive Az PowerShell sign-in.\par
-\pard\li360\fi-180\sa100 - A clone of this repository and access to \f1 npm\f0 .\par
+\pard\li360\fi-180\sa100 - A clone of this repository and access to \f1 npm\f0 , which is included with Node.js.\par
 
 \pard\sa120\b Install from the repository\b0\par
 \pard\sa60 1. From the repository root, install dependencies and create local worker settings:\par

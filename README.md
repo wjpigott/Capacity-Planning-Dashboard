@@ -28,7 +28,7 @@ Release history is tracked in `docs/RELEASE-NOTES.md`. Git tags should use the s
 
 **Capacity Dashboard Lite Local** is the portable Windows deployment option. It runs the dashboard, Functions worker, Azurite, and JSON report storage on the target Windows machine. Azure is used only for the capacity APIs; it does not require Azure App Service, Azure Functions, Azure Storage, Azure SQL, or Key Vault.
 
-After downloading the repository, copy or zip **`Lite-Local-Deployment\bin\CapacityDashboardLite-Local`**. Extract it on the target machine as **`C:\CapacityDashboardLite-Local`**, then follow [the Lite Local operator guide](docs/SELF-HOSTED-LITE.pdf). The target-machine commands are:
+After downloading the repository, copy or zip **`Lite-Local-Deployment\CapacityDashboardLite-Local`**. Extract it on the target machine as **`C:\CapacityDashboardLite-Local`**, then follow [the Lite Local operator guide](docs/SELF-HOSTED-LITE.pdf). The target-machine commands are:
 
 ```powershell
 .\Install-CapacityLitePrerequisites.ps1

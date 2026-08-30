@@ -1,11 +1,16 @@
 # Capacity Planning Dashboard
 
 This repository contains the initial platform scaffold for a native Azure capacity planning solution.
-- Huge shout out to Zach Luz for builing out many of the API calls this solution utilizes in his repo: https://github.com/ZacharyLuz/Get-AzVMAvailability
+- Huge shout out to Zach Luz for building out many of the API calls this solution utilizes in his repo: https://github.com/ZacharyLuz/Get-AzVMAvailability
+
+- Also to Sachin Phadke for the PaaS repo: https://github.com/naspinall-MS/az-quota-helper
 
 ## Current Release
 
 Current version: `v1.0.5`
+
+Check out the feature branch for a "LITE" non-Azure workstation deployment. 
+https://github.com/wjpigott/Capacity-Planning-Dashboard/tree/feature/lite-deployment-profile/Lite-Local-Deployment
 
 This version fixes Report Matrix filtering for West US 3 and keeps Family Base filters switchable after choosing a D/E/N/H/etc. SKU base.
 
